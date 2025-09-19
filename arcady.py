@@ -203,11 +203,13 @@ async def cmd_rasp(message: types.Message):
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
 
-    text = await get_rasp_for_day(pool, message.chat.id, day, week_type)
+    # Ищем расписание по DEFAULT_CHAT_ID
+    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
         return await message.reply("ℹ️ На этот день расписания нет.")
     
     await message.reply(f"📅 Расписание:\n\n{text}")
+
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
