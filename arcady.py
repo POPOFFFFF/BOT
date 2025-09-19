@@ -61,6 +61,7 @@ async def init_db(pool):
                 text TEXT
             )
             """)
+
             # Таблица настройки недели
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
@@ -68,15 +69,16 @@ async def init_db(pool):
                 week_type INT
             )
             """)
+
             # Таблица распоряжений (однодневные)
-await cur.execute("""
-CREATE TABLE IF NOT EXISTS rasporaz (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    chat_id BIGINT,
-    date DATE,
-    text TEXT
-)
-""")
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS rasporaz (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                date DATE,
+                text TEXT
+            )
+            """)
 
 async def add_rasporaz(pool, chat_id, date: datetime.date, text):
     async with pool.acquire() as conn:
