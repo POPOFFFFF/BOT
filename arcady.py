@@ -13,7 +13,7 @@ import ssl
 # ======================
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
-ALLOWED_USERS = [5228681344,7620086223]
+ALLOWED_USERS = [5228681344, 7620086223]
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
@@ -100,6 +100,14 @@ async def get_all_rasp(pool):
             await cur.execute("SELECT chat_id, day, week_type, text FROM rasp")
             return await cur.fetchall()
 
+async def delete_rasp(pool, day=None):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            if day:
+                await cur.execute("DELETE FROM rasp WHERE chat_id=%s AND day=%s", (DEFAULT_CHAT_ID, day))
+            else:
+                await cur.execute("DELETE FROM rasp WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
+
 # ======================
 # Работа с четностью недели
 # ======================
@@ -136,8 +144,7 @@ async def cmd_add_rasp(message: types.Message):
         if week_type not in [0, 1, 2]:
             return await message.answer("⚠ Неверный тип недели! Используйте 0, 1 или 2.")
         text = parts[3].replace("\\n", "\n")
-        chat_id = DEFAULT_CHAT_ID
-        await add_rasp(pool, chat_id, day, week_type, text)
+        await add_rasp(pool, DEFAULT_CHAT_ID, day, week_type, text)
         await message.answer(f"✅ Добавлено!\nДень {day}, Неделя {week_type}\n{text}")
     except Exception as e:
         await message.answer(f"⚠ Ошибка: {e}")
@@ -146,13 +153,29 @@ async def cmd_add_rasp(message: types.Message):
 async def cmd_clear_rasp(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         return
+
+    parts = message.text.split()
+    day = None
+    if len(parts) >= 2:
+        try:
+            day = int(parts[1])
+            if not (1 <= day <= 7):
+                raise ValueError
+        except ValueError:
+            return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
+
+    confirm_text = f"Вы точно хотите удалить расписание {'для дня ' + str(day) if day else 'для всех дней'}? Отправьте 'да' для подтверждения."
+    await message.answer(confirm_text)
+
+    def check(m: types.Message):
+        return m.from_user.id in ALLOWED_USERS and m.text.lower() == "да"
+
     try:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("DELETE FROM rasp WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
-        await message.answer("✅ Все расписания очищены!")
-    except Exception as e:
-        await message.answer(f"⚠ Ошибка при очистке: {e}")
+        msg = await bot.wait_for("message", timeout=30.0, check=check)
+        await delete_rasp(pool, day)
+        await message.answer("✅ Расписание удалено!")
+    except asyncio.TimeoutError:
+        await message.answer("⌛ Подтверждение не получено. Операция отменена.")
 
 @dp.message(Command("setchet"))
 async def cmd_setchet(message: types.Message):
@@ -178,24 +201,18 @@ async def cmd_rasp(message: types.Message):
     parts = message.text.split()
     now = datetime.datetime.now(TZ)
     
-    # Определяем день
-    if len(parts) >= 2:
-        try:
-            day = int(parts[1])
-            if day < 1 or day > 7:
-                raise ValueError
-        except ValueError:
-            return await message.reply("⚠ День недели должен быть числом от 1 (Пн) до 7 (Вс).")
+    # День
+    if len(parts) >= 2 and parts[1].isdigit():
+        day = int(parts[1])
+        if not 1 <= day <= 7:
+            return await message.reply("⚠ День недели должен быть от 1 до 7.")
     else:
         day = now.isoweekday()
-    
-    # Определяем четность
-    if len(parts) >= 3:
-        try:
-            week_type = int(parts[2])
-            if week_type not in [1, 2]:
-                raise ValueError
-        except ValueError:
+
+    # Четность
+    if len(parts) >= 3 and parts[2].isdigit():
+        week_type = int(parts[2])
+        if week_type not in [1, 2]:
             return await message.reply("⚠ Четность недели: 1 - нечетная, 2 - четная.")
     else:
         week_type = await get_week_type(pool, message.chat.id)
@@ -203,13 +220,11 @@ async def cmd_rasp(message: types.Message):
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
 
-    # Ищем расписание по DEFAULT_CHAT_ID
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
         return await message.reply("ℹ️ На этот день расписания нет.")
     
     await message.reply(f"📅 Расписание:\n\n{text}")
-
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
@@ -219,7 +234,7 @@ async def cmd_help(message: types.Message):
         text = (
             "📌 Команды администратора:\n"
             "/addrasp <день> <тип недели> <текст> — добавить расписание\n"
-            "/clear_rasp — удалить все расписания\n"
+            "/clear_rasp [<день>] — удалить расписание (с подтверждением)\n"
             "/setchet <1|2> — установить четность недели для чата\n"
             "/rasp [<день> <четность>] — посмотреть расписание\n"
             "/chatid — узнать ID чата\n"
