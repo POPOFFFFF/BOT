@@ -51,6 +51,7 @@ async def get_pool():
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+            # Таблица расписания
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS rasp (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -60,12 +61,36 @@ async def init_db(pool):
                 text TEXT
             )
             """)
+            # Таблица для четности недели
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
                 chat_id BIGINT PRIMARY KEY,
                 week_type INT
             )
             """)
+            # Таблица распоряжений (ежедневно)
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS rasporaz (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                day INT,
+                text TEXT
+            )
+            """)
+
+async def add_rasporaz(pool, chat_id, day, text):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Удаляем старое распоряжение на этот день
+            await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s AND day=%s", (chat_id, day))
+            await cur.execute("INSERT INTO rasporaz (chat_id, day, text) VALUES (%s, %s, %s)", (chat_id, day, text))
+
+async def get_rasporaz(pool, chat_id, day):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM rasporaz WHERE chat_id=%s AND day=%s LIMIT 1", (chat_id, day))
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 async def add_rasp(pool, chat_id, day, week_type, text):
     async with pool.acquire() as conn:
@@ -163,6 +188,23 @@ def get_zvonki(day):
 # ======================
 # Команды
 # ======================
+@dp.message(Command("rasporaz"))
+async def cmd_rasporaz(message: types.Message):
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        return
+    parts = message.text.split(" ", 2)
+    if len(parts) < 3:
+        return await message.reply("⚠ Формат: /rasporaz <день> <текст распоряжения>")
+    try:
+        day = int(parts[1])
+        if not 1 <= day <= 7:
+            return await message.reply("⚠ День недели должен быть от 1 до 7.")
+        text = parts[2].replace("\\n", "\n")
+        await add_rasporaz(pool, DEFAULT_CHAT_ID, day, text)
+        await message.reply(f"✅ Распоряжение на день {day} добавлено:\n{text}")
+    except ValueError:
+        return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
+
 @dp.message(Command("addrasp"))
 async def cmd_add_rasp(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
@@ -245,11 +287,16 @@ async def cmd_rasp(message: types.Message):
         if not week_type:
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
+    # Основное расписание
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
-        return await message.reply("ℹ️ На этот день расписания нет.")
+        text = "ℹ️ На этот день расписания нет."
+    # Распоряжение
+    rasporaz = await get_rasporaz(pool, DEFAULT_CHAT_ID, day)
+    if rasporaz:
+        text += f"\n\n📌 Распоряжение:\n{rasporaz}"
     await message.reply(format_rasp_message(day, week_type, text))
-
+    
 @dp.message(Command("zvonki"))
 async def cmd_zvonki(message: types.Message):
     parts = message.text.split()
