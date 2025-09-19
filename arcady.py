@@ -112,6 +112,15 @@ async def add_rasp(pool, chat_id, day, week_type, text):
                 "INSERT INTO rasp (chat_id, day, week_type, text) VALUES (%s, %s, %s, %s)",
                 (chat_id, day, week_type, text)
             )
+async def get_today_rasporaz():
+    now = datetime.datetime.now(TZ)
+    day = now.isoweekday()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM rasporaz WHERE chat_id=%s AND day=%s LIMIT 1", (DEFAULT_CHAT_ID, day))
+            row = await cur.fetchone()
+            return row[0] if row else None
+
 
 async def get_rasp_for_day(pool, chat_id, day, week_type):
     async with pool.acquire() as conn:
@@ -214,27 +223,31 @@ async def cmd_rasporaz(message: types.Message):
         await message.answer(f"✅ Распоряжение на {DAYS[today-1]} добавлено!")
     else:
         # Просмотр распоряжения для текущего дня
-        rasporaz = await get_rasporaz(pool, DEFAULT_CHAT_ID, today)
-        if rasporaz:
-            await message.reply(f"📌 Распоряжение на сегодня:\n{rasporaz}")
-        else:
-            await message.reply("ℹ️ Распоряжений на сегодня нет.")
+rasporaz = await get_today_rasporaz()
+if rasporaz:
+    await message.reply(f"{format_rasp_message(day, week_type, text)}\n\n📌 Распоряжение на сегодня:\n{rasporaz}")
+else:
+    await message.reply(format_rasp_message(day, week_type, text))
 
-            
+
 @dp.message(Command("clear_rasporaz"))
 async def cmd_clear_rasporaz(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         return
-    confirm_text = "Вы точно хотите удалить все распоряжения? Отправьте 'да' для подтверждения."
+    confirm_text = "Вы точно хотите удалить сегодняшнее распоряжение? Отправьте 'да' для подтверждения."
     await message.answer(confirm_text)
-    
+
     def check(m: types.Message):
         return m.from_user.id in ALLOWED_USERS and m.text.lower() == "да"
-    
+
     try:
-        msg = await bot.wait_for("message", timeout=30.0, check=check)
-        await delete_all_rasporaz(pool)
-        await message.answer("✅ Все распоряжения удалены!")
+        await bot.wait_for("message", timeout=30.0, check=check)
+        now = datetime.datetime.now(TZ)
+        day = now.isoweekday()
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s AND day=%s", (DEFAULT_CHAT_ID, day))
+        await message.answer("✅ Распоряжение удалено!")
     except asyncio.TimeoutError:
         await message.answer("⌛ Подтверждение не получено. Операция отменена.")
 
