@@ -78,12 +78,18 @@ async def init_db(pool):
             )
             """)
 
-async def add_rasporaz(pool, chat_id, day, text):
+async def add_rasporaz(pool, chat_id, text):
+    now = datetime.datetime.now(TZ)
+    day = now.isoweekday()
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Удаляем старое распоряжение на этот день
+            # удаляем старое распоряжение на этот день
             await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s AND day=%s", (chat_id, day))
-            await cur.execute("INSERT INTO rasporaz (chat_id, day, text) VALUES (%s, %s, %s)", (chat_id, day, text))
+            await cur.execute(
+                "INSERT INTO rasporaz (chat_id, day, text) VALUES (%s, %s, %s)",
+                (chat_id, day, text)
+            )
+
 
 async def get_rasporaz(pool, chat_id, day):
     async with pool.acquire() as conn:
@@ -91,6 +97,13 @@ async def get_rasporaz(pool, chat_id, day):
             await cur.execute("SELECT text FROM rasporaz WHERE chat_id=%s AND day=%s LIMIT 1", (chat_id, day))
             row = await cur.fetchone()
             return row[0] if row else None
+
+
+
+async def delete_all_rasporaz(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
 
 async def add_rasp(pool, chat_id, day, week_type, text):
     async with pool.acquire() as conn:
@@ -190,20 +203,53 @@ def get_zvonki(day):
 # ======================
 @dp.message(Command("rasporaz"))
 async def cmd_rasporaz(message: types.Message):
-    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+    parts = message.text.split(" ", 1)
+    now = datetime.datetime.now(TZ)
+    today = now.isoweekday()
+    
+    # Если админ вводит текст — добавляем
+    if len(parts) == 2 and message.chat.type == "private" and message.from_user.id in ALLOWED_USERS:
+        text = parts[1].replace("\\n", "\n")
+        await add_rasporaz(pool, DEFAULT_CHAT_ID, text)
+        await message.answer(f"✅ Распоряжение на {DAYS[today-1]} добавлено!")
+    else:
+        # Просмотр распоряжения для текущего дня
+        rasporaz = await get_rasporaz(pool, DEFAULT_CHAT_ID, today)
+        if rasporaz:
+            await message.reply(f"📌 Распоряжение на сегодня:\n{rasporaz}")
+        else:
+            await message.reply("ℹ️ Распоряжений на сегодня нет.")
+
+            
+@dp.message(Command("clear_rasporaz"))
+async def cmd_clear_rasporaz(message: types.Message):
+    if message.from_user.id not in ALLOWED_USERS:
         return
-    parts = message.text.split(" ", 2)
-    if len(parts) < 3:
-        return await message.reply("⚠ Формат: /rasporaz <день> <текст распоряжения>")
+    confirm_text = "Вы точно хотите удалить все распоряжения? Отправьте 'да' для подтверждения."
+    await message.answer(confirm_text)
+    
+    def check(m: types.Message):
+        return m.from_user.id in ALLOWED_USERS and m.text.lower() == "да"
+    
     try:
-        day = int(parts[1])
-        if not 1 <= day <= 7:
-            return await message.reply("⚠ День недели должен быть от 1 до 7.")
-        text = parts[2].replace("\\n", "\n")
-        await add_rasporaz(pool, DEFAULT_CHAT_ID, day, text)
-        await message.reply(f"✅ Распоряжение на день {day} добавлено:\n{text}")
-    except ValueError:
-        return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
+        msg = await bot.wait_for("message", timeout=30.0, check=check)
+        await delete_all_rasporaz(pool)
+        await message.answer("✅ Все распоряжения удалены!")
+    except asyncio.TimeoutError:
+        await message.answer("⌛ Подтверждение не получено. Операция отменена.")
+
+async def delete_yesterday_rasporaz():
+    now = datetime.datetime.now(TZ)
+    yesterday = now.isoweekday() - 1
+    if yesterday == 0:
+        yesterday = 7
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s AND day=%s", (DEFAULT_CHAT_ID, yesterday))
+
+# Добавляем задачу на каждый день в 00:05, чтобы удалять вчерашние распоряжения
+scheduler.add_job(delete_yesterday_rasporaz, CronTrigger(hour=0, minute=5))
+
 
 @dp.message(Command("addrasp"))
 async def cmd_add_rasp(message: types.Message):
@@ -270,13 +316,16 @@ async def cmd_chatid(message: types.Message):
 async def cmd_rasp(message: types.Message):
     parts = message.text.split()
     now = datetime.datetime.now(TZ)
+    today = now.isoweekday()
+    
     # День
     if len(parts) >= 2 and parts[1].isdigit():
         day = int(parts[1])
         if not 1 <= day <= 7:
             return await message.reply("⚠ День недели должен быть от 1 до 7.")
     else:
-        day = now.isoweekday()
+        day = today
+    
     # Четность
     if len(parts) >= 3 and parts[2].isdigit():
         week_type = int(parts[2])
@@ -287,16 +336,20 @@ async def cmd_rasp(message: types.Message):
         if not week_type:
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
+
     # Основное расписание
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
         text = "ℹ️ На этот день расписания нет."
-    # Распоряжение
-    rasporaz = await get_rasporaz(pool, DEFAULT_CHAT_ID, day)
-    if rasporaz:
-        text += f"\n\n📌 Распоряжение:\n{rasporaz}"
-    await message.reply(format_rasp_message(day, week_type, text))
     
+    # Распоряжение показываем только если день совпадает с текущим
+    if day == today:
+        rasporaz = await get_rasporaz(pool, DEFAULT_CHAT_ID, day)
+        if rasporaz:
+            text += f"\n\n📌 Распоряжение:\n{rasporaz}"
+    
+    await message.reply(format_rasp_message(day, week_type, text))
+
 @dp.message(Command("zvonki"))
 async def cmd_zvonki(message: types.Message):
     parts = message.text.split()
@@ -324,10 +377,12 @@ async def cmd_help(message: types.Message):
             "/rasp [<день> <четность>] — посмотреть расписание\n"
             "/zvonki [<день>] — посмотреть расписание звонков\n"
             "/chatid — узнать ID чата\n"
+            "/rasporaz — Указать Расспоряжение\n"
+            "/clear_rasporaz — Удалить Расспоряжение\n"
             "/help — показать это сообщение"
         )
     else:
-        text = "ℹ️ Чтобы посмотреть расписание, используйте команду:\n/rasp [<день> <четность>]\n/zvonki [<день>]"
+        text = "ℹ️ Чтобы посмотреть расписание, используйте команду:\n/rasp [<день> <четность>]\n/zvonki [<день>]\n/rasporaz [Посмотреть Расспоряжение]"
     await message.answer(text)
 
 # ======================
