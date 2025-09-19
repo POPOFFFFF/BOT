@@ -348,6 +348,7 @@ async def cmd_rasp(message: types.Message):
         day = today
 
     # Определяем четность недели
+    week_type = None
     if len(parts) >= 3 and parts[2].isdigit():
         week_type = int(parts[2])
         if week_type not in [1, 2]:
@@ -358,24 +359,33 @@ async def cmd_rasp(message: types.Message):
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
 
-    # Получаем расписание
+    # Попробуем получить расписание с указанной четностью
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
+    # Если пусто, попробуем week_type=0 (любая неделя)
+    if not text:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT text FROM rasp WHERE chat_id=%s AND day=%s AND week_type=0 LIMIT 1",
+                    (DEFAULT_CHAT_ID, day)
+                )
+                row = await cur.fetchone()
+                text = row[0] if row else None
+
     if not text:
         text = "ℹ️ На этот день расписания нет."
 
-    # Добавляем актуальное распоряжение только если день совпадает с текущим
+    # Распоряжение только для текущего дня
     if day == today:
         rasporaz = await get_rasporaz_by_date(pool, DEFAULT_CHAT_ID, current_date)
         if rasporaz:
             text += f"\n\n📌 Распоряжение на сегодня:\n{rasporaz}"
 
-    # Формируем сообщение
     day_name = DAYS[day-1]
     week_name = "нечетная" if week_type == 1 else "четная"
     msg = f"📅 {day_name} | Неделя: {week_name}\n\n{text}"
 
     await message.reply(msg)
-
 
 @dp.message(Command("zvonki"))
 async def cmd_zvonki(message: types.Message):
