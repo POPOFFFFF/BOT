@@ -5,6 +5,7 @@ import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pytz import timezone
 
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = os.getenv("CHAT_ID")
@@ -12,7 +13,12 @@ ALLOWED_USERS = [5228681344]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-scheduler = AsyncIOScheduler()
+
+# =========================
+# Таймзона Омск (UTC+6)
+# =========================
+TZ = timezone("Asia/Omsk")
+scheduler = AsyncIOScheduler(timezone=TZ)
 
 # =========================
 # Работа с БД
@@ -45,7 +51,6 @@ def add_rasp(chat_id, day, week_type, text):
 def get_rasp_for_day(chat_id, day, week_type):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    # приоритет: точное совпадение (day, week_type), потом (day, 0)
     cur.execute("SELECT text FROM rasp WHERE chat_id=? AND day=? AND week_type=?", (chat_id, day, week_type))
     row = cur.fetchone()
     if row:
@@ -95,7 +100,7 @@ async def cmd_add_rasp(message: types.Message):
         if len(parts) < 4:
             return await message.answer("⚠ Формат: /addrasp <день> <тип недели> <текст>")
 
-        day = int(parts[1])  # 1=понедельник, ..., 7=воскресенье
+        day = int(parts[1])        # 1=понедельник, ..., 7=воскресенье
         week_type = int(parts[2])  # 0=всегда, 1=чётная, 2=нечётная
         text = parts[3].replace("\\n", "\n")
         chat_id = int(DEFAULT_CHAT_ID)
@@ -113,11 +118,11 @@ async def cmd_add_rasp(message: types.Message):
 @dp.message(Command("rasp"))
 async def cmd_rasp(message: types.Message):
     chat_id = message.chat.id
-    today = datetime.date.today()
-    week_number = today.isocalendar()[1]
+    now = datetime.datetime.now(TZ)   # всегда берём Омское время
+    week_number = now.isocalendar()[1]
     is_even_week = (week_number % 2 == 0)
     week_type = 1 if is_even_week else 2
-    day = today.isoweekday()
+    day = now.isoweekday()
 
     if message.chat.type in ["group", "supergroup"]:
         text = get_rasp_for_day(chat_id, day, week_type)
@@ -138,7 +143,7 @@ async def cmd_rasp(message: types.Message):
         await message.answer(text)
 
 # =========================
-# Логика для напоминаний (как было)
+# Логика для напоминаний
 # =========================
 schedules = {}
 
