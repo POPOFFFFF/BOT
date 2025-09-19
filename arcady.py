@@ -5,12 +5,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import os
 
 TOKEN = os.getenv("BOT_TOKEN")
-
+DEFAULT_CHAT_ID = os.getenv("CHAT_ID")  # теперь чат ID берётся из переменных окружения
 ALLOWED_USERS = [5228681344]  # твой Telegram ID
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
+
 # Хранилище расписаний {chat_id: [(время, текст), ...]}
 schedules = {}
 
@@ -30,6 +31,36 @@ async def cmd_add_schedule(message: types.Message):
         return
     await message.answer("Напиши в формате:\n\nЧАТ_ID HH:MM ТЕКСТ")
 
+# Новая команда: показать расписание
+@dp.message(Command("rasp"))
+async def cmd_rasp(message: types.Message):
+    chat_id = message.chat.id
+
+    # Если команда в беседе
+    if message.chat.type in ["group", "supergroup"]:
+        if chat_id not in schedules:
+            return await message.reply("ℹ️ Для этой беседы расписание пока не задано.")
+        
+        text = "📅 Расписание для этой беседы:\n\n"
+        for t, msg in schedules[chat_id]:
+            text += f"⏰ {t} → {msg}\n"
+        await message.reply(text)
+    
+    # Если команда в личке
+    elif message.chat.type == "private":
+        if not is_allowed(message.from_user.id):
+            return
+        if not schedules:
+            return await message.answer("ℹ️ Пока нет заданных расписаний.")
+
+        text = "📋 Все расписания:\n\n"
+        for cid, items in schedules.items():
+            text += f"🆔 {cid}\n"
+            for t, msg in items:
+                text += f"  ⏰ {t} → {msg}\n"
+            text += "\n"
+        await message.answer(text)
+
 # Показываем chat_id при любом сообщении в чате
 @dp.message()
 async def add_schedule_handler(message: types.Message):
@@ -44,7 +75,9 @@ async def add_schedule_handler(message: types.Message):
     
     try:
         parts = message.text.split(" ", 2)
-        chat_id = int(parts[0])
+
+        # Если chat_id не указали явно, берём дефолтный из переменной окружения
+        chat_id = int(parts[0]) if parts[0].startswith("-") else int(DEFAULT_CHAT_ID)
         time = parts[1]
         text = parts[2]
 
