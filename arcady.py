@@ -1,6 +1,7 @@
 import asyncio
 import os
 import datetime
+import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -13,16 +14,65 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
-# Хранилище напоминаний {chat_id: [(время, текст), ...]}
-schedules = {}
+# =========================
+# Работа с БД
+# =========================
+DB_PATH = "rasp.db"
 
-# Хранилище расписаний {chat_id: {(day, week_type): text}}
-# week_type: 0=всегда, 1=чётная, 2=нечётная
-rasps = {}
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS rasp (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER,
+        day INTEGER,
+        week_type INTEGER,
+        text TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
 
+def add_rasp(chat_id, day, week_type, text):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO rasp (chat_id, day, week_type, text) VALUES (?, ?, ?, ?)",
+                (chat_id, day, week_type, text))
+    conn.commit()
+    conn.close()
+
+def get_rasp_for_day(chat_id, day, week_type):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    # приоритет: точное совпадение (day, week_type), потом (day, 0)
+    cur.execute("SELECT text FROM rasp WHERE chat_id=? AND day=? AND week_type=?", (chat_id, day, week_type))
+    row = cur.fetchone()
+    if row:
+        conn.close()
+        return row[0]
+    cur.execute("SELECT text FROM rasp WHERE chat_id=? AND day=? AND week_type=0", (chat_id, day))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_all_rasp():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT chat_id, day, week_type, text FROM rasp")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+# =========================
+# Проверка доступа
+# =========================
 def is_allowed(user_id):
     return user_id in ALLOWED_USERS
 
+# =========================
+# Команды
+# =========================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if not is_allowed(message.from_user.id):
@@ -34,12 +84,6 @@ async def cmd_start(message: types.Message):
         "/addrasp — добавить расписание (по дням)\n"
         "/rasp — показать расписание"
     )
-
-@dp.message(Command("new"))
-async def cmd_add_schedule(message: types.Message):
-    if not is_allowed(message.from_user.id):
-        return
-    await message.answer("Напиши в формате:\n\nЧАТ_ID HH:MM ТЕКСТ")
 
 @dp.message(Command("addrasp"))
 async def cmd_add_rasp(message: types.Message):
@@ -53,10 +97,10 @@ async def cmd_add_rasp(message: types.Message):
 
         day = int(parts[1])  # 1=понедельник, ..., 7=воскресенье
         week_type = int(parts[2])  # 0=всегда, 1=чётная, 2=нечётная
-        text = parts[3].replace("\\n", "\n")  # поддержка переноса строк
+        text = parts[3].replace("\\n", "\n")
         chat_id = int(DEFAULT_CHAT_ID)
 
-        rasps.setdefault(chat_id, {})[(day, week_type)] = text
+        add_rasp(chat_id, day, week_type, text)
 
         await message.answer(
             f"✅ Расписание добавлено!\n\n"
@@ -71,42 +115,39 @@ async def cmd_rasp(message: types.Message):
     chat_id = message.chat.id
     today = datetime.date.today()
     week_number = today.isocalendar()[1]
-    is_even_week = (week_number % 2 == 0)  # True=чётная, False=нечётная
+    is_even_week = (week_number % 2 == 0)
     week_type = 1 if is_even_week else 2
-    day = today.isoweekday()  # 1=понедельник ... 7=воскресенье
+    day = today.isoweekday()
 
-    # Если команда в чате → показываем расписание на сегодня
     if message.chat.type in ["group", "supergroup"]:
-        if chat_id not in rasps:
-            return await message.reply("ℹ️ Для этой беседы расписание пока не задано.")
-
-        options = rasps[chat_id]
-        text = None
-        # приоритет: конкретный день+тип → конкретный день+0 (всегда)
-        if (day, week_type) in options:
-            text = options[(day, week_type)]
-        elif (day, 0) in options:
-            text = options[(day, 0)]
-
+        text = get_rasp_for_day(chat_id, day, week_type)
         if not text:
             return await message.reply("ℹ️ На сегодня расписания нет.")
         await message.reply(f"📅 Расписание на сегодня:\n\n{text}")
 
-    # Если команда в ЛС → показываем все сохранённые
     elif message.chat.type == "private":
         if not is_allowed(message.from_user.id):
             return
-        if not rasps:
+        rows = get_all_rasp()
+        if not rows:
             return await message.answer("ℹ️ Пока нет заданных расписаний.")
 
         text = "📋 Все расписания:\n\n"
-        for cid, items in rasps.items():
-            text += f"🆔 Chat {cid}\n"
-            for (d, w), msg in items.items():
-                text += f"  День {d}, Неделя {w}\n{msg}\n\n"
+        for cid, d, w, msg in rows:
+            text += f"🆔 Chat {cid}\nДень {d}, Неделя {w}\n{msg}\n\n"
         await message.answer(text)
 
-# Показываем chat_id при любом сообщении в чате
+# =========================
+# Логика для напоминаний (как было)
+# =========================
+schedules = {}
+
+@dp.message(Command("new"))
+async def cmd_add_schedule(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        return
+    await message.answer("Напиши в формате:\n\nЧАТ_ID HH:MM ТЕКСТ")
+
 @dp.message()
 async def add_schedule_handler(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
@@ -139,7 +180,11 @@ async def add_schedule_handler(message: types.Message):
     except Exception:
         await message.answer("⚠ Ошибка. Формат: ЧАТ_ID HH:MM ТЕКСТ")
 
+# =========================
+# Main
+# =========================
 async def main():
+    init_db()
     scheduler.start()
     await dp.start_polling(bot)
 
