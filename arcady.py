@@ -4,12 +4,13 @@ import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 import aiomysql
 import ssl
 
 # ======================
-# Конфиг из переменных окружения
+# Конфиг
 # ======================
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -29,11 +30,13 @@ dp = Dispatcher()
 TZ = ZoneInfo("Asia/Omsk")
 scheduler = AsyncIOScheduler(timezone=TZ)
 
-# SSL для Aiven
 ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
+# ======================
+# Работа с БД
+# ======================
 async def get_pool():
     return await aiomysql.create_pool(
         host=DB_HOST,
@@ -45,13 +48,9 @@ async def get_pool():
         autocommit=True
     )
 
-# ======================
-# Работа с БД
-# ======================
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Таблица расписания
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS rasp (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -61,7 +60,6 @@ async def init_db(pool):
                 text TEXT
             )
             """)
-            # Таблица для четности недели
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
                 chat_id BIGINT PRIMARY KEY,
@@ -128,6 +126,39 @@ async def get_week_type(pool, chat_id):
             return row[0] if row else None
 
 # ======================
+# Вспомогательные функции
+# ======================
+DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
+def format_rasp_message(day_num, week_type, text):
+    day_name = DAYS[day_num-1]
+    week_name = "нечетная" if week_type==1 else "четная"
+    return f"📅 {day_name} | Неделя: {week_name}\n\n{text}"
+
+# Расписание звонков: каждая пара — 2 урока
+ZVONKI_DEFAULT = [
+    "1 пара: 1 урок 08:30-09:15, 2 урок 09:20-10:05",
+    "2 пара: 1 урок 10:15-11:00, 2 урок 11:05-11:50",
+    "3 пара: 1 урок 12:00-12:45, 2 урок 12:50-13:35",
+    "4 пара: 1 урок 13:45-14:30, 2 урок 14:35-15:20",
+    "5 пара: 1 урок 15:30-16:15, 2 урок 16:20-17:05",
+    "6 пара: 1 урок 17:15-18:00, 2 урок 18:05-18:50"
+]
+
+ZVONKI_SATURDAY = [
+    "1 пара: 1 урок 08:30-09:15, 2 урок 09:20-10:05",
+    "2 пара: 1 урок 10:15-11:00, 2 урок 11:05-11:50",
+    "3 пара: 1 урок 12:00-12:45, 2 урок 12:50-13:35",
+    "4 пара: 1 урок 13:45-14:30, 2 урок 14:35-15:20"
+]
+
+def get_zvonki(day):
+    if day == 6:
+        return "\n".join(ZVONKI_SATURDAY)
+    else:
+        return "\n".join(ZVONKI_DEFAULT)
+
+# ======================
 # Команды
 # ======================
 @dp.message(Command("addrasp"))
@@ -137,8 +168,7 @@ async def cmd_add_rasp(message: types.Message):
     try:
         parts = message.text.split(" ", 3)
         if len(parts) < 4:
-            return await message.answer("⚠ Формат: /addrasp <день> <тип недели> <текст>\n"
-                                        "Тип недели: 0 - любая, 1 - нечетная, 2 - четная")
+            return await message.answer("⚠ Формат: /addrasp <день> <тип недели> <текст>\nТип недели: 0 - любая, 1 - нечетная, 2 - четная")
         day = int(parts[1])
         week_type = int(parts[2])
         if week_type not in [0, 1, 2]:
@@ -153,23 +183,19 @@ async def cmd_add_rasp(message: types.Message):
 async def cmd_clear_rasp(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         return
-
     parts = message.text.split()
     day = None
     if len(parts) >= 2:
         try:
             day = int(parts[1])
-            if not (1 <= day <= 7):
+            if not 1 <= day <= 7:
                 raise ValueError
         except ValueError:
             return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
-
     confirm_text = f"Вы точно хотите удалить расписание {'для дня ' + str(day) if day else 'для всех дней'}? Отправьте 'да' для подтверждения."
     await message.answer(confirm_text)
-
     def check(m: types.Message):
         return m.from_user.id in ALLOWED_USERS and m.text.lower() == "да"
-
     try:
         msg = await bot.wait_for("message", timeout=30.0, check=check)
         await delete_rasp(pool, day)
@@ -200,7 +226,6 @@ async def cmd_chatid(message: types.Message):
 async def cmd_rasp(message: types.Message):
     parts = message.text.split()
     now = datetime.datetime.now(TZ)
-    
     # День
     if len(parts) >= 2 and parts[1].isdigit():
         day = int(parts[1])
@@ -208,7 +233,6 @@ async def cmd_rasp(message: types.Message):
             return await message.reply("⚠ День недели должен быть от 1 до 7.")
     else:
         day = now.isoweekday()
-
     # Четность
     if len(parts) >= 3 and parts[2].isdigit():
         week_type = int(parts[2])
@@ -219,12 +243,24 @@ async def cmd_rasp(message: types.Message):
         if not week_type:
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
-
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
         return await message.reply("ℹ️ На этот день расписания нет.")
-    
-    await message.reply(f"📅 Расписание:\n\n{text}")
+    await message.reply(format_rasp_message(day, week_type, text))
+
+@dp.message(Command("zvonki"))
+async def cmd_zvonki(message: types.Message):
+    parts = message.text.split()
+    now = datetime.datetime.now(TZ)
+    if len(parts) >= 2 and parts[1].isdigit():
+        day = int(parts[1])
+        if not 1 <= day <= 7:
+            return await message.reply("⚠ День недели должен быть от 1 до 7.")
+    else:
+        day = now.isoweekday()
+    schedule = get_zvonki(day)
+    day_name = DAYS[day-1]
+    await message.reply(f"📌 Расписание звонков на {day_name}:\n{schedule}")
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
@@ -237,13 +273,29 @@ async def cmd_help(message: types.Message):
             "/clear_rasp [<день>] — удалить расписание (с подтверждением)\n"
             "/setchet <1|2> — установить четность недели для чата\n"
             "/rasp [<день> <четность>] — посмотреть расписание\n"
+            "/zvonki [<день>] — посмотреть расписание звонков\n"
             "/chatid — узнать ID чата\n"
             "/help — показать это сообщение"
         )
     else:
-        text = "ℹ️ Чтобы посмотреть расписание, используйте команду:\n/rasp [<день> <четность>]\nПример: /rasp 3 2"
-    
+        text = "ℹ️ Чтобы посмотреть расписание, используйте команду:\n/rasp [<день> <четность>]\n/zvonki [<день>]"
     await message.answer(text)
+
+# ======================
+# Автопостинг расписания
+# ======================
+async def send_today_rasp():
+    now = datetime.datetime.now(TZ)
+    day = now.isoweekday()
+    week_number = now.isocalendar()[1]
+    week_type = 1 if week_number % 2 else 2
+    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
+    if text:
+        msg = format_rasp_message(day, week_type, text)
+        await bot.send_message(DEFAULT_CHAT_ID, msg)
+
+scheduler.add_job(send_today_rasp, CronTrigger(hour=7, minute=0))
+scheduler.add_job(send_today_rasp, CronTrigger(hour=20, minute=0))
 
 # ======================
 # Main
