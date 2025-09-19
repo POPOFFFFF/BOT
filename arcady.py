@@ -61,7 +61,6 @@ async def init_db(pool):
                 text TEXT
             )
             """)
-
             # Таблица настройки недели
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
@@ -69,7 +68,6 @@ async def init_db(pool):
                 week_type INT
             )
             """)
-
             # Таблица распоряжений (однодневные)
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS rasporaz (
@@ -79,6 +77,7 @@ async def init_db(pool):
                 text TEXT
             )
             """)
+
 
 async def add_rasporaz(pool, chat_id, date: datetime.date, text):
     async with pool.acquire() as conn:
@@ -389,10 +388,6 @@ async def cmd_rasp(message: types.Message):
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     msg = format_rasp_message(day, week_type, text) if text else "ℹ️ На этот день расписания нет.\n"
 
-    # Распоряжение на этот день
-# Новое
-# Распоряжение на этот день
-date = now.date()  # сегодняшняя дата
 rasporaz_list = await get_rasporaz_for_date(pool, DEFAULT_CHAT_ID, date)
 if rasporaz_list:
     msg += "\n\n📌 Распоряжение на сегодня:\n"
