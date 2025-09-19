@@ -370,7 +370,7 @@ async def cmd_rasp(message: types.Message):
             for d in range(1, day):
                 await cur.execute(
                     "DELETE FROM rasporaz WHERE chat_id=%s AND day=%s",
-                    (DEFAULT_CHAT_ID, d)
+                    (DEFAULT_CHAT_ID, d))
 
 
 @dp.message(Command("zvonki"))
