@@ -1,195 +1,150 @@
 import asyncio
 import os
 import datetime
-import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pytz import timezone
+from zoneinfo import ZoneInfo
+import aiomysql
+import ssl
 
+# ======================
+# Конфиг из переменных окружения
+# ======================
 TOKEN = os.getenv("BOT_TOKEN")
-DEFAULT_CHAT_ID = os.getenv("CHAT_ID")
+DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344]
 
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT", "3306"))
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME")
+
+# ======================
+# Инициализация
+# ======================
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-
-# =========================
-# Таймзона Омск (UTC+6)
-# =========================
-TZ = timezone("Asia/Omsk")
+TZ = ZoneInfo("Asia/Omsk")
 scheduler = AsyncIOScheduler(timezone=TZ)
 
-# =========================
+# SSL для Aiven
+ssl_ctx = ssl.create_default_context()
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode = ssl.CERT_NONE
+
+async def get_pool():
+    return await aiomysql.create_pool(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        db=DB_NAME,
+        ssl=ssl_ctx,
+        autocommit=True
+    )
+
+# ======================
 # Работа с БД
-# =========================
-DB_PATH = "rasp.db"
+# ======================
+async def init_db(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS rasp (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                day INT,
+                week_type INT,
+                text TEXT
+            )
+            """)
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS rasp (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id INTEGER,
-        day INTEGER,
-        week_type INTEGER,
-        text TEXT
-    )
-    """)
-    conn.commit()
-    conn.close()
+async def add_rasp(pool, chat_id, day, week_type, text):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "INSERT INTO rasp (chat_id, day, week_type, text) VALUES (%s, %s, %s, %s)",
+                (chat_id, day, week_type, text)
+            )
 
-def add_rasp(chat_id, day, week_type, text):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO rasp (chat_id, day, week_type, text) VALUES (?, ?, ?, ?)",
-                (chat_id, day, week_type, text))
-    conn.commit()
-    conn.close()
+async def get_rasp_for_day(pool, chat_id, day, week_type):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT text FROM rasp WHERE chat_id=%s AND day=%s AND week_type=%s LIMIT 1",
+                (chat_id, day, week_type)
+            )
+            row = await cur.fetchone()
+            if row:
+                return row[0]
+            await cur.execute(
+                "SELECT text FROM rasp WHERE chat_id=%s AND day=%s AND week_type=0 LIMIT 1",
+                (chat_id, day)
+            )
+            row = await cur.fetchone()
+            return row[0] if row else None
 
-def get_rasp_for_day(chat_id, day, week_type):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT text FROM rasp WHERE chat_id=? AND day=? AND week_type=?", (chat_id, day, week_type))
-    row = cur.fetchone()
-    if row:
-        conn.close()
-        return row[0]
-    cur.execute("SELECT text FROM rasp WHERE chat_id=? AND day=? AND week_type=0", (chat_id, day))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else None
+async def get_all_rasp(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT chat_id, day, week_type, text FROM rasp")
+            return await cur.fetchall()
 
-def get_all_rasp():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id, day, week_type, text FROM rasp")
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-# =========================
-# Проверка доступа
-# =========================
-def is_allowed(user_id):
-    return user_id in ALLOWED_USERS
-
-# =========================
+# ======================
 # Команды
-# =========================
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    if not is_allowed(message.from_user.id):
-        return await message.answer("❌ У тебя нет доступа.")
-    await message.answer(
-        "✅ Привет! Я Секретарь Аркадий.\n\n"
-        "📌 Команды:\n"
-        "/new — добавить напоминание (по времени)\n"
-        "/addrasp — добавить расписание (по дням)\n"
-        "/rasp — показать расписание"
-    )
-
+# ======================
 @dp.message(Command("addrasp"))
 async def cmd_add_rasp(message: types.Message):
-    if not is_allowed(message.from_user.id):
+    if not (message.from_user.id in ALLOWED_USERS):
         return
-    
     try:
         parts = message.text.split(" ", 3)
         if len(parts) < 4:
             return await message.answer("⚠ Формат: /addrasp <день> <тип недели> <текст>")
 
-        day = int(parts[1])        # 1=понедельник, ..., 7=воскресенье
-        week_type = int(parts[2])  # 0=всегда, 1=чётная, 2=нечётная
+        day = int(parts[1])
+        week_type = int(parts[2])
         text = parts[3].replace("\\n", "\n")
         chat_id = int(DEFAULT_CHAT_ID)
 
-        add_rasp(chat_id, day, week_type, text)
-
-        await message.answer(
-            f"✅ Расписание добавлено!\n\n"
-            f"День: {day}, Неделя: {week_type}\n{text}"
-        )
-
+        await add_rasp(pool, chat_id, day, week_type, text)
+        await message.answer(f"✅ Добавлено!\nДень {day}, Неделя {week_type}\n{text}")
     except Exception as e:
-        await message.answer(f"⚠ Ошибка: {e}\nФормат: /addrasp <день> <тип недели> <текст>")
+        await message.answer(f"⚠ Ошибка: {e}")
 
 @dp.message(Command("rasp"))
 async def cmd_rasp(message: types.Message):
-    chat_id = message.chat.id
-    now = datetime.datetime.now(TZ)   # всегда берём Омское время
+    now = datetime.datetime.now(TZ)
     week_number = now.isocalendar()[1]
-    is_even_week = (week_number % 2 == 0)
-    week_type = 1 if is_even_week else 2
+    week_type = 1 if (week_number % 2 == 0) else 2
     day = now.isoweekday()
 
     if message.chat.type in ["group", "supergroup"]:
-        text = get_rasp_for_day(chat_id, day, week_type)
+        text = await get_rasp_for_day(pool, message.chat.id, day, week_type)
         if not text:
             return await message.reply("ℹ️ На сегодня расписания нет.")
-        await message.reply(f"📅 Расписание на сегодня:\n\n{text}")
+        return await message.reply(f"📅 Расписание:\n\n{text}")
 
     elif message.chat.type == "private":
-        if not is_allowed(message.from_user.id):
+        if not (message.from_user.id in ALLOWED_USERS):
             return
-        rows = get_all_rasp()
+        rows = await get_all_rasp(pool)
         if not rows:
-            return await message.answer("ℹ️ Пока нет заданных расписаний.")
+            return await message.answer("ℹ️ Пока нет расписаний.")
+        msg = "📋 Все расписания:\n\n"
+        for cid, d, w, txt in rows:
+            msg += f"🆔 Chat {cid} | День {d}, Неделя {w}\n{txt}\n\n"
+        await message.answer(msg)
 
-        text = "📋 Все расписания:\n\n"
-        for cid, d, w, msg in rows:
-            text += f"🆔 Chat {cid}\nДень {d}, Неделя {w}\n{msg}\n\n"
-        await message.answer(text)
-
-# =========================
-# Логика для напоминаний
-# =========================
-schedules = {}
-
-@dp.message(Command("new"))
-async def cmd_add_schedule(message: types.Message):
-    if not is_allowed(message.from_user.id):
-        return
-    await message.answer("Напиши в формате:\n\nЧАТ_ID HH:MM ТЕКСТ")
-
-@dp.message()
-async def add_schedule_handler(message: types.Message):
-    if message.chat.type in ["group", "supergroup"]:
-        await message.reply(f"ℹ️ Chat ID этой беседы: `{message.chat.id}`")
-        return
-
-    if not is_allowed(message.from_user.id):
-        return
-    
-    try:
-        parts = message.text.split(" ", 2)
-        chat_id = int(parts[0]) if parts[0].startswith("-") else int(DEFAULT_CHAT_ID)
-        time = parts[1]
-        text = parts[2]
-
-        hour, minute = map(int, time.split(":"))
-        
-        schedules.setdefault(chat_id, []).append((time, text))
-
-        scheduler.add_job(
-            bot.send_message,
-            "cron",
-            hour=hour,
-            minute=minute,
-            args=[chat_id, text],
-        )
-
-        await message.answer(f"✅ Задание добавлено!\n{chat_id} {time} → {text}")
-
-    except Exception:
-        await message.answer("⚠ Ошибка. Формат: ЧАТ_ID HH:MM ТЕКСТ")
-
-# =========================
+# ======================
 # Main
-# =========================
+# ======================
 async def main():
-    init_db()
+    global pool
+    pool = await get_pool()
+    await init_db(pool)
     scheduler.start()
     await dp.start_polling(bot)
 
