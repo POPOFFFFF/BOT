@@ -78,33 +78,34 @@ async def init_db(pool):
             )
             """)
 
-
-async def add_rasporaz(pool, chat_id, date: datetime.date, text):
+# Добавление распоряжения (заменяет старое на этот день)
+async def add_rasporaz(pool, chat_id: int, day: int, text: str):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Сначала удаляем старое распоряжение на эту дату
+            # удаляем старое распоряжение на этот день
             await cur.execute(
-                "DELETE FROM rasporaz WHERE chat_id=%s AND date=%s",
-                (chat_id, date)
+                "DELETE FROM rasporazheniya WHERE chat_id=%s AND day=%s",
+                (chat_id, day),
             )
-            # Затем добавляем новое
+            # добавляем новое
             await cur.execute(
-                "INSERT INTO rasporaz (chat_id, date, text) VALUES (%s, %s, %s)",
-                (chat_id, date, text)
+                "INSERT INTO rasporazheniya (chat_id, day, text) VALUES (%s, %s, %s)",
+                (chat_id, day, text),
             )
+        await conn.commit()
 
-# Получение распоряжения на день
-async def get_rasporaz_for_date(pool, chat_id, date: datetime.date):
+
+# Получение распоряжения по дню недели
+async def get_rasporaz_for_day(pool, chat_id: int, day: int):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "SELECT text FROM rasporaz WHERE chat_id=%s AND date=%s",
-                (chat_id, date)
+                "SELECT text FROM rasporazheniya WHERE chat_id=%s AND day=%s",
+                (chat_id, day),
             )
             rows = await cur.fetchall()
-            return [r[0] for r in rows] if rows else []
-
-
+            return [row[0] for row in rows]
+            
 # Удаление распоряжения
 async def delete_rasporaz(pool, date: datetime.date = None):
     async with pool.acquire() as conn:
@@ -123,7 +124,15 @@ async def cleanup_old_rasporaz(pool):
                 (DEFAULT_CHAT_ID, now)
             )
 
-
+# Очистка всех распоряжений
+async def clear_rasporaz(pool, chat_id: int):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM rasporazheniya WHERE chat_id=%s",
+                (chat_id,),
+            )
+        await conn.commit()
 
 
 async def add_rasp(pool, chat_id, day, week_type, text):
@@ -390,10 +399,10 @@ async def cmd_rasp(message: types.Message):
 
     # Проверяем есть ли распоряжение на эту дату
     date = now.date()
-    rasporaz_list = await get_rasporaz_for_date(pool, DEFAULT_CHAT_ID, date)
-    if rasporaz_list:
-        msg += "\n\n📌 Распоряжение на сегодня:\n"
-        msg += "\n".join(f"- {row}" for row in rasporaz_list)
+rasporaz_list = await get_rasporaz_for_day(pool, DEFAULT_CHAT_ID, day)
+if rasporaz_list:
+    msg += "\n\n📌 Распоряжение:\n"
+    msg += "\n".join(f"- {row}" for row in rasporaz_list)
 
     await message.reply(msg)
 
