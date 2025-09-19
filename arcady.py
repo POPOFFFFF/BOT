@@ -13,7 +13,7 @@ import ssl
 # ======================
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
-ALLOWED_USERS = [5228681344,7620086223 ]
+ALLOWED_USERS = [5228681344,7620086223]
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
@@ -208,6 +208,25 @@ async def cmd_rasp(message: types.Message):
         return await message.reply("ℹ️ На этот день расписания нет.")
     
     await message.reply(f"📅 Расписание:\n\n{text}")
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    if message.chat.type == "private":
+        if message.from_user.id not in ALLOWED_USERS:
+            return await message.answer("⚠ У вас нет доступа к админским командам.")
+        text = (
+            "📌 Команды администратора:\n"
+            "/addrasp <день> <тип недели> <текст> — добавить расписание\n"
+            "/clear_rasp — удалить все расписания\n"
+            "/setchet <1|2> — установить четность недели для чата\n"
+            "/rasp [<день> <четность>] — посмотреть расписание\n"
+            "/chatid — узнать ID чата\n"
+            "/help — показать это сообщение"
+        )
+    else:
+        text = "ℹ️ Чтобы посмотреть расписание, используйте команду:\n/rasp [<день> <четность>]\nПример: /rasp 3 2"
+    
+    await message.answer(text)
 
 # ======================
 # Main
