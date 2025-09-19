@@ -390,7 +390,10 @@ async def cmd_rasp(message: types.Message):
     msg = format_rasp_message(day, week_type, text) if text else "ℹ️ На этот день расписания нет.\n"
 
     # Распоряжение на этот день
-    rasporaz_list = await get_rasporaz_for_day(pool, DEFAULT_CHAT_ID, day)
+# Новое
+date = now.date()  # дата для текущего дня
+rasporaz_list = await get_rasporaz_for_date(pool, DEFAULT_CHAT_ID, date)
+
     if rasporaz_list:
         msg += "\n\n📌 Распоряжение на этот день:\n"
         msg += f"- {rasporaz_list[0]}\n"  # только одно распоряжение
