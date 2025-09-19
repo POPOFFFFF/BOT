@@ -2,8 +2,10 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import os
 
-TOKEN = "8244414405:AAGkUR-dl8R-vHZb6r5cKuQ54pKrysrqZCw"
+TOKEN = os.getenv("BOT_TOKEN")
+
 ALLOWED_USERS = [5228681344]  # твой Telegram ID
 
 bot = Bot(token=TOKEN)
