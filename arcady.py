@@ -112,7 +112,16 @@ async def delete_rasporaz(pool, day=None):
             else:
                 await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
 
-
+async def cleanup_old_rasporaz(pool):
+    now = datetime.datetime.now(TZ)
+    yesterday = now - datetime.timedelta(days=1)
+    y_day = yesterday.isoweekday()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM rasporaz WHERE chat_id=%s AND day=%s",
+                (DEFAULT_CHAT_ID, y_day)
+            )
 
 
 
@@ -328,10 +337,11 @@ async def cmd_chatid(message: types.Message):
 
 # ======================
 # Изменения в /rasp для отображения и автоудаления
-# ======================@dp.message(Command("rasp"))
+@dp.message(Command("rasp"))
 async def cmd_rasp(message: types.Message):
     parts = message.text.split()
     now = datetime.datetime.now(TZ)
+    
     # День
     if len(parts) >= 2 and parts[1].isdigit():
         day = int(parts[1])
@@ -339,6 +349,7 @@ async def cmd_rasp(message: types.Message):
             return await message.reply("⚠ День недели должен быть от 1 до 7.")
     else:
         day = now.isoweekday()
+    
     # Четность недели
     if len(parts) >= 3 and parts[2].isdigit():
         week_type = int(parts[2])
@@ -352,30 +363,15 @@ async def cmd_rasp(message: types.Message):
 
     # Обычное расписание
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
-    msg = ""
-    if text:
-        msg += format_rasp_message(day, week_type, text)
-    else:
-        msg += "ℹ️ На этот день расписания нет.\n"
+    msg = format_rasp_message(day, week_type, text) if text else "ℹ️ На этот день расписания нет.\n"
 
-    # Добавляем распоряжение на этот день
+    # Распоряжение на этот день
     rasporaz_list = await get_rasporaz_for_day(pool, DEFAULT_CHAT_ID, day)
     if rasporaz_list:
         msg += "\n\n📌 Распоряжение на этот день:\n"
-        msg += f"- {rasporaz_list[0]}\n"  # теперь только одно распоряжение
+        msg += f"- {rasporaz_list[0]}\n"  # только одно распоряжение
 
     await message.reply(msg)
-
-    # Автоудаление распоряжений для прошедших дней
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            yesterday = now - datetime.timedelta(days=1)
-            y_day = yesterday.isoweekday()
-            # Удаляем распоряжение прошедшего дня
-            await cur.execute(
-                "DELETE FROM rasporaz WHERE chat_id=%s AND day=%s",
-                (DEFAULT_CHAT_ID, y_day)
-            )
 
 
 @dp.message(Command("zvonki"))
