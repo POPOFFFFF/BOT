@@ -391,12 +391,13 @@ async def cmd_rasp(message: types.Message):
 
     # Распоряжение на этот день
 # Новое
-date = now.date()  # дата для текущего дня
+# Распоряжение на этот день
+date = now.date()  # сегодняшняя дата
 rasporaz_list = await get_rasporaz_for_date(pool, DEFAULT_CHAT_ID, date)
+if rasporaz_list:
+    msg += "\n\n📌 Распоряжение на сегодня:\n"
+    msg += f"- {rasporaz_list[0]}"
 
-    if rasporaz_list:
-        msg += "\n\n📌 Распоряжение на этот день:\n"
-        msg += f"- {rasporaz_list[0]}\n"  # только одно распоряжение
 
     await message.reply(msg)
 
