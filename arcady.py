@@ -222,8 +222,25 @@ def get_zvonki(day):
 # Команды
 # ======================
 # ======================
-# Команда /rasporaz — просмотр распоряжений
+# Команда /rasporaz — просмотр распоряжениЯ
 # ======================
+@dp.message(Command("rasporaz_add"))
+async def cmd_rasporaz_add(message: types.Message):
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    parts = message.text.split(" ", 2)
+    if len(parts) < 3:
+        return await message.answer("⚠ Формат: /rasporaz_add <день> <текст распоряжения>")
+    try:
+        day = int(parts[1])
+        if not 1 <= day <= 7:
+            return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
+        text = parts[2].replace("\\n", "\n")
+        await add_rasporaz(pool, DEFAULT_CHAT_ID, day, text)  # функция удаляет старое и добавляет новое
+        await message.answer(f"✅ Распоряжение добавлено для дня {day}:\n{text}")
+    except Exception as e:
+        await message.answer(f"⚠ Ошибка: {e}")
+        
 @dp.message(Command("rasporaz"))
 async def cmd_rasporaz_view(message: types.Message):
     parts = message.text.split()
@@ -235,12 +252,11 @@ async def cmd_rasporaz_view(message: types.Message):
     else:
         day = now.isoweekday()
 
+    # Получаем распоряжение для указанного дня
     rasporaz_list = await get_rasporaz_for_day(pool, DEFAULT_CHAT_ID, day)
     if rasporaz_list:
         day_name = DAYS[day-1]
-        msg = f"📌 Распоряжения на {day_name}:\n"
-        for r in rasporaz_list:
-            msg += f"- {r}\n"
+        msg = f"📌 Распоряжение на {day_name}:\n- {rasporaz_list[0]}"
     else:
         msg = "ℹ️ Распоряжений на этот день нет."
     await message.reply(msg)
@@ -401,7 +417,7 @@ async def cmd_help(message: types.Message):
             "/rasp [<день> <четность>] — посмотреть расписание\n"
             "/zvonki [<день>] — посмотреть расписание звонков\n"
             "/chatid — узнать ID чата\n"
-            "/rasporaz [<день>] — Добавить расспоряжение\n"
+            "/rasporaz_add [<день>] — Добавить расспоряжение\n"
             "/clear_rasporaz — Удалить расспоряжение\n"
             "/help — показать это сообщение"
         )
