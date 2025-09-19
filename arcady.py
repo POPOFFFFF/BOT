@@ -358,7 +358,7 @@ async def cmd_rasp(message: types.Message):
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
 
-    # Основное расписание
+    # Получаем расписание
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
         text = "ℹ️ На этот день расписания нет."
@@ -369,7 +369,7 @@ async def cmd_rasp(message: types.Message):
         if rasporaz:
             text += f"\n\n📌 Распоряжение на сегодня:\n{rasporaz}"
 
-    # Формируем сообщение с названием дня и четностью недели
+    # Формируем сообщение
     day_name = DAYS[day-1]
     week_name = "нечетная" if week_type == 1 else "четная"
     msg = f"📅 {day_name} | Неделя: {week_name}\n\n{text}"
