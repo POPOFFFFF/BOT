@@ -359,12 +359,10 @@ async def cmd_chatid(message: types.Message):
     await message.answer(f"🆔 Chat ID: {message.chat.id}")
 
 # ======================
-# Изменения в /rasp для отображения и автоудаления
 @dp.message(Command("rasp"))
 async def cmd_rasp(message: types.Message):
     parts = message.text.split()
     now = datetime.datetime.now(TZ)
-    
     # День
     if len(parts) >= 2 and parts[1].isdigit():
         day = int(parts[1])
@@ -372,8 +370,7 @@ async def cmd_rasp(message: types.Message):
             return await message.reply("⚠ День недели должен быть от 1 до 7.")
     else:
         day = now.isoweekday()
-    
-    # Четность недели
+    # Четность
     if len(parts) >= 3 and parts[2].isdigit():
         week_type = int(parts[2])
         if week_type not in [1, 2]:
@@ -386,15 +383,20 @@ async def cmd_rasp(message: types.Message):
 
     # Обычное расписание
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
-    msg = format_rasp_message(day, week_type, text) if text else "ℹ️ На этот день расписания нет.\n"
+    if not text:
+        return await message.reply("ℹ️ На этот день расписания нет.")
 
-rasporaz_list = await get_rasporaz_for_date(pool, DEFAULT_CHAT_ID, date)
-if rasporaz_list:
-    msg += "\n\n📌 Распоряжение на сегодня:\n"
-    msg += f"- {rasporaz_list[0]}"
+    msg = format_rasp_message(day, week_type, text)
 
+    # Проверяем есть ли распоряжение на эту дату
+    date = now.date()
+    rasporaz_list = await get_rasporaz_for_date(pool, DEFAULT_CHAT_ID, date)
+    if rasporaz_list:
+        msg += "\n\n📌 Распоряжение на сегодня:\n"
+        msg += "\n".join(f"- {row}" for row in rasporaz_list)
 
     await message.reply(msg)
+
 
 
 @dp.message(Command("zvonki"))
