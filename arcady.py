@@ -241,6 +241,7 @@ async def cmd_rasporaz_add(message: types.Message):
 
 @dp.message(Command("rasporaz"))
 async def cmd_rasporaz_view(message: types.Message):
+    await cleanup_old_rasporaz(pool)  # удаляем старые распоряжения перед выводом
     parts = message.text.split()
     if len(parts) >= 2:
         try:
@@ -256,7 +257,6 @@ async def cmd_rasporaz_view(message: types.Message):
     else:
         msg = "ℹ️ Распоряжений на этот день нет."
     await message.reply(msg)
-
 
 # ======================
 # Команда /clear_rasporaz
