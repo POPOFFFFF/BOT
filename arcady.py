@@ -13,7 +13,7 @@ import ssl
 # ======================
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
-ALLOWED_USERS = [5228681344]
+ALLOWED_USERS = [5228681344,7620086223 ]
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
@@ -169,32 +169,45 @@ async def cmd_setchet(message: types.Message):
     except Exception as e:
         await message.answer(f"⚠ Ошибка: {e}")
 
+@dp.message(Command("chatid"))
+async def cmd_chatid(message: types.Message):
+    await message.answer(f"🆔 Chat ID: {message.chat.id}")
+
 @dp.message(Command("rasp"))
 async def cmd_rasp(message: types.Message):
+    parts = message.text.split()
     now = datetime.datetime.now(TZ)
-    day = now.isoweekday()
     
-    if message.chat.type in ["group", "supergroup"]:
+    # Определяем день
+    if len(parts) >= 2:
+        try:
+            day = int(parts[1])
+            if day < 1 or day > 7:
+                raise ValueError
+        except ValueError:
+            return await message.reply("⚠ День недели должен быть числом от 1 (Пн) до 7 (Вс).")
+    else:
+        day = now.isoweekday()
+    
+    # Определяем четность
+    if len(parts) >= 3:
+        try:
+            week_type = int(parts[2])
+            if week_type not in [1, 2]:
+                raise ValueError
+        except ValueError:
+            return await message.reply("⚠ Четность недели: 1 - нечетная, 2 - четная.")
+    else:
         week_type = await get_week_type(pool, message.chat.id)
         if not week_type:
             week_number = now.isocalendar()[1]
             week_type = 1 if week_number % 2 else 2
-        
-        text = await get_rasp_for_day(pool, message.chat.id, day, week_type)
-        if not text:
-            return await message.reply("ℹ️ На сегодня расписания нет.")
-        await message.reply(f"📅 Расписание:\n\n{text}")
 
-    elif message.chat.type == "private":
-        if message.from_user.id not in ALLOWED_USERS:
-            return
-        rows = await get_all_rasp(pool)
-        if not rows:
-            return await message.answer("ℹ️ Пока нет расписаний.")
-        msg = "📋 Все расписания:\n\n"
-        for cid, d, w, txt in rows:
-            msg += f"🆔 Chat {cid} | День {d}, Неделя {w}\n{txt}\n\n"
-        await message.answer(msg)
+    text = await get_rasp_for_day(pool, message.chat.id, day, week_type)
+    if not text:
+        return await message.reply("ℹ️ На этот день расписания нет.")
+    
+    await message.reply(f"📅 Расписание:\n\n{text}")
 
 # ======================
 # Main
