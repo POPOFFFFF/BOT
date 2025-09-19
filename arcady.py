@@ -265,25 +265,35 @@ async def cmd_rasporaz_view(message: types.Message):
 async def cmd_clear_rasporaz(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         return
+
     parts = message.text.split()
-    date_to_delete = None
+    day = None
     if len(parts) >= 2:
         try:
-            # Пробуем преобразовать введённый аргумент в дату
-            date_to_delete = datetime.date.fromisoformat(parts[1])
+            day = int(parts[1])
+            if not 1 <= day <= 7:
+                raise ValueError
         except ValueError:
-            return await message.reply("⚠ Дата должна быть в формате YYYY-MM-DD")
-    confirm_text = f"Вы точно хотите удалить распоряжение {'на ' + str(date_to_delete) if date_to_delete else 'на все дни'}? Отправьте 'да' для подтверждения."
+            return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
+
+    confirm_text = f"Вы точно хотите удалить распоряжение {'для дня ' + str(day) if day else 'для всех дней'}? Отправьте 'да' для подтверждения."
     await message.answer(confirm_text)
+
     def check(m: types.Message):
         return m.from_user.id in ALLOWED_USERS and m.text.lower() == "да"
+
     try:
         await bot.wait_for("message", timeout=30.0, check=check)
-        await delete_rasporaz(pool, date_to_delete)
+        # Удаляем по дню недели, а не по дате
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                if day:
+                    await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s AND DAYOFWEEK(date) = %s", (DEFAULT_CHAT_ID, day % 7 + 1))
+                else:
+                    await cur.execute("DELETE FROM rasporaz WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
         await message.answer("✅ Распоряжение удалено!")
     except asyncio.TimeoutError:
         await message.answer("⌛ Подтверждение не получено. Операция отменена.")
-
 
 
 @dp.message(Command("addrasp"))
