@@ -208,8 +208,8 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
                 [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
                 [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
                 [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
-    ]
-)
+            ]
+        )
 
 
         await callback.message.edit_text("⏰ Выберите день:", reply_markup=kb)
@@ -223,13 +223,14 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
         ])
+
         await callback.message.edit_text("⚙ Админ-панель:", reply_markup=kb)
 
     elif action == "back_main":
         is_admin = callback.from_user.id in ALLOWED_USERS
         await callback.message.edit_text("Выберите действие:", reply_markup=main_menu(is_admin))
+        await callback.answer()
 
-    await callback.answer()
 
 # ======================
 # Расписание (пользователи)
