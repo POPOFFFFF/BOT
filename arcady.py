@@ -126,7 +126,7 @@ async def get_week_type(pool, chat_id):
 # ======================
 # Вспомогательные
 # ======================
-DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
 
 def format_rasp_message(day_num, week_type, text):
     day_name = DAYS[day_num-1]
@@ -197,10 +197,12 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data
     if action == "menu_rasp":
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"rasp_{i+1}")]
+            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"rasp_day_{i+1}")]
                              for i, day in enumerate(DAYS)]
+            + [[InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]]
         )
         await callback.message.edit_text("📅 Выберите день:", reply_markup=kb)
+
 
     elif action == "menu_zvonki":
         kb = InlineKeyboardMarkup(
@@ -258,6 +260,42 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 # ======================
 # Расписание (пользователи)
 # ======================
+
+@dp.callback_query(F.data.startswith("rasp_day_"))
+async def rasp_day_handler(callback: types.CallbackQuery):
+    day = int(callback.data.split("_")[2])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Любая", callback_data=f"rasp_show_{day}_0")],
+            [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=f"rasp_show_{day}_1")],
+            [InlineKeyboardButton(text="2️⃣ Четная", callback_data=f"rasp_show_{day}_2")],
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")]
+        ]
+    )
+    await callback.message.edit_text("📅 Выберите четность недели:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("rasp_show_"))
+async def rasp_show_handler(callback: types.CallbackQuery):
+_, _, day, week_type = callback.data.split("_")
+day = int(day)
+week_type = int(week_type)
+
+if week_type == 0:  # если выбрана "любая"
+    now = datetime.datetime.now(TZ)
+    week_type = await get_week_type(pool, callback.message.chat.id)
+    if not week_type:
+        week_type = 1 if now.isocalendar()[1] % 2 else 2
+
+text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
+if not text:
+    await callback.answer("ℹ На этот день нет расписания", show_alert=True)
+else:
+    await callback.message.edit_text(format_rasp_message(day, week_type, text))
+
+await callback.answer()
+
+
 @dp.callback_query(F.data.startswith("rasp_"))
 async def rasp_handler(callback: types.CallbackQuery):
     day = int(callback.data.split("_")[1])
