@@ -1,8 +1,12 @@
 import asyncio
 import os
 import datetime
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
@@ -26,7 +30,7 @@ DB_NAME = os.getenv("DB_NAME")
 # Инициализация
 # ======================
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 TZ = ZoneInfo("Asia/Omsk")
 scheduler = AsyncIOScheduler(timezone=TZ)
 
@@ -92,12 +96,6 @@ async def get_rasp_for_day(pool, chat_id, day, week_type):
             row = await cur.fetchone()
             return row[0] if row else None
 
-async def get_all_rasp(pool):
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT chat_id, day, week_type, text FROM rasp")
-            return await cur.fetchall()
-
 async def delete_rasp(pool, day=None):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -107,7 +105,7 @@ async def delete_rasp(pool, day=None):
                 await cur.execute("DELETE FROM rasp WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
 
 # ======================
-# Работа с четностью недели
+# Четность недели
 # ======================
 async def set_week_type(pool, chat_id, week_type):
     async with pool.acquire() as conn:
@@ -126,7 +124,7 @@ async def get_week_type(pool, chat_id):
             return row[0] if row else None
 
 # ======================
-# Вспомогательные функции
+# Вспомогательные
 # ======================
 DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
@@ -135,7 +133,6 @@ def format_rasp_message(day_num, week_type, text):
     week_name = "нечетная" if week_type==1 else "четная"
     return f"📅 {day_name} | Неделя: {week_name}\n\n{text}"
 
-# Расписание звонков: каждая пара — 2 урока
 ZVONKI_DEFAULT = [
 "1 пара: 1 урок 08:30-09:15, 2 урок 09:20-10:05", 
 "2 пара: 1 урок 10:15-11:00, 2 урок 11:05-11:50", 
@@ -161,127 +158,186 @@ def get_zvonki(day):
         return "\n".join(ZVONKI_DEFAULT)
 
 # ======================
-# Команды
+# Кнопки
 # ======================
-@dp.message(Command("addrasp"))
-async def cmd_add_rasp(message: types.Message):
-    if message.from_user.id not in ALLOWED_USERS:
-        return
-    try:
-        parts = message.text.split(" ", 3)
-        if len(parts) < 4:
-            return await message.answer("⚠ Формат: /addrasp <день> <тип недели> <текст>\nТип недели: 0 - любая, 1 - нечетная, 2 - четная")
-        day = int(parts[1])
-        week_type = int(parts[2])
-        if week_type not in [0, 1, 2]:
-            return await message.answer("⚠ Неверный тип недели! Используйте 0, 1 или 2.")
-        text = parts[3].replace("\\n", "\n")
-        await add_rasp(pool, DEFAULT_CHAT_ID, day, week_type, text)
-        await message.answer(f"✅ Добавлено!\nДень {day}, Неделя {week_type}\n{text}")
-    except Exception as e:
-        await message.answer(f"⚠ Ошибка: {e}")
+def main_menu(is_admin=False):
+    buttons = [
+        [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
+        [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")],
+    ]
+    if is_admin:
+        buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-@dp.message(Command("clear_rasp"))
-async def cmd_clear_rasp(message: types.Message):
-    if message.from_user.id not in ALLOWED_USERS:
-        return
-    parts = message.text.split()
-    day = None
-    if len(parts) >= 2:
-        try:
-            day = int(parts[1])
-            if not 1 <= day <= 7:
-                raise ValueError
-        except ValueError:
-            return await message.reply("⚠ День недели должен быть числом от 1 до 7.")
-    confirm_text = f"Вы точно хотите удалить расписание {'для дня ' + str(day) if day else 'для всех дней'}? Отправьте 'да' для подтверждения."
-    await message.answer(confirm_text)
-    def check(m: types.Message):
-        return m.from_user.id in ALLOWED_USERS and m.text.lower() == "да"
-    try:
-        msg = await bot.wait_for("message", timeout=30.0, check=check)
-        await delete_rasp(pool, day)
-        await message.answer("✅ Расписание удалено!")
-    except asyncio.TimeoutError:
-        await message.answer("⌛ Подтверждение не получено. Операция отменена.")
+# ======================
+# FSM для админки
+# ======================
+class AddRaspState(StatesGroup):
+    day = State()
+    week_type = State()
+    text = State()
 
-@dp.message(Command("setchet"))
-async def cmd_setchet(message: types.Message):
-    if message.from_user.id not in ALLOWED_USERS:
-        return
-    try:
-        parts = message.text.split()
-        if len(parts) != 2 or parts[1] not in ["1", "2"]:
-            return await message.answer("⚠ Формат: /setchet <1 - нечетная | 2 - четная>")
-        week_type = int(parts[1])
-        chat_id = message.chat.id
-        await set_week_type(pool, chat_id, week_type)
-        await message.answer(f"✅ Четность недели установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})")
-    except Exception as e:
-        await message.answer(f"⚠ Ошибка: {e}")
+class ClearRaspState(StatesGroup):
+    day = State()
 
-@dp.message(Command("chatid"))
-async def cmd_chatid(message: types.Message):
-    await message.answer(f"🆔 Chat ID: {message.chat.id}")
+class SetChetState(StatesGroup):
+    week_type = State()
 
-@dp.message(Command("rasp"))
-async def cmd_rasp(message: types.Message):
-    parts = message.text.split()
+# ======================
+# Хендлеры
+# ======================
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    is_admin = message.from_user.id in ALLOWED_USERS
+    await message.answer("Выберите действие:", reply_markup=main_menu(is_admin))
+
+# Главное меню
+@dp.callback_query(F.data.startswith("menu_"))
+async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
+    action = callback.data
+    if action == "menu_rasp":
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"rasp_{i+1}")]
+                             for i, day in enumerate(DAYS)]
+        )
+        await callback.message.edit_text("📅 Выберите день:", reply_markup=kb)
+
+    elif action == "menu_zvonki":
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"zvonki_{i+1}")]
+                             for i, day in enumerate(DAYS)]
+        )
+        await callback.message.edit_text("⏰ Выберите день:", reply_markup=kb)
+
+    elif action == "menu_admin":
+        if callback.from_user.id not in ALLOWED_USERS:
+            return await callback.answer("⛔ Нет доступа", show_alert=True)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
+            [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
+            [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+        ])
+        await callback.message.edit_text("⚙ Админ-панель:", reply_markup=kb)
+
+    elif action == "back_main":
+        is_admin = callback.from_user.id in ALLOWED_USERS
+        await callback.message.edit_text("Выберите действие:", reply_markup=main_menu(is_admin))
+
+    await callback.answer()
+
+# ======================
+# Расписание (пользователи)
+# ======================
+@dp.callback_query(F.data.startswith("rasp_"))
+async def rasp_handler(callback: types.CallbackQuery):
+    day = int(callback.data.split("_")[1])
     now = datetime.datetime.now(TZ)
-    # День
-    if len(parts) >= 2 and parts[1].isdigit():
-        day = int(parts[1])
-        if not 1 <= day <= 7:
-            return await message.reply("⚠ День недели должен быть от 1 до 7.")
-    else:
-        day = now.isoweekday()
-    # Четность
-    if len(parts) >= 3 and parts[2].isdigit():
-        week_type = int(parts[2])
-        if week_type not in [1, 2]:
-            return await message.reply("⚠ Четность недели: 1 - нечетная, 2 - четная.")
-    else:
-        week_type = await get_week_type(pool, message.chat.id)
-        if not week_type:
-            week_number = now.isocalendar()[1]
-            week_type = 1 if week_number % 2 else 2
+    week_type = await get_week_type(pool, callback.message.chat.id)
+    if not week_type:
+        week_type = 1 if now.isocalendar()[1] % 2 else 2
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
-        return await message.reply("ℹ️ На этот день расписания нет.")
-    await message.reply(format_rasp_message(day, week_type, text))
-
-@dp.message(Command("zvonki"))
-async def cmd_zvonki(message: types.Message):
-    parts = message.text.split()
-    now = datetime.datetime.now(TZ)
-    if len(parts) >= 2 and parts[1].isdigit():
-        day = int(parts[1])
-        if not 1 <= day <= 7:
-            return await message.reply("⚠ День недели должен быть от 1 до 7.")
+        await callback.answer("ℹ На этот день нет расписания", show_alert=True)
     else:
-        day = now.isoweekday()
+        await callback.message.edit_text(format_rasp_message(day, week_type, text))
+    await callback.answer()
+
+# ======================
+# Звонки
+# ======================
+@dp.callback_query(F.data.startswith("zvonki_"))
+async def zvonki_handler(callback: types.CallbackQuery):
+    day = int(callback.data.split("_")[1])
     schedule = get_zvonki(day)
-    day_name = DAYS[day-1]
-    await message.reply(f"📌 Расписание звонков на {day_name}:\n{schedule}")
+    await callback.message.edit_text(f"📌 Расписание звонков на {DAYS[day-1]}:\n{schedule}")
+    await callback.answer()
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    if message.chat.type == "private":
-        if message.from_user.id not in ALLOWED_USERS:
-            return await message.answer("⚠ У вас нет доступа к админским командам.")
-        text = (
-            "📌 Команды администратора:\n"
-            "/addrasp <день> <тип недели> <текст> — добавить расписание\n"
-            "/clear_rasp [<день>] — удалить расписание (с подтверждением)\n"
-            "/setchet <1|2> — установить четность недели для чата\n"
-            "/rasp [<день> <четность>] — посмотреть расписание\n"
-            "/zvonki [<день>] — посмотреть расписание звонков\n"
-            "/chatid — узнать ID чата\n"
-            "/help — показать это сообщение"
-        )
-    else:
-        text = "ℹ️ Чтобы посмотреть расписание, используйте команду:\n/rasp [<день> <четность>]\n/zvonki [<день>]"
-    await message.answer(text)
+# ======================
+# Админка — Добавить расписание
+# ======================
+@dp.callback_query(F.data == "admin_add")
+async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите день недели (1-7):")
+    await state.set_state(AddRaspState.day)
+    await callback.answer()
+
+@dp.message(AddRaspState.day)
+async def add_rasp_day(message: types.Message, state: FSMContext):
+    try:
+        day = int(message.text)
+        if not 1 <= day <= 7:
+            raise ValueError
+        await state.update_data(day=day)
+        await message.answer("Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):")
+        await state.set_state(AddRaspState.week_type)
+    except ValueError:
+        await message.answer("⚠ Введите число от 1 до 7.")
+
+@dp.message(AddRaspState.week_type)
+async def add_rasp_week_type(message: types.Message, state: FSMContext):
+    try:
+        week_type = int(message.text)
+        if week_type not in [0, 1, 2]:
+            raise ValueError
+        await state.update_data(week_type=week_type)
+        await message.answer("Введите текст расписания:")
+        await state.set_state(AddRaspState.text)
+    except ValueError:
+        await message.answer("⚠ Введите 0, 1 или 2.")
+
+@dp.message(AddRaspState.text)
+async def add_rasp_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    text = message.text.replace("\\n", "\n")
+    await add_rasp(pool, DEFAULT_CHAT_ID, data["day"], data["week_type"], text)
+    await message.answer("✅ Расписание добавлено!")
+    await state.clear()
+
+# ======================
+# Админка — Очистить расписание
+# ======================
+@dp.callback_query(F.data == "admin_clear")
+async def admin_clear_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите день недели (1-7) или 0 для удаления всех:")
+    await state.set_state(ClearRaspState.day)
+    await callback.answer()
+
+@dp.message(ClearRaspState.day)
+async def clear_rasp_day(message: types.Message, state: FSMContext):
+    try:
+        day = int(message.text)
+        if day == 0:
+            await delete_rasp(pool)
+        elif 1 <= day <= 7:
+            await delete_rasp(pool, day)
+        else:
+            raise ValueError
+        await message.answer("✅ Расписание удалено!")
+        await state.clear()
+    except ValueError:
+        await message.answer("⚠ Введите 0 или число от 1 до 7.")
+
+# ======================
+# Админка — Установить четность
+# ======================
+@dp.callback_query(F.data == "admin_setchet")
+async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите четность (1 - нечетная, 2 - четная):")
+    await state.set_state(SetChetState.week_type)
+    await callback.answer()
+
+@dp.message(SetChetState.week_type)
+async def setchet_handler(message: types.Message, state: FSMContext):
+    try:
+        week_type = int(message.text)
+        if week_type not in [1, 2]:
+            raise ValueError
+        await set_week_type(pool, message.chat.id, week_type)
+        await message.answer(f"✅ Четность установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})")
+        await state.clear()
+    except ValueError:
+        await message.answer("⚠ Введите 1 или 2.")
 
 # ======================
 # Автопостинг расписания
@@ -311,4 +367,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
