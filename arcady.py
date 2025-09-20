@@ -277,23 +277,23 @@ async def rasp_day_handler(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def rasp_show_handler(callback: types.CallbackQuery):
-_, _, day, week_type = callback.data.split("_")
-day = int(day)
-week_type = int(week_type)
+    _, _, day, week_type = callback.data.split("_")
+    day = int(day)
+    week_type = int(week_type)
 
-if week_type == 0:  # если выбрана "любая"
-    now = datetime.datetime.now(TZ)
-    week_type = await get_week_type(pool, callback.message.chat.id)
-    if not week_type:
-        week_type = 1 if now.isocalendar()[1] % 2 else 2
+    if week_type == 0:  # если выбрана "любая"
+        now = datetime.datetime.now(TZ)
+        week_type = await get_week_type(pool, callback.message.chat.id)
+        if not week_type:
+            week_type = 1 if now.isocalendar()[1] % 2 else 2
 
-text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
-if not text:
-    await callback.answer("ℹ На этот день нет расписания", show_alert=True)
-else:
-    await callback.message.edit_text(format_rasp_message(day, week_type, text))
+    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
+    if not text:
+        await callback.answer("ℹ На этот день нет расписания", show_alert=True)
+    else:
+        await callback.message.edit_text(format_rasp_message(day, week_type, text))
 
-await callback.answer()
+    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("rasp_"))
