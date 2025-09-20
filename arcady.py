@@ -296,8 +296,8 @@ async def send_today_rasp():
         msg = format_rasp_message(day, week_type, text)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
 
-scheduler.add_job(send_today_rasp, CronTrigger(hour=7, minute=0))
-scheduler.add_job(send_today_rasp, CronTrigger(hour=20, minute=0))
+scheduler.add_job(send_today_rasp, CronTrigger(hour=1, minute=0))
+scheduler.add_job(send_today_rasp, CronTrigger(hour=14, minute=0))
 
 # ======================
 # Main
