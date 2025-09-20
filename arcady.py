@@ -284,24 +284,18 @@ async def rasp_show_handler(callback: types.CallbackQuery):
 # ======================
 @dp.callback_query(F.data.startswith("rasp_"))
 async def rasp_day_handler(callback: types.CallbackQuery):
-    day = int(callback.data.split("_")[1])
+    day = int(callback.data.split("_")[1])   # <-- тут всегда число дня (1–6)
 
-    # Кнопки выбора четности
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="📖 Нечётная", callback_data=f"rasp_day_weektype_{day}_1")
-            ],
-            [
-                InlineKeyboardButton(text="📖 Чётная", callback_data=f"rasp_day_weektype_{day}_2")
-            ],
-            [
-                InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")
-            ]
+            [InlineKeyboardButton(text="📖 Нечётная", callback_data=f"rasp_day_weektype_{day}_1")],
+            [InlineKeyboardButton(text="📖 Чётная", callback_data=f"rasp_day_weektype_{day}_2")],
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")]
         ]
     )
     await callback.message.edit_text(f"📅 {DAYS[day-1]} — выберите неделю:", reply_markup=kb)
     await callback.answer()
+
 
 
 # ======================
@@ -310,8 +304,8 @@ async def rasp_day_handler(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("rasp_day_weektype_"))
 async def rasp_show_handler(callback: types.CallbackQuery):
     parts = callback.data.split("_")
-    day = int(parts[-2])        # предпоследний элемент = день
-    week_type = int(parts[-1])  # последний элемент = четность
+    day = int(parts[-2])        # "2"
+    week_type = int(parts[-1])  # "1"
 
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
@@ -320,6 +314,7 @@ async def rasp_show_handler(callback: types.CallbackQuery):
         await callback.message.edit_text(format_rasp_message(day, week_type, text))
 
     await callback.answer()
+
 
 
 # ======================
