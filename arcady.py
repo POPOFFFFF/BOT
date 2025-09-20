@@ -186,8 +186,8 @@ class SetChetState(StatesGroup):
 # ======================
 # Хендлеры
 # ======================
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+@dp.message(F.text == "/аркадий")
+async def cmd_arkadiy(message: types.Message):
     is_admin = message.from_user.id in ALLOWED_USERS
     await message.answer("Выберите действие:", reply_markup=main_menu(is_admin))
 
@@ -203,10 +203,14 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text("📅 Выберите день:", reply_markup=kb)
 
     elif action == "menu_zvonki":
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"zvonki_{i+1}")]
-                             for i, day in enumerate(DAYS)]
-        )
+kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
+        [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+    ]
+)
+
         await callback.message.edit_text("⏰ Выберите день:", reply_markup=kb)
 
     elif action == "menu_admin":
