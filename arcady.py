@@ -207,7 +207,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             inline_keyboard=[
                 [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
                 [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
-                [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+                [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
             ]
         )
 
@@ -221,23 +221,37 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
             [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
             [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
         ])
 
         await callback.message.edit_text("⚙ Админ-панель:", reply_markup=kb)
 
-    elif action == "back_main":
-        is_admin = callback.from_user.id in ALLOWED_USERS
+    elif action == "menu_back":
+        # Очистим возможные состояния FSM (если админ был в процессе)
         try:
-            await callback.message.delete()  # удаляем старое сообщение с меню
+            await state.clear()
+        except Exception:
+            pass
+
+        is_admin = callback.from_user.id in ALLOWED_USERS
+
+        # Попробуем удалить предыдущее сообщение (если оно принадлежит боту).
+        # Если удаление не получилось — пробуем edit_text, а если и это не получится — просто отправим новое сообщение.
+        try:
+            await callback.message.delete()
         except Exception as e:
-            print(f"Ошибка удаления: {e}")
-        await bot.send_message(
-            chat_id=callback.from_user.id,
-            text="Выберите действие:",
-            reply_markup=main_menu(is_admin)
-        )
+            # не удалось удалить — пробуем редактировать
+            try:
+                await callback.message.edit_text("Выберите действие:", reply_markup=main_menu(is_admin))
+            except Exception:
+                # как запасной вариант отправим новое сообщение
+                await bot.send_message(chat_id=callback.message.chat.id, text="Выберите действие:", reply_markup=main_menu(is_admin))
+        else:
+            # если удалили успешно — отправляем новое сообщение с меню
+            await bot.send_message(chat_id=callback.message.chat.id, text="Выберите действие:", reply_markup=main_menu(is_admin))
+
         await callback.answer()
+
 
 
 
