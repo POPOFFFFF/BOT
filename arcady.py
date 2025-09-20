@@ -266,7 +266,6 @@ async def rasp_day_handler(callback: types.CallbackQuery):
     day = int(callback.data.split("_")[2])
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Любая", callback_data=f"rasp_show_{day}_0")],
             [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=f"rasp_show_{day}_1")],
             [InlineKeyboardButton(text="2️⃣ Четная", callback_data=f"rasp_show_{day}_2")],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")]
@@ -332,7 +331,7 @@ async def zvonki_handler(callback: types.CallbackQuery):
 # ======================
 @dp.callback_query(F.data == "admin_add")
 async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите день недели (1-7):")
+    await callback.message.answer("Введите день недели (1-6):")
     await state.set_state(AddRaspState.day)
     await callback.answer()
 
@@ -340,13 +339,13 @@ async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
 async def add_rasp_day(message: types.Message, state: FSMContext):
     try:
         day = int(message.text)
-        if not 1 <= day <= 7:
+        if not 1 <= day <= 6:
             raise ValueError
         await state.update_data(day=day)
-        await message.answer("Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):")
+        await message.answer("Введите тип недели (1 - нечетная, 2 - четная):")
         await state.set_state(AddRaspState.week_type)
     except ValueError:
-        await message.answer("⚠ Введите число от 1 до 7.")
+        await message.answer("⚠ Введите число от 1 до 6.")
 
 @dp.message(AddRaspState.week_type)
 async def add_rasp_week_type(message: types.Message, state: FSMContext):
@@ -373,7 +372,7 @@ async def add_rasp_text(message: types.Message, state: FSMContext):
 # ======================
 @dp.callback_query(F.data == "admin_clear")
 async def admin_clear_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите день недели (1-7) или 0 для удаления всех:")
+    await callback.message.answer("Введите день недели (1-6) или 0 для удаления всех:")
     await state.set_state(ClearRaspState.day)
     await callback.answer()
 
@@ -383,14 +382,14 @@ async def clear_rasp_day(message: types.Message, state: FSMContext):
         day = int(message.text)
         if day == 0:
             await delete_rasp(pool)
-        elif 1 <= day <= 7:
+        elif 1 <= day <= 6:
             await delete_rasp(pool, day)
         else:
             raise ValueError
         await message.answer("✅ Расписание удалено!")
         await state.clear()
     except ValueError:
-        await message.answer("⚠ Введите 0 или число от 1 до 7.")
+        await message.answer("⚠ Введите 0 или число от 1 до 6.")
 
 # ======================
 # Админка — Установить четность
