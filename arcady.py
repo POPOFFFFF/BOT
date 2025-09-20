@@ -309,16 +309,18 @@ async def rasp_day_handler(callback: types.CallbackQuery):
 # ======================
 @dp.callback_query(F.data.startswith("rasp_day_weektype_"))
 async def rasp_show_handler(callback: types.CallbackQuery):
-    _, _, day, week_type = callback.data.split("_")
-    day = int(day)
-    week_type = int(week_type)
+    parts = callback.data.split("_")
+    day = int(parts[-2])        # предпоследний элемент = день
+    week_type = int(parts[-1])  # последний элемент = четность
 
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
         await callback.answer("ℹ На этот день нет расписания", show_alert=True)
     else:
         await callback.message.edit_text(format_rasp_message(day, week_type, text))
+
     await callback.answer()
+
 
 # ======================
 # Звонки
