@@ -228,7 +228,15 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
     elif action == "back_main":
         is_admin = callback.from_user.id in ALLOWED_USERS
-        await callback.message.answer("Выберите действие:", reply_markup=main_menu(is_admin))
+        try:
+            await callback.message.delete()  # удаляем старое сообщение
+        except Exception as e:
+            print(f"Ошибка удаления сообщения: {e}")
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="Выберите действие:",
+            reply_markup=main_menu(is_admin)
+        )
         await callback.answer()
 
 
