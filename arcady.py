@@ -203,13 +203,14 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text("📅 Выберите день:", reply_markup=kb)
 
     elif action == "menu_zvonki":
-kb = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
-        [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
+                [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
+                [InlineKeyboardButton(text="⬅ Назад", callback_data="back_main")]
     ]
 )
+
 
         await callback.message.edit_text("⏰ Выберите день:", reply_markup=kb)
 
@@ -252,9 +253,16 @@ async def rasp_handler(callback: types.CallbackQuery):
 # ======================
 @dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
-    day = int(callback.data.split("_")[1])
-    schedule = get_zvonki(day)
-    await callback.message.edit_text(f"📌 Расписание звонков на {DAYS[day-1]}:\n{schedule}")
+    action = callback.data
+
+    if action == "zvonki_weekday":
+        schedule = "\n".join(ZVONKI_DEFAULT)
+        await callback.message.edit_text(f"📌 Расписание звонков (будние дни):\n{schedule}")
+
+    elif action == "zvonki_saturday":
+        schedule = "\n".join(ZVONKI_SATURDAY)
+        await callback.message.edit_text(f"📌 Расписание звонков (суббота):\n{schedule}")
+
     await callback.answer()
 
 # ======================
