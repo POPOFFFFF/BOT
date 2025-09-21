@@ -220,13 +220,16 @@ async def get_week_setting(pool, chat_id):
             return (wt, set_at)
 
 async def get_current_week_type(pool, chat_id: int, target_date: datetime.date | None = None):
-
+    """
+    Вычисляет четность недели для chat_id на конкретную дату target_date.
+    Если target_date не указан, берется сегодняшняя дата.
+    """
     setting = await get_week_setting(pool, chat_id)
     if target_date is None:
         target_date = datetime.datetime.now(TZ).date()
 
     if not setting:
-        # fallback на обычный календарный расчет
+        # fallback на календарный расчет
         week_number = target_date.isocalendar()[1]
         return 1 if week_number % 2 != 0 else 2
 
@@ -235,8 +238,10 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
         set_at = set_at.date()
 
     delta_days = (target_date - set_at).days
-    weeks_passed = abs(delta_days) // 7
+    weeks_passed = delta_days // 7  # <-- убрали abs, учитываем направление
 
+    # Если прошло четное количество недель — текущая неделя = базовая
+    # Если прошло нечетное — противоположная
     if weeks_passed % 2 == 0:
         return base_week_type
     else:
