@@ -7,6 +7,7 @@ import ssl
 import aiomysql
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -267,10 +268,11 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
 # ======================
 def main_menu(is_admin=False):
     buttons = [
-        [InlineKeyboardButton("📅 Расписание", callback_data="menu_rasp")],
-        [InlineKeyboardButton("⏰ Звонки", callback_data="menu_zvonki")]
+        [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
+        [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]
     ]
-    if is_admin: buttons.append([InlineKeyboardButton("⚙ Админка", callback_data="menu_admin")])
+    if is_admin:
+        buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def admin_menu():
@@ -316,14 +318,10 @@ async def send_today_rasp():
 # ======================
 # Основные обработчики
 # ======================
-@dp.message()
+
+
+@dp.message(Command(commands=["аркадий", "акрадый", "акрадий"]))
 async def cmd_arkadiy(message: types.Message):
-    if not message.text:
-        return
-
-    if message.text.lower() not in ["/аркадий", "/акрадый", "/акрадий"]:
-        return
-
     is_private = message.chat.type == "private"
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
     await greet_and_send(
@@ -332,6 +330,7 @@ async def cmd_arkadiy(message: types.Message):
         message=message,
         markup=main_menu(is_admin)
     )
+
 
 
 # Главный обработчик меню
