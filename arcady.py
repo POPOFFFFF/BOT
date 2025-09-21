@@ -14,9 +14,6 @@ import aiomysql
 import ssl
 import re
 
-# ======================
-# Конфиг
-# ======================
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344, 7620086223]
@@ -27,9 +24,6 @@ DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
 
-# ======================
-# Инициализация
-# ======================
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 TZ = ZoneInfo("Asia/Omsk")
@@ -39,9 +33,6 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
-# ======================
-# Работа с БД
-# ======================
 async def get_pool():
     return await aiomysql.create_pool(
         host=DB_HOST,
@@ -53,9 +44,6 @@ async def get_pool():
         autocommit=True
     )
 
-# ======================
-# Работа с БД (добавим никнеймы, publish_times и расширим week_setting)
-# ======================
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -68,7 +56,6 @@ async def init_db(pool):
                 text TEXT
             )
             """)
-            # week_setting теперь хранит дату установки set_at (DATE) и базовую week_type
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
                 chat_id BIGINT PRIMARY KEY,
@@ -76,14 +63,12 @@ async def init_db(pool):
                 set_at DATE
             )
             """)
-            # новая таблица никнеймов
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS nicknames (
                 user_id BIGINT PRIMARY KEY,
                 nickname VARCHAR(255)
             )
             """)
-            # таблица для времён публикаций (по Омску)
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS publish_times (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -91,21 +76,13 @@ async def init_db(pool):
                 minute INT NOT NULL
             )
             """)
-
-# ----------------------
-# Nicknames
-# ----------------------
-
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Проверяем, есть ли колонка set_at
             await cur.execute("SHOW COLUMNS FROM week_setting LIKE 'set_at'")
             row = await cur.fetchone()
             if not row:
-                # добавляем колонку
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
-
 
 async def set_nickname(pool, user_id: int, nickname: str):
     async with pool.acquire() as conn:
@@ -123,29 +100,21 @@ async def get_nickname(pool, user_id: int) -> str | None:
             row = await cur.fetchone()
             return row[0] if row else None
 
-# ----------------------
-# Publish times
-# ----------------------
 async def add_publish_time(pool, hour: int, minute: int):
-    """Добавляет время публикации в БД."""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Вставляем запись с commit
             await cur.execute(
                 "INSERT INTO publish_times (hour, minute) VALUES (%s, %s)", 
                 (hour, minute)
             )
-            await conn.commit()  # обязательный commit для сохранения
-
+            await conn.commit() 
 
 async def get_publish_times(pool):
-    """Возвращает список всех времен публикаций."""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT id, hour, minute FROM publish_times ORDER BY hour, minute")
             rows = await cur.fetchall()
-            return rows  # [(id, hour, minute), ...]
-
+            return rows 
 
 async def delete_publish_time(pool, pid: int):
     async with pool.acquire() as conn:
@@ -157,9 +126,6 @@ async def clear_publish_times(pool):
         async with conn.cursor() as cur:
             await cur.execute("DELETE FROM publish_times")
 
-# ======================
-# Работа с расписанием (rasp)
-# ======================
 async def add_rasp(pool, chat_id, day, week_type, text):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -178,7 +144,6 @@ async def get_rasp_for_day(pool, chat_id, day, week_type):
             row = await cur.fetchone()
             if row:
                 return row[0]
-            # fallback week_type = 0 (any)
             await cur.execute(
                 "SELECT text FROM rasp WHERE chat_id=%s AND day=%s AND week_type=0 LIMIT 1",
                 (chat_id, day)
@@ -186,17 +151,17 @@ async def get_rasp_for_day(pool, chat_id, day, week_type):
             row = await cur.fetchone()
             return row[0] if row else None
 
-async def delete_rasp(pool, day=None):
+async def delete_rasp(pool, day=None, week_type=None):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            if day:
+            if day and week_type is not None:
+                await cur.execute("DELETE FROM rasp WHERE chat_id=%s AND day=%s AND week_type=%s", 
+                                  (DEFAULT_CHAT_ID, day, week_type))
+            elif day:
                 await cur.execute("DELETE FROM rasp WHERE chat_id=%s AND day=%s", (DEFAULT_CHAT_ID, day))
             else:
                 await cur.execute("DELETE FROM rasp WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
-
-# ======================
-# Четность недели
-# ======================
+                
 async def set_week_type(pool, chat_id, week_type):
     today = datetime.datetime.now(TZ).date()
     async with pool.acquire() as conn:
@@ -218,21 +183,12 @@ async def get_week_setting(pool, chat_id):
             if isinstance(set_at, datetime.datetime):
                 set_at = set_at.date()
             return (wt, set_at)
-
-# ======================
-# Четность недели
-# ======================
 async def get_current_week_type(pool, chat_id: int, target_date: datetime.date | None = None):
-    """
-    Вычисляет четность недели для chat_id на конкретную дату target_date.
-    Если target_date не указан, берется сегодняшняя дата.
-    """
     setting = await get_week_setting(pool, chat_id)
     if target_date is None:
         target_date = datetime.datetime.now(TZ).date()
 
     if not setting:
-        # fallback на календарный расчет ISO-недели
         week_number = target_date.isocalendar()[1]
         return 1 if week_number % 2 != 0 else 2
 
@@ -240,23 +196,15 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     if isinstance(set_at, datetime.datetime):
         set_at = set_at.date()
 
-    # используем ISO номера недель
     base_week_number = set_at.isocalendar()[1]
     target_week_number = target_date.isocalendar()[1]
 
-    # разница в неделях, учитывая переход года
     weeks_passed = target_week_number - base_week_number
     if weeks_passed % 2 == 0:
         return base_week_type
     else:
         return 1 if base_week_type == 2 else 2
 
-
-
-
-# ======================
-# Вспомогательные
-# ======================
 DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
 
 def format_rasp_message(day_num, week_type, text):
@@ -285,9 +233,6 @@ ZVONKI_SATURDAY = [
 def get_zvonki(is_saturday: bool):
     return "\n".join(ZVONKI_SATURDAY if is_saturday else ZVONKI_DEFAULT)
 
-# ======================
-# Кнопки
-# ======================
 def main_menu(is_admin=False):
     buttons = [
         [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
@@ -297,19 +242,20 @@ def main_menu(is_admin=False):
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# расширенная админка: добавляем новые пункты
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
+        [InlineKeyboardButton(text="✏ Изменить расписание", callback_data="admin_edit")],  # ✅ новая кнопка
         [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
-        [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],  # новая кнопка
+        [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
 
 @dp.callback_query(F.data == "admin_my_publish_time")
 async def admin_my_publish_time(callback: types.CallbackQuery):
@@ -324,23 +270,17 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
         await greet_and_send(callback.from_user, "Время публикаций ещё не задано.", callback=callback)
         return
 
-    # находим ближайшее время после текущего
     future_times = sorted([(h, m) for _, h, m in times if (h, m) > (now.hour, now.minute)])
     if future_times:
         hh, mm = future_times[0]
         msg = f"Следующая публикация сегодня в Омске: {hh:02d}:{mm:02d}"
     else:
-        # если сегодня уже все публикации прошли — берём первую следующего дня
         hh, mm = sorted([(h, m) for _, h, m in times])[0]
         msg = f"Сегодня публикаций больше нет. Следующая публикация завтра в Омске: {hh:02d}:{mm:02d}"
 
     await greet_and_send(callback.from_user, msg, callback=callback)
     await callback.answer()
 
-
-# ======================
-# FSM для админки
-# ======================
 class AddRaspState(StatesGroup):
     day = State()
     week_type = State()
@@ -353,11 +293,69 @@ class SetChetState(StatesGroup):
     week_type = State()
 
 class SetPublishTimeState(StatesGroup):
-    time = State()  # ожидаем ввод в формате HH:MM
+    time = State()  
 
-# ======================
-# Хелпер для приветствия и отправки сообщений
-# ======================
+class EditRaspState(StatesGroup):
+    day = State()
+    week_type = State()
+    text = State()
+
+@dp.callback_query(F.data == "admin_edit")
+async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
+        return
+    await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
+    await state.set_state(EditRaspState.day)
+    await callback.answer()
+
+@dp.message(EditRaspState.day)
+async def edit_rasp_day(message: types.Message, state: FSMContext):
+    try:
+        day = int(message.text)
+        if not 1 <= day <= 6:
+            raise ValueError
+        await state.update_data(day=day)
+        await greet_and_send(message.from_user, "Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):", message=message)
+        await state.set_state(EditRaspState.week_type)
+    except ValueError:
+        await greet_and_send(message.from_user, "⚠ Введите число от 1 до 6.", message=message)
+
+@dp.message(EditRaspState.week_type)
+async def edit_rasp_week_type(message: types.Message, state: FSMContext):
+    try:
+        week_type = int(message.text)
+        if week_type not in [0, 1, 2]:
+            raise ValueError
+        await state.update_data(week_type=week_type)
+        await greet_and_send(message.from_user, "Введите новый текст расписания:", message=message)
+        await state.set_state(EditRaspState.text)
+    except ValueError:
+        await greet_and_send(message.from_user, "⚠ Введите 0, 1 или 2.", message=message)
+
+@dp.message(EditRaspState.text)
+async def edit_rasp_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    text = message.text.replace("\\n", "\n")
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                UPDATE rasp SET text=%s 
+                WHERE chat_id=%s AND day=%s AND week_type=%s
+            """, (text, DEFAULT_CHAT_ID, data["day"], data["week_type"]))
+            if cur.rowcount == 0:
+                await cur.execute(
+                    "INSERT INTO rasp (chat_id, day, week_type, text) VALUES (%s, %s, %s, %s)",
+                    (DEFAULT_CHAT_ID, data["day"], data["week_type"], text)
+                )
+
+    await greet_and_send(message.from_user, "✅ Расписание обновлено!", message=message)
+    await state.clear()
+
+
+
+
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None):
     nickname = await get_nickname(pool, user.id)
     if nickname:
@@ -366,43 +364,31 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
         greet = "👋 Салам!\n\n"
     full_text = greet + text
 
-    # callback edit / answer
     if callback:
         try:
             await callback.message.edit_text(full_text, reply_markup=markup)
         except Exception:
-            # fallback: send a new message in the same chat as callback
             try:
                 await callback.message.answer(full_text, reply_markup=markup)
             except Exception:
-                # as last resort use bot.send_message
                 await bot.send_message(chat_id=callback.message.chat.id, text=full_text, reply_markup=markup)
-    # message.answer
     elif message:
         try:
             await message.answer(full_text, reply_markup=markup)
         except Exception:
-            # fallback direct send
             await bot.send_message(chat_id=message.chat.id, text=full_text, reply_markup=markup)
-    # direct chat_id (used when we deleted old message and want to send a fresh one)
     elif chat_id is not None:
         await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
     else:
-        # nothing else provided: try sending to user's private chat
         try:
             await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
         except Exception:
-            # ignore silently
             pass
 
-# ======================
-# Функция (re)создания задач планировщика по данным из БД
-# ======================
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
 
 async def reschedule_publish_jobs(pool):
-    # удаляем старые publish_* задачи
     try:
         for job in list(scheduler.get_jobs()):
             if job.id.startswith("publish_"):
@@ -413,33 +399,25 @@ async def reschedule_publish_jobs(pool):
     except Exception:
         pass
 
-    # читаем времена из БД и создаём задачи
     times = await get_publish_times(pool)
     for row in times:
         pid, hour, minute = row
         job_id = _job_id_for_time(hour, minute)
-        # добавляем задачу send_today_rasp с нужным временем в TZ
         try:
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
         except Exception:
-            # если задача с таким id уже есть — пропускаем
             pass
 
-# ======================
-# Хендлеры
-# ======================
 @dp.message(F.text.lower().in_(["/аркадий", "/акрадый", "/акрадий"]))
 async def cmd_arkadiy(message: types.Message):
     is_private = message.chat.type == "private"
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
     await greet_and_send(message.from_user, "Выберите действие:", message=message, markup=main_menu(is_admin))
 
-# Главный обработчик меню
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data
 
-    # ---------- расписание: показать список дней (1..6) ----------
     if action == "menu_rasp":
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -450,7 +428,6 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "📅 Выберите день:", callback=callback, markup=kb)
         await callback.answer()
 
-    # ---------- звонки: будни / суббота ----------
     elif action == "menu_zvonki":
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
@@ -460,7 +437,6 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "⏰ Выберите вариант:", callback=callback, markup=kb)
         await callback.answer()
 
-    # ---------- админка (только в ЛС) ----------
     elif action == "menu_admin":
         if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
             await callback.answer("⛔ Админка доступна только в личных сообщениях админам", show_alert=True)
@@ -469,9 +445,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
         await callback.answer()
 
-    # ---------- назад в главное меню ----------
     elif action == "menu_back":
-        # отменим FSM (если был)
         try:
             await state.clear()
         except Exception:
@@ -480,13 +454,10 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         is_private = callback.message.chat.type == "private"
         is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
 
-        # удаляем старое сообщение, если можем, и отправляем новое меню
         try:
             await callback.message.delete()
-            # если удалили — отправляем новое сообщение с приветствием в тот же чат
             await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
         except Exception:
-            # если не удалось удалить — пробуем редактировать, иначе отправить новое
             try:
                 await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin))
             except Exception:
@@ -517,14 +488,13 @@ async def on_rasp_day(callback: types.CallbackQuery):
 
 @dp.message(Command("никнейм"))
 async def cmd_set_nickname(message: types.Message):
-    # Получаем никнейм из текста команды
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await message.answer("⚠ Использование: /никнейм <ваш никнейм>")
         return
 
     nickname = parts[1].strip()
-    user_id = message.from_user.id  # ID автоматически текущего пользователя
+    user_id = message.from_user.id 
 
     try:
         await set_nickname(pool, user_id, nickname)
@@ -662,7 +632,7 @@ async def set_publish_time_handler(message: types.Message, state: FSMContext):
 
     try:
         await add_publish_time(pool, hh, mm)
-        await reschedule_publish_jobs(pool)  # пересоздаем задачи планировщика
+        await reschedule_publish_jobs(pool) 
         await message.answer(f"✅ Время публикации добавлено: {hh:02d}:{mm:02d} (Омск).")
     except Exception as e:
         await message.answer(f"❌ Ошибка при сохранении: {e}")
@@ -723,17 +693,29 @@ async def admin_clear_start(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(ClearRaspState.day)
 async def clear_rasp_day(message: types.Message, state: FSMContext):
     try:
-        day = int(message.text)
+        parts = message.text.split()
+        if len(parts) == 1:
+            day = int(parts[0])
+            week_type = None
+        elif len(parts) == 2:
+            day, week_type = map(int, parts)
+        else:
+            raise ValueError
+
         if day == 0:
             await delete_rasp(pool)
         elif 1 <= day <= 6:
-            await delete_rasp(pool, day)
+            if week_type in [0, 1, 2]:
+                await delete_rasp(pool, day, week_type)
+            else:
+                raise ValueError
         else:
             raise ValueError
+
         await greet_and_send(message.from_user, "✅ Расписание удалено!", message=message)
         await state.clear()
     except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите 0 или число от 1 до 6.", message=message)
+        await greet_and_send(message.from_user, "⚠ Введите: <день> <четность>.\nПример: `3 1` (среда, нечетная)", message=message)
 
 
 @dp.callback_query(F.data == "admin_setchet")
@@ -762,9 +744,6 @@ async def setchet_handler(message: types.Message, state: FSMContext):
     except ValueError:
         await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
 
-# ======================
-# Функция публикации расписания
-# ======================
 async def send_today_rasp():
     now = datetime.datetime.now(TZ)
     day = now.isoweekday()
@@ -778,7 +757,6 @@ async def send_today_rasp():
         target_date = now.date()
         day_name = "сегодня"
 
-    # получаем корректную четность недели
     week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day_to_post, week_type)
 
