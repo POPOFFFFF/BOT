@@ -268,25 +268,27 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
 # ======================
 def main_menu(is_admin=False):
     buttons = [
-        [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
-        [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]
+        [types.InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
+        [types.InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]
     ]
     if is_admin:
-        buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+        buttons.append([types.InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def admin_menu():
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("➕ Добавить расписание", callback_data="admin_add")],
-        [InlineKeyboardButton("🗑 Очистить расписание", callback_data="admin_clear")],
-        [InlineKeyboardButton("🔄 Установить четность", callback_data="admin_setchet")],
-        [InlineKeyboardButton("📌 Узнать четность недели", callback_data="admin_show_chet")],
-        [InlineKeyboardButton("🕒 Время публикаций", callback_data="admin_list_publish_times")],
-        [InlineKeyboardButton("📝 Задать время публикации", callback_data="admin_set_publish_time")],
-        [InlineKeyboardButton("🕐 Узнать мое время", callback_data="admin_my_publish_time")],
-        [InlineKeyboardButton("⬅ Назад", callback_data="menu_back")]
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton("➕ Добавить расписание", callback_data="admin_add")],
+        [types.InlineKeyboardButton("🗑 Очистить расписание", callback_data="admin_clear")],
+        [types.InlineKeyboardButton("🔄 Установить четность", callback_data="admin_setchet")],
+        [types.InlineKeyboardButton("📌 Узнать четность недели", callback_data="admin_show_chet")],
+        [types.InlineKeyboardButton("🕒 Время публикаций", callback_data="admin_list_publish_times")],
+        [types.InlineKeyboardButton("📝 Задать время публикации", callback_data="admin_set_publish_time")],
+        [types.InlineKeyboardButton("🕐 Узнать мое время", callback_data="admin_my_publish_time")],
+        [types.InlineKeyboardButton("⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
 
 # ======================
 # Планировщик
