@@ -118,14 +118,16 @@ async def ensure_columns(pool):
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
 
 
-async def set_nickname(pool, user_id: int, nickname: str):
+async def set_nickname(pool, user_id: int, nickname: str, locked: bool = False):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
-                INSERT INTO nicknames (user_id, nickname) 
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE nickname=%s
-            """, (user_id, nickname, nickname))
+                INSERT INTO nicknames (user_id, nickname, locked)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                    nickname = IF(locked=0, VALUES(nickname), nickname),
+                    locked = locked
+            """, (user_id, nickname, locked))
 
 async def get_nickname(pool, user_id: int) -> str | None:
     async with pool.acquire() as conn:
@@ -528,7 +530,8 @@ async def on_rasp_day(callback: types.CallbackQuery):
 # ----------------------------
 # Пользователь устанавливает свой ник
 # ----------------------------
-@dp.message(Command("никнейм"))
+# Команда /никнейм
+@dp.message(F.text.regexp(r"^/никнейм(@\w+)?\s+.+"))
 async def user_set_nickname(message: types.Message):
     txt = message.text.strip()
     parts = txt.split(maxsplit=1)
@@ -553,7 +556,6 @@ async def user_set_nickname(message: types.Message):
         await message.reply(f"✅ Ваш никнейм установлен: {nickname}")
     except Exception as e:
         await message.reply(f"❌ Ошибка при установке: {e}")
-
 
 
 # ----------------------------
