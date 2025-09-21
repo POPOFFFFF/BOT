@@ -301,9 +301,37 @@ def admin_menu():
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
+        [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],  # новая кнопка
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+@dp.callback_query(F.data == "admin_my_publish_time")
+async def admin_my_publish_time(callback: types.CallbackQuery):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
+        return
+
+    now = datetime.datetime.now(TZ)
+    times = await get_publish_times(pool)
+
+    if not times:
+        await greet_and_send(callback.from_user, "Время публикаций ещё не задано.", callback=callback)
+        return
+
+    # находим ближайшее время после текущего
+    future_times = sorted([(h, m) for _, h, m in times if (h, m) > (now.hour, now.minute)])
+    if future_times:
+        hh, mm = future_times[0]
+        msg = f"Следующая публикация сегодня в Омске: {hh:02d}:{mm:02d}"
+    else:
+        # если сегодня уже все публикации прошли — берём первую следующего дня
+        hh, mm = sorted([(h, m) for _, h, m in times])[0]
+        msg = f"Сегодня публикаций больше нет. Следующая публикация завтра в Омске: {hh:02d}:{mm:02d}"
+
+    await greet_and_send(callback.from_user, msg, callback=callback)
+    await callback.answer()
+
 
 # ======================
 # FSM для админки
