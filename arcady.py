@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 import aiomysql
 import ssl
+import re
 
 # ======================
 # Конфиг
@@ -53,7 +54,7 @@ async def get_pool():
     )
 
 # ======================
-# Работа с БД (добавим никнеймы)
+# Работа с БД (добавим никнеймы и publish_times)
 # ======================
 async def init_db(pool):
     async with pool.acquire() as conn:
@@ -80,7 +81,18 @@ async def init_db(pool):
                 nickname VARCHAR(255)
             )
             """)
+            # таблица для времён публикаций (по Омску)
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS publish_times (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                hour INT NOT NULL,
+                minute INT NOT NULL
+            )
+            """)
 
+# ----------------------
+# Nicknames
+# ----------------------
 async def set_nickname(pool, user_id: int, nickname: str):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -97,7 +109,34 @@ async def get_nickname(pool, user_id: int) -> str | None:
             row = await cur.fetchone()
             return row[0] if row else None
 
+# ----------------------
+# Publish times
+# ----------------------
+async def add_publish_time(pool, hour: int, minute: int):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("INSERT INTO publish_times (hour, minute) VALUES (%s, %s)", (hour, minute))
 
+async def get_publish_times(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id, hour, minute FROM publish_times ORDER BY hour, minute")
+            rows = await cur.fetchall()
+            return rows  # list of tuples (id, hour, minute)
+
+async def delete_publish_time(pool, pid: int):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM publish_times WHERE id=%s", (pid,))
+
+async def clear_publish_times(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM publish_times")
+
+# ======================
+# Работа с расписанием (rasp)
+# ======================
 async def add_rasp(pool, chat_id, day, week_type, text):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -195,6 +234,19 @@ def main_menu(is_admin=False):
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# расширенная админка: добавляем новые пункты
+def admin_menu():
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
+        [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
+        [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
+        [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
+        [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
+        [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    return kb
+
 # ======================
 # FSM для админки
 # ======================
@@ -209,16 +261,12 @@ class ClearRaspState(StatesGroup):
 class SetChetState(StatesGroup):
     week_type = State()
 
+class SetPublishTimeState(StatesGroup):
+    time = State()  # ожидаем ввод в формате HH:MM
+
 # ======================
 # Хелпер для приветствия и отправки сообщений
 # ======================
-# Параметры:
-# - user: types.User — от кого инициирован ответ (используется для получения ника)
-# - text: основное тело сообщения (которое вы обычно передавали в answer/edit_text)
-# - message: если передаётся объект types.Message -> используем message.answer(...)
-# - callback: если передаётся callback -> пытаемся callback.message.edit_text(...), иначе callback.message.answer(...)
-# - chat_id: если нужно отправить в конкретный чат (например, когда старое сообщение удалено и нужно создать новое),
-#            в этом случае используем bot.send_message(chat_id=chat_id, ...)
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None):
     nickname = await get_nickname(pool, user.id)
     if nickname:
@@ -254,6 +302,36 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
             await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
         except Exception:
             # ignore silently
+            pass
+
+# ======================
+# Функция (re)создания задач планировщика по данным из БД
+# ======================
+def _job_id_for_time(hour: int, minute: int) -> str:
+    return f"publish_{hour:02d}_{minute:02d}"
+
+async def reschedule_publish_jobs(pool):
+    # удаляем старые publish_* задачи
+    try:
+        for job in list(scheduler.get_jobs()):
+            if job.id.startswith("publish_"):
+                try:
+                    scheduler.remove_job(job.id)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # читаем времена из БД и создаём задачи
+    times = await get_publish_times(pool)
+    for row in times:
+        pid, hour, minute = row
+        job_id = _job_id_for_time(hour, minute)
+        # добавляем задачу send_today_rasp с нужным временем в TZ
+        try:
+            scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
+        except Exception:
+            # если задача с таким id уже есть — пропускаем
             pass
 
 # ======================
@@ -297,13 +375,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("⛔ Админка доступна только в личных сообщениях админам", show_alert=True)
             return
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
-            [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
-            [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
-        ])
-        await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=kb)
+        await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
         await callback.answer()
 
     # ---------- назад в главное меню ----------
@@ -419,6 +491,106 @@ async def zvonki_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # ======================
+# Админ: Узнать четность недели
+# ======================
+@dp.callback_query(F.data == "admin_show_chet")
+async def admin_show_chet(callback: types.CallbackQuery):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
+        return
+
+    # текущая реальная четность по календарю (по омскому времени)
+    now = datetime.datetime.now(TZ)
+    week_number = now.isocalendar()[1]
+    real_week_type = 1 if week_number % 2 else 2
+    real_str = "1 — нечетная" if real_week_type == 1 else "2 — четная"
+
+    # сохранённая в БД для DEFAULT_CHAT_ID (если есть)
+    saved = await get_week_type(pool, DEFAULT_CHAT_ID)
+    saved_str = str(saved) if saved else "не установлена (используется вычисление по календарю)"
+
+    msg = f"Текущая (по календарю, Омск): {real_str}\nСохранённая для чата (week_setting): {saved_str}"
+    await greet_and_send(callback.from_user, msg, callback=callback)
+    await callback.answer()
+
+# ======================
+# Админ: Просмотр/Установка времени публикаций
+# ======================
+@dp.callback_query(F.data == "admin_list_publish_times")
+async def admin_list_publish_times(callback: types.CallbackQuery):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
+        return
+
+    rows = await get_publish_times(pool)
+    if not rows:
+        text = "Время публикаций не задано."
+    else:
+        lines = []
+        for rid, hour, minute in rows:
+            lines.append(f"{rid}: {hour:02d}:{minute:02d} (Омск)")
+        text = "Текущие времена публикаций (Омск):\n" + "\n".join(lines) + "\n\nЧтобы удалить время, отправьте команду /delptime <id>"
+
+    await greet_and_send(callback.from_user, text, callback=callback)
+    await callback.answer()
+
+@dp.message(Command("delptime"))
+async def cmd_delptime(message: types.Message):
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("⛔ У вас нет прав")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠ Использование: /delptime <id> (id из списка времен публикаций)")
+        return
+    try:
+        pid = int(parts[1])
+        await delete_publish_time(pool, pid)
+        await reschedule_publish_jobs(pool)
+        await message.answer(f"✅ Время публикации с id={pid} удалено и задачи пересозданы.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+@dp.callback_query(F.data == "admin_set_publish_time")
+async def admin_set_publish_time(callback: types.CallbackQuery):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
+        return
+
+    await greet_and_send(callback.from_user, "Введите время публикации в формате ЧЧ:ММ по Омску (например: 20:00):", callback=callback)
+    await SetPublishTimeState.time.set()
+    await callback.answer()
+
+@dp.message(SetPublishTimeState.time)
+async def set_publish_time_handler(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("⛔ У вас нет прав")
+        await state.clear()
+        return
+
+    txt = message.text.strip()
+    m = re.match(r"^(\d{1,2}):(\d{1,2})$", txt)
+    if not m:
+        await message.answer("⚠ Неверный формат. Введите в формате ЧЧ:ММ, например 20:00")
+        return
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        await message.answer("⚠ Некорректное время. Часы 0-23, минуты 0-59.")
+        return
+
+    # сохраняем как Омское время (пользователь вводит в Омске)
+    try:
+        await add_publish_time(pool, hh, mm)
+        # пересоздаём задачи в планировщике
+        await reschedule_publish_jobs(pool)
+        await message.answer(f"✅ Время публикации добавлено: {hh:02d}:{mm:02d} (Омск). Задачи пересозданы.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при сохранении: {e}")
+    finally:
+        await state.clear()
+
+# ======================
 # Админка — Добавить расписание (только в ЛС, проверка ниже)
 # ======================
 @dp.callback_query(F.data == "admin_add")
@@ -530,8 +702,9 @@ async def send_today_rasp():
         # автопостинг в чат — без персонального приветствия (обычно это общий канал)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
 
-scheduler.add_job(send_today_rasp, CronTrigger(hour=1, minute=0))
-scheduler.add_job(send_today_rasp, CronTrigger(hour=14, minute=0))
+# при старте — пересоздаём задачи из БД
+# старые жёстко заданные job'ы убраны: используем publish_times из БД
+# добавление задач происходит в reschedule_publish_jobs(pool)
 
 # ======================
 # Main
@@ -540,6 +713,8 @@ async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
+    # reschedule jobs from DB
+    await reschedule_publish_jobs(pool)
     scheduler.start()
     await dp.start_polling(bot)
 
