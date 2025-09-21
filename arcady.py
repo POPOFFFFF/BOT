@@ -388,10 +388,8 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
         await callback.answer()
 
-
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
-
     parts = callback.data.split("_")
     try:
         day = int(parts[-1])
@@ -492,7 +490,6 @@ async def on_rasp_show(callback: types.CallbackQuery):
 
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
-
         await callback.answer("ℹ На этот день нет расписания", show_alert=True)
         await greet_and_send(callback.from_user, "На этот день нет расписания", callback=callback)
     else:
@@ -505,14 +502,20 @@ async def zvonki_handler(callback: types.CallbackQuery):
 
     if action == "zvonki_weekday":
         schedule = get_zvonki(is_saturday=False)
-        await greet_and_send(callback.from_user, f"📌 Расписание звонков (будние дни):\n{schedule}", callback=callback)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_zvonki")]
+        ])
+        await greet_and_send(callback.from_user, f"📌 Расписание звонков (будние дни):\n{schedule}", callback=callback, markup=kb)
 
     elif action == "zvonki_saturday":
         schedule = get_zvonki(is_saturday=True)
-        await greet_and_send(callback.from_user, f"📌 Расписание звонков (суббота):\n{schedule}", callback=callback)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_zvonki")]
+        ])
+        await greet_and_send(callback.from_user, f"📌 Расписание звонков (суббота):\n{schedule}", callback=callback, markup=kb)
 
     await callback.answer()
-
+    
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
