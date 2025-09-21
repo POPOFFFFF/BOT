@@ -176,10 +176,7 @@ async def delete_rasp(pool, day=None):
 # ======================
 # Четность недели
 # ======================
-# Сохраняем базовую четность и дату установки (set_at), затем считаем текущую четность, исходя из числа прошедших недель.
-
 async def set_week_type(pool, chat_id, week_type):
-    """Сохранить базовую четность (1 или 2) и дату установки (по Омску)."""
     today = datetime.datetime.now(TZ).date()
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -190,41 +187,26 @@ async def set_week_type(pool, chat_id, week_type):
             """, (chat_id, week_type, today, week_type, today))
 
 async def get_week_setting(pool, chat_id):
-    """Вернуть кортеж (week_type, set_at) или None."""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT week_type, set_at FROM week_setting WHERE chat_id=%s", (chat_id,))
             row = await cur.fetchone()
             if not row:
                 return None
-            # row[0] = week_type (int), row[1] = set_at (date or str)
-            wt = row[0]
-            set_at = row[1]
-            # ensure set_at is a date
+            wt, set_at = row
             if isinstance(set_at, datetime.datetime):
                 set_at = set_at.date()
             return (wt, set_at)
 
 async def get_current_week_type(pool, chat_id):
-    """
-    Вычислить текущую четность в контексте chat_id, опираясь на сохранённую базовую четность и дату установки.
-    Если настройки нет — fallback на календарь (isocalendar()).
-    Возвращает 1 или 2.
-    """
     setting = await get_week_setting(pool, chat_id)
     now_date = datetime.datetime.now(TZ).date()
     if not setting:
-        # fallback: обычный календарный расчёт
         week_number = datetime.datetime.now(TZ).isocalendar()[1]
         return 1 if week_number % 2 else 2
     base_week_type, set_at = setting
-    # считаем количество полных недель между set_at и now_date
-    # delta_days может быть отрицательным (если админ ошибся и указал будущую дату) — учитываем абсолютную величину знака.
     delta_days = (now_date - set_at).days
-    # количество прошедших недель (integer division truncates towards negative infinity for negative numbers,
-    # но логично считать по целым неделям; используем //)
     weeks_passed = delta_days // 7
-    # если weeks_passed отрицательное (установлено в будущем), будем по-прежнему корректно переключать
     if weeks_passed % 2 == 0:
         return base_week_type
     else:
@@ -233,7 +215,6 @@ async def get_current_week_type(pool, chat_id):
 # ======================
 # Вспомогательные
 # ======================
-# воскресенье удалено — дни 1..6
 DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
 
 def format_rasp_message(day_num, week_type, text):
@@ -753,14 +734,14 @@ async def send_today_rasp():
 # ======================
 # Main
 # ======================
+
 async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
-    # reschedule jobs from DB
-    await reschedule_publish_jobs(pool)
     scheduler.start()
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
