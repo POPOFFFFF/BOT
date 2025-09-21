@@ -477,7 +477,7 @@ async def on_rasp_show(callback: types.CallbackQuery):
         await greet_and_send(callback.from_user, format_rasp_message(day, week_type, text), callback=callback)
     await callback.answer()
 
-@@dp.callback_query(F.data.startswith("zvonki_"))
+@dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
     if callback.data == "zvonki_weekday":
         text = get_zvonki(False)
