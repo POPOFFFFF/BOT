@@ -359,14 +359,14 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "⏰ Выберите вариант:", callback=callback, markup=kb)
         await callback.answer()
 
+    # ---------- админка ----------
     elif action == "menu_admin":
-        if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-            await callback.answer("⛔ Админка доступна только в личных сообщениях админам", show_alert=True)
-            return
-
-        await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
+        # показываем админку только в ЛС и только админам
+        if callback.message.chat.type == "private" and callback.from_user.id in ALLOWED_USERS:
+            await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
         await callback.answer()
 
+    # ---------- назад ----------
     elif action == "menu_back":
         try:
             await state.clear()
@@ -380,13 +380,13 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.delete()
             await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
         except Exception:
-
             try:
                 await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin))
             except Exception:
                 await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
 
         await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
