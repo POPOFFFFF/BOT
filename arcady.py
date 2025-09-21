@@ -11,7 +11,7 @@ from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import types
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -274,7 +274,6 @@ def main_menu(is_admin=False):
     if is_admin:
         buttons.append([types.InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
-
 
 def admin_menu():
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
