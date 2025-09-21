@@ -316,11 +316,22 @@ async def send_today_rasp():
 # ======================
 # Основные обработчики
 # ======================
-@dp.message(F.text.lower().in_(["/аркадий","/акрадый","/акрадий"]))
+@dp.message()
 async def cmd_arkadiy(message: types.Message):
-    is_private = message.chat.type=="private"
-    is_admin = is_private and message.from_user.id in ALLOWED_USERS
-    await greet_and_send(message.from_user, "Выберите действие:", message=message, markup=main_menu(is_admin))
+    if not message.text:
+        return
+
+    if message.text.lower() not in ["/аркадий", "/акрадый", "/акрадий"]:
+        return
+
+    is_private = message.chat.type == "private"
+    is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
+    await greet_and_send(
+        message.from_user,
+        "Выберите действие:",
+        message=message,
+        markup=main_menu(is_admin)
+    )
 
 
 # Главный обработчик меню
