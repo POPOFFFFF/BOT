@@ -127,16 +127,25 @@ async def get_nickname(pool, user_id: int) -> str | None:
 # Publish times
 # ----------------------
 async def add_publish_time(pool, hour: int, minute: int):
+    """Добавляет время публикации в БД."""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("INSERT INTO publish_times (hour, minute) VALUES (%s, %s)", (hour, minute))
+            # Вставляем запись с commit
+            await cur.execute(
+                "INSERT INTO publish_times (hour, minute) VALUES (%s, %s)", 
+                (hour, minute)
+            )
+            await conn.commit()  # обязательный commit для сохранения
+
 
 async def get_publish_times(pool):
+    """Возвращает список всех времен публикаций."""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT id, hour, minute FROM publish_times ORDER BY hour, minute")
             rows = await cur.fetchall()
-            return rows  # list of tuples (id, hour, minute)
+            return rows  # [(id, hour, minute), ...]
+
 
 async def delete_publish_time(pool, pid: int):
     async with pool.acquire() as conn:
@@ -578,13 +587,13 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
     if not rows:
         text = "Время публикаций не задано."
     else:
-        lines = []
-        for rid, hour, minute in rows:
-            lines.append(f"{rid}: {hour:02d}:{minute:02d} (Омск)")
-        text = "Текущие времена публикаций (Омск):\n" + "\n".join(lines) + "\n\nЧтобы удалить время, отправьте команду /delptime <id>"
+        lines = [f"{rid}: {hour:02d}:{minute:02d} (Омск)" for rid, hour, minute in rows]
+        text = "Текущие времена публикаций (Омск):\n" + "\n".join(lines)
+        text += "\n\nЧтобы удалить время, используйте команду /delptime <id>"
 
     await greet_and_send(callback.from_user, text, callback=callback)
     await callback.answer()
+
 
 @dp.message(Command("delptime"))
 async def cmd_delptime(message: types.Message):
@@ -603,15 +612,34 @@ async def cmd_delptime(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
-@dp.callback_query(F.data == "admin_set_publish_time")
-async def admin_set_publish_time(callback: types.CallbackQuery):
-    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-        await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
+@dp.message(SetPublishTimeState.time)
+async def set_publish_time_handler(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("⛔ У вас нет прав")
+        await state.clear()
         return
 
-    await greet_and_send(callback.from_user, "Введите время публикации в формате ЧЧ:ММ по Омску (например: 20:00):", callback=callback)
-    await SetPublishTimeState.time.set()
-    await callback.answer()
+    txt = message.text.strip()
+    m = re.match(r"^(\d{1,2}):(\d{1,2})$", txt)
+    if not m:
+        await message.answer("⚠ Неверный формат. Введите в формате ЧЧ:ММ, например 20:00")
+        return
+
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        await message.answer("⚠ Часы 0-23, минуты 0-59.")
+        return
+
+    try:
+        await add_publish_time(pool, hh, mm)
+        await reschedule_publish_jobs(pool)  # пересоздаем задачи планировщика
+        await message.answer(f"✅ Время публикации добавлено: {hh:02d}:{mm:02d} (Омск).")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при сохранении: {e}")
+    finally:
+        await state.clear()
+
 
 @dp.message(SetPublishTimeState.time)
 async def set_publish_time_handler(message: types.Message, state: FSMContext):
@@ -744,20 +772,18 @@ async def setchet_handler(message: types.Message, state: FSMContext):
 
 # ======================
 # Автопостинг расписания
-# ======================
 async def send_today_rasp():
     now = datetime.datetime.now(TZ)
     day = now.isoweekday()
-    if day == 7:
-        # воскресенье — у нас нет расписания (1..6), пропускаем
+    if day == 7:  # воскресенье
         return
-    # используем текущую четность относительно установки админа
+
     week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID)
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if text:
         msg = format_rasp_message(day, week_type, text)
-        # автопостинг в чат — без персонального приветствия (обычно это общий канал)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
+
 
 # при старте — пересоздаём задачи из БД
 # старые жёстко заданные job'ы убраны: используем publish_times из БД
