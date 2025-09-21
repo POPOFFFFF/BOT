@@ -106,7 +106,7 @@ async def ensure_columns(pool):
                 # добавляем колонку
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
 
-                
+
 async def set_nickname(pool, user_id: int, nickname: str):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -210,19 +210,38 @@ async def get_week_setting(pool, chat_id):
                 set_at = set_at.date()
             return (wt, set_at)
 
-async def get_current_week_type(pool, chat_id):
+async def get_current_week_type(pool, chat_id: int):
+    """
+    Вычислить текущую четность недели для заданного chat_id,
+    опираясь на сохранённую базовую четность и дату установки.
+    Возвращает 1 (нечетная) или 2 (четная).
+    Если настройки нет — fallback на календарь.
+    """
     setting = await get_week_setting(pool, chat_id)
     now_date = datetime.datetime.now(TZ).date()
+
     if not setting:
-        week_number = datetime.datetime.now(TZ).isocalendar()[1]
-        return 1 if week_number % 2 else 2
+        # fallback: обычный календарный расчёт
+        week_number = now_date.isocalendar()[1]
+        return 1 if week_number % 2 != 0 else 2
+
     base_week_type, set_at = setting
+
+    # ensure set_at is date
+    if isinstance(set_at, datetime.datetime):
+        set_at = set_at.date()
+
     delta_days = (now_date - set_at).days
-    weeks_passed = delta_days // 7
-    if weeks_passed % 2 == 0:
-        return base_week_type
+    weeks_passed = abs(delta_days) // 7
+
+    if delta_days >= 0:
+        # прошедшие недели
+        current_week = base_week_type if weeks_passed % 2 == 0 else 1 if base_week_type == 2 else 2
     else:
-        return 1 if base_week_type == 2 else 2
+        # будущее
+        current_week = base_week_type if weeks_passed % 2 == 0 else 1 if base_week_type == 2 else 2
+
+    return current_week
 
 # ======================
 # Вспомогательные
