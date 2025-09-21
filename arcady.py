@@ -594,6 +594,21 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, text, callback=callback)
     await callback.answer()
 
+@dp.callback_query(F.data == "admin_set_publish_time")
+async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
+        return
+
+    await callback.answer()  # убираем часы ожидания
+    await greet_and_send(
+        callback.from_user,
+        "Введите время публикации в формате ЧЧ:ММ по Омску (например: 20:00):",
+        callback=callback
+    )
+
+    # ✅ Устанавливаем FSM-состояние для ожидания ввода времени
+    await state.set_state(SetPublishTimeState.time)
 
 @dp.message(Command("delptime"))
 async def cmd_delptime(message: types.Message):
@@ -640,35 +655,6 @@ async def set_publish_time_handler(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
-
-@dp.message(SetPublishTimeState.time)
-async def set_publish_time_handler(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("⛔ У вас нет прав")
-        await state.clear()
-        return
-
-    txt = message.text.strip()
-    m = re.match(r"^(\d{1,2}):(\d{1,2})$", txt)
-    if not m:
-        await message.answer("⚠ Неверный формат. Введите в формате ЧЧ:ММ, например 20:00")
-        return
-    hh = int(m.group(1))
-    mm = int(m.group(2))
-    if not (0 <= hh <= 23 and 0 <= mm <= 59):
-        await message.answer("⚠ Некорректное время. Часы 0-23, минуты 0-59.")
-        return
-
-    # сохраняем как Омское время (пользователь вводит в Омске)
-    try:
-        await add_publish_time(pool, hh, mm)
-        # пересоздаём задачи в планировщике
-        await reschedule_publish_jobs(pool)
-        await message.answer(f"✅ Время публикации добавлено: {hh:02d}:{mm:02d} (Омск). Задачи пересозданы.")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при сохранении: {e}")
-    finally:
-        await state.clear()
 
 # ======================
 # Админка — Добавить расписание (только в ЛС, проверка ниже)
