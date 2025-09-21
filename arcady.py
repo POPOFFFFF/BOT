@@ -219,35 +219,28 @@ async def get_week_setting(pool, chat_id):
                 set_at = set_at.date()
             return (wt, set_at)
 
-async def get_current_week_type(pool, chat_id: int):
-    """
-    Вычисляет текущую четность недели для chat_id, 
-    опираясь на сохранённую базовую четность и дату установки.
-    Возвращает 1 (нечетная) или 2 (четная).
-    Если настройки нет — fallback на календарь.
-    """
+async def get_current_week_type(pool, chat_id: int, target_date: datetime.date | None = None):
+
     setting = await get_week_setting(pool, chat_id)
-    now_date = datetime.datetime.now(TZ).date()
+    if target_date is None:
+        target_date = datetime.datetime.now(TZ).date()
 
     if not setting:
         # fallback на обычный календарный расчет
-        week_number = now_date.isocalendar()[1]
+        week_number = target_date.isocalendar()[1]
         return 1 if week_number % 2 != 0 else 2
 
     base_week_type, set_at = setting
     if isinstance(set_at, datetime.datetime):
         set_at = set_at.date()
 
-    delta_days = (now_date - set_at).days
+    delta_days = (target_date - set_at).days
     weeks_passed = abs(delta_days) // 7
 
-    # Если прошло четное количество недель — текущая неделя = базовая
-    # Если прошло нечетное — текущая неделя противоположная
     if weeks_passed % 2 == 0:
         return base_week_type
     else:
         return 1 if base_week_type == 2 else 2
-
 
 # ======================
 # Вспомогательные
@@ -760,22 +753,24 @@ async def setchet_handler(message: types.Message, state: FSMContext):
 
 async def send_today_rasp():
     now = datetime.datetime.now(TZ)
-    day = now.isoweekday()  # 1 = Понедельник, 7 = Воскресенье
+    day = now.isoweekday()
 
-    # если воскресенье, публикуем расписание на понедельник
-    if day == 7:
+    if day == 7:  # воскресенье
         day_to_post = 1
         day_name = "завтра (Понедельник)"
+        target_date = now.date() + datetime.timedelta(days=1)
     else:
         day_to_post = day
         day_name = "сегодня"
+        target_date = now.date()
 
-    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID)
+    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day_to_post, week_type)
 
     if text:
         msg = f"📌 Расписание на {day_name}:\n\n" + format_rasp_message(day_to_post, week_type, text)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
+
 
 
 async def main():
