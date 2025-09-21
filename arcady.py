@@ -276,7 +276,7 @@ def main_menu(is_admin=False):
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def admin_menu():
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+    return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton("➕ Добавить расписание", callback_data="admin_add")],
         [types.InlineKeyboardButton("🗑 Очистить расписание", callback_data="admin_clear")],
         [types.InlineKeyboardButton("🔄 Установить четность", callback_data="admin_setchet")],
@@ -286,7 +286,6 @@ def admin_menu():
         [types.InlineKeyboardButton("🕐 Узнать мое время", callback_data="admin_my_publish_time")],
         [types.InlineKeyboardButton("⬅ Назад", callback_data="menu_back")]
     ])
-    return kb
 
 
 # ======================
@@ -306,15 +305,7 @@ async def reschedule_publish_jobs(pool):
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=_job_id_for_time(hour, minute))
         except: pass
 
-async def send_today_rasp():
-    now = datetime.datetime.now(TZ)
-    day = now.isoweekday()
-    if day == 7: day_to_post, target_date, day_name = 1, now.date()+datetime.timedelta(days=1), "завтра (Понедельник)"
-    else: day_to_post, target_date, day_name = day, now.date(), "сегодня"
-    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
-    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day_to_post, week_type)
-    if text:
-        await bot.send_message(DEFAULT_CHAT_ID, f"📌 Расписание на {day_name}:\n\n" + format_rasp_message(day_to_post, week_type, text))
+
 
 # ======================
 # Основные обработчики
@@ -338,34 +329,33 @@ async def cmd_arkadiy(message: types.Message):
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data
+    is_admin = callback.from_user.id in ALLOWED_USERS and callback.message.chat.type == "private"
 
-    # ---------- расписание: показать список дней (1..6) ----------
+    # ---------- расписание ----------
     if action == "menu_rasp":
-        kb = InlineKeyboardMarkup(
+        kb = types.InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=day, callback_data=f"rasp_day_{i+1}")]
+                [types.InlineKeyboardButton(text=day, callback_data=f"rasp_day_{i+1}")]
                 for i, day in enumerate(DAYS)
-            ] + [[InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]]
+            ] + [[types.InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]]
         )
         await greet_and_send(callback.from_user, "📅 Выберите день:", callback=callback, markup=kb)
-        await callback.answer()
 
-    # ---------- звонки: будни / суббота ----------
+    # ---------- звонки ----------
     elif action == "menu_zvonki":
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
-            [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
+            [types.InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
+            [types.InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
         ])
         await greet_and_send(callback.from_user, "⏰ Выберите вариант:", callback=callback, markup=kb)
-        await callback.answer()
 
     # ---------- админка ----------
     elif action == "menu_admin":
-        # показываем админку только в ЛС и только админам
-        if callback.message.chat.type == "private" and callback.from_user.id in ALLOWED_USERS:
+        if is_admin:
             await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
-        await callback.answer()
+        else:
+            await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
 
     # ---------- назад ----------
     elif action == "menu_back":
@@ -373,21 +363,18 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             await state.clear()
         except Exception:
             pass
-
-        is_private = callback.message.chat.type == "private"
-        is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
-
         try:
             await callback.message.delete()
-            await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
         except Exception:
-            try:
-                await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin))
-            except Exception:
-                await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
+            pass
+        await greet_and_send(
+            callback.from_user,
+            "Выберите действие:",
+            chat_id=callback.message.chat.id,
+            markup=main_menu(is_admin)
+        )
 
-        await callback.answer()
-
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
@@ -516,7 +503,7 @@ async def zvonki_handler(callback: types.CallbackQuery):
         await greet_and_send(callback.from_user, f"📌 Расписание звонков (суббота):\n{schedule}", callback=callback, markup=kb)
 
     await callback.answer()
-    
+
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
