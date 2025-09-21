@@ -54,7 +54,7 @@ async def get_pool():
     )
 
 # ======================
-# Работа с БД (добавим никнеймы и publish_times)
+# Работа с БД (добавим никнеймы, publish_times и расширим week_setting)
 # ======================
 async def init_db(pool):
     async with pool.acquire() as conn:
@@ -68,10 +68,12 @@ async def init_db(pool):
                 text TEXT
             )
             """)
+            # week_setting теперь хранит дату установки set_at (DATE) и базовую week_type
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
                 chat_id BIGINT PRIMARY KEY,
-                week_type INT
+                week_type INT,
+                set_at DATE
             )
             """)
             # новая таблица никнеймов
@@ -174,21 +176,59 @@ async def delete_rasp(pool, day=None):
 # ======================
 # Четность недели
 # ======================
+# Сохраняем базовую четность и дату установки (set_at), затем считаем текущую четность, исходя из числа прошедших недель.
+
 async def set_week_type(pool, chat_id, week_type):
+    """Сохранить базовую четность (1 или 2) и дату установки (по Омску)."""
+    today = datetime.datetime.now(TZ).date()
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
-                INSERT INTO week_setting (chat_id, week_type) 
-                VALUES (%s, %s) 
-                ON DUPLICATE KEY UPDATE week_type=%s
-            """, (chat_id, week_type, week_type))
+                INSERT INTO week_setting (chat_id, week_type, set_at)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE week_type=%s, set_at=%s
+            """, (chat_id, week_type, today, week_type, today))
 
-async def get_week_type(pool, chat_id):
+async def get_week_setting(pool, chat_id):
+    """Вернуть кортеж (week_type, set_at) или None."""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT week_type FROM week_setting WHERE chat_id=%s", (chat_id,))
+            await cur.execute("SELECT week_type, set_at FROM week_setting WHERE chat_id=%s", (chat_id,))
             row = await cur.fetchone()
-            return row[0] if row else None
+            if not row:
+                return None
+            # row[0] = week_type (int), row[1] = set_at (date or str)
+            wt = row[0]
+            set_at = row[1]
+            # ensure set_at is a date
+            if isinstance(set_at, datetime.datetime):
+                set_at = set_at.date()
+            return (wt, set_at)
+
+async def get_current_week_type(pool, chat_id):
+    """
+    Вычислить текущую четность в контексте chat_id, опираясь на сохранённую базовую четность и дату установки.
+    Если настройки нет — fallback на календарь (isocalendar()).
+    Возвращает 1 или 2.
+    """
+    setting = await get_week_setting(pool, chat_id)
+    now_date = datetime.datetime.now(TZ).date()
+    if not setting:
+        # fallback: обычный календарный расчёт
+        week_number = datetime.datetime.now(TZ).isocalendar()[1]
+        return 1 if week_number % 2 else 2
+    base_week_type, set_at = setting
+    # считаем количество полных недель между set_at и now_date
+    # delta_days может быть отрицательным (если админ ошибся и указал будущую дату) — учитываем абсолютную величину знака.
+    delta_days = (now_date - set_at).days
+    # количество прошедших недель (integer division truncates towards negative infinity for negative numbers,
+    # но логично считать по целым неделям; используем //)
+    weeks_passed = delta_days // 7
+    # если weeks_passed отрицательное (установлено в будущем), будем по-прежнему корректно переключать
+    if weeks_passed % 2 == 0:
+        return base_week_type
+    else:
+        return 1 if base_week_type == 2 else 2
 
 # ======================
 # Вспомогательные
@@ -499,17 +539,20 @@ async def admin_show_chet(callback: types.CallbackQuery):
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
 
-    # текущая реальная четность по календарю (по омскому времени)
-    now = datetime.datetime.now(TZ)
-    week_number = now.isocalendar()[1]
-    real_week_type = 1 if week_number % 2 else 2
-    real_str = "1 — нечетная" if real_week_type == 1 else "2 — четная"
+    # вычисляем текущую четность относительно сохранённой установки
+    current = await get_current_week_type(pool, DEFAULT_CHAT_ID)
+    current_str = "нечетная (1)" if current == 1 else "четная (2)"
 
-    # сохранённая в БД для DEFAULT_CHAT_ID (если есть)
-    saved = await get_week_type(pool, DEFAULT_CHAT_ID)
-    saved_str = str(saved) if saved else "не установлена (используется вычисление по календарю)"
+    setting = await get_week_setting(pool, DEFAULT_CHAT_ID)
+    if not setting:
+        base_str = "не установлена (бот использует календарь)"
+        set_at_str = "—"
+    else:
+        base_week_type, set_at = setting
+        base_str = "нечетная (1)" if base_week_type == 1 else "четная (2)"
+        set_at_str = set_at.isoformat()
 
-    msg = f"Текущая (по календарю, Омск): {real_str}\nСохранённая для чата (week_setting): {saved_str}"
+    msg = f"Текущая четность (отталкиваясь от установки): {current_str}\n\nБазовая (сохранённая в week_setting): {base_str}\nДата установки (Омск): {set_at_str}"
     await greet_and_send(callback.from_user, msg, callback=callback)
     await callback.answer()
 
@@ -679,6 +722,7 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         week_type = int(message.text)
         if week_type not in [1, 2]:
             raise ValueError
+        # сохраняем базовую четность и дату установки (по Омску)
         await set_week_type(pool, message.chat.id, week_type)
         await greet_and_send(message.from_user, f"✅ Четность установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})", message=message)
         await state.clear()
@@ -694,8 +738,8 @@ async def send_today_rasp():
     if day == 7:
         # воскресенье — у нас нет расписания (1..6), пропускаем
         return
-    week_number = now.isocalendar()[1]
-    week_type = 1 if week_number % 2 else 2
+    # используем текущую четность относительно установки админа
+    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID)
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if text:
         msg = format_rasp_message(day, week_type, text)
