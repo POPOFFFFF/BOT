@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -350,10 +351,6 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, msg, callback=callback)
     await callback.answer()
 
-
-# ======================
-# FSM для админки
-# ======================
 class AddRaspState(StatesGroup):
     day = State()
     week_type = State()
@@ -408,9 +405,6 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
             # ignore silently
             pass
 
-# ======================
-# Функция (re)создания задач планировщика по данным из БД
-# ======================
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
 
@@ -438,9 +432,6 @@ async def reschedule_publish_jobs(pool):
             # если задача с таким id уже есть — пропускаем
             pass
 
-# ======================
-# Хендлеры
-# ======================
 @dp.message(F.text.lower().in_(["/аркадий", "/акрадый", "/акрадий"]))
 async def cmd_arkadiy(message: types.Message):
     is_private = message.chat.type == "private"
@@ -473,7 +464,6 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "⏰ Выберите вариант:", callback=callback, markup=kb)
         await callback.answer()
 
-    # ---------- админка (только в ЛС) ----------
     elif action == "menu_admin":
         if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
             await callback.answer("⛔ Админка доступна только в личных сообщениях админам", show_alert=True)
@@ -482,9 +472,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
         await callback.answer()
 
-    # ---------- назад в главное меню ----------
     elif action == "menu_back":
-        # отменим FSM (если был)
         try:
             await state.clear()
         except Exception:
@@ -493,13 +481,11 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         is_private = callback.message.chat.type == "private"
         is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
 
-        # удаляем старое сообщение, если можем, и отправляем новое меню
         try:
             await callback.message.delete()
-            # если удалили — отправляем новое сообщение с приветствием в тот же чат
             await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
         except Exception:
-            # если не удалось удалить — пробуем редактировать, иначе отправить новое
+
             try:
                 await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin))
             except Exception:
@@ -527,22 +513,20 @@ async def on_rasp_day(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
     await callback.answer()
 
-# ----------------------------
-# Пользователь устанавливает свой ник
-# ----------------------------
-# Команда /никнейм
-@dp.message(F.text.regexp(r"^/никнейм(@\w+)?\s+.+"))
+@dp.message(Command(commands=["никнейм"]))
 async def user_set_nickname(message: types.Message):
-    txt = message.text.strip()
-    parts = txt.split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
+
+    cmd_len = len(message.get_command())
+    text_after = message.text[cmd_len:].strip()
+
+    if not text_after:
         await message.reply("⚠ Использование: /никнейм <ваш никнейм>")
         return
 
     user_id = message.from_user.id
-    nickname = parts[1].strip()
+    nickname = text_after
 
-    # проверяем, locked ли ник
+    # Проверяем, не заблокирован ли никнейм
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT locked FROM nicknames WHERE user_id=%s", (user_id,))
@@ -552,15 +536,11 @@ async def user_set_nickname(message: types.Message):
                 return
 
     try:
+        # Устанавливаем никнейм
         await set_nickname(pool, user_id, nickname)
         await message.reply(f"✅ Ваш никнейм установлен: {nickname}")
     except Exception as e:
         await message.reply(f"❌ Ошибка при установке: {e}")
-
-
-# ----------------------------
-# Админ устанавливает ник другому пользователю
-# ----------------------------
 @dp.message(Command("setnick"))
 async def admin_setnick(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
