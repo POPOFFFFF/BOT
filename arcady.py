@@ -52,6 +52,9 @@ async def get_pool():
         autocommit=True
     )
 
+# ======================
+# Работа с БД (добавим никнеймы)
+# ======================
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -70,6 +73,30 @@ async def init_db(pool):
                 week_type INT
             )
             """)
+            # новая таблица никнеймов
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS nicknames (
+                user_id BIGINT PRIMARY KEY,
+                nickname VARCHAR(255)
+            )
+            """)
+
+async def set_nickname(pool, user_id: int, nickname: str):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO nicknames (user_id, nickname) 
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE nickname=%s
+            """, (user_id, nickname, nickname))
+
+async def get_nickname(pool, user_id: int) -> str | None:
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT nickname FROM nicknames WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            return row[0] if row else None
+
 
 async def add_rasp(pool, chat_id, day, week_type, text):
     async with pool.acquire() as conn:
@@ -183,13 +210,60 @@ class SetChetState(StatesGroup):
     week_type = State()
 
 # ======================
+# Хелпер для приветствия и отправки сообщений
+# ======================
+# Параметры:
+# - user: types.User — от кого инициирован ответ (используется для получения ника)
+# - text: основное тело сообщения (которое вы обычно передавали в answer/edit_text)
+# - message: если передаётся объект types.Message -> используем message.answer(...)
+# - callback: если передаётся callback -> пытаемся callback.message.edit_text(...), иначе callback.message.answer(...)
+# - chat_id: если нужно отправить в конкретный чат (например, когда старое сообщение удалено и нужно создать новое),
+#            в этом случае используем bot.send_message(chat_id=chat_id, ...)
+async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None):
+    nickname = await get_nickname(pool, user.id)
+    if nickname:
+        greet = f"👋 Привет, {nickname}!\n\n"
+    else:
+        greet = "👋 Привет!\n\n"
+    full_text = greet + text
+
+    # callback edit / answer
+    if callback:
+        try:
+            await callback.message.edit_text(full_text, reply_markup=markup)
+        except Exception:
+            # fallback: send a new message in the same chat as callback
+            try:
+                await callback.message.answer(full_text, reply_markup=markup)
+            except Exception:
+                # as last resort use bot.send_message
+                await bot.send_message(chat_id=callback.message.chat.id, text=full_text, reply_markup=markup)
+    # message.answer
+    elif message:
+        try:
+            await message.answer(full_text, reply_markup=markup)
+        except Exception:
+            # fallback direct send
+            await bot.send_message(chat_id=message.chat.id, text=full_text, reply_markup=markup)
+    # direct chat_id (used when we deleted old message and want to send a fresh one)
+    elif chat_id is not None:
+        await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
+    else:
+        # nothing else provided: try sending to user's private chat
+        try:
+            await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
+        except Exception:
+            # ignore silently
+            pass
+
+# ======================
 # Хендлеры
 # ======================
 @dp.message(F.text == "/аркадий")
 async def cmd_arkadiy(message: types.Message):
     is_private = message.chat.type == "private"
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
-    await message.answer("Выберите действие:", reply_markup=main_menu(is_admin))
+    await greet_and_send(message.from_user, "Выберите действие:", message=message, markup=main_menu(is_admin))
 
 # Главный обработчик меню
 @dp.callback_query(F.data.startswith("menu_"))
@@ -204,11 +278,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
                 for i, day in enumerate(DAYS)
             ] + [[InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]]
         )
-        # edit or send new
-        try:
-            await callback.message.edit_text("📅 Выберите день:", reply_markup=kb)
-        except Exception:
-            await callback.message.answer("📅 Выберите день:", reply_markup=kb)
+        await greet_and_send(callback.from_user, "📅 Выберите день:", callback=callback, markup=kb)
         await callback.answer()
 
     # ---------- звонки: будни / суббота ----------
@@ -218,10 +288,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
         ])
-        try:
-            await callback.message.edit_text("⏰ Выберите вариант:", reply_markup=kb)
-        except Exception:
-            await callback.message.answer("⏰ Выберите вариант:", reply_markup=kb)
+        await greet_and_send(callback.from_user, "⏰ Выберите вариант:", callback=callback, markup=kb)
         await callback.answer()
 
     # ---------- админка (только в ЛС) ----------
@@ -236,10 +303,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
         ])
-        try:
-            await callback.message.edit_text("⚙ Админ-панель:", reply_markup=kb)
-        except Exception:
-            await callback.message.answer("⚙ Админ-панель:", reply_markup=kb)
+        await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=kb)
         await callback.answer()
 
     # ---------- назад в главное меню ----------
@@ -256,14 +320,14 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         # удаляем старое сообщение, если можем, и отправляем новое меню
         try:
             await callback.message.delete()
+            # если удалили — отправляем новое сообщение с приветствием в тот же чат
+            await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
         except Exception:
             # если не удалось удалить — пробуем редактировать, иначе отправить новое
             try:
-                await callback.message.edit_text("Выберите действие:", reply_markup=main_menu(is_admin))
+                await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin))
             except Exception:
-                await bot.send_message(chat_id=callback.message.chat.id, text="Выберите действие:", reply_markup=main_menu(is_admin))
-        else:
-            await bot.send_message(chat_id=callback.message.chat.id, text="Выберите действие:", reply_markup=main_menu(is_admin))
+                await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
 
         await callback.answer()
 
@@ -287,11 +351,30 @@ async def on_rasp_day(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")]
     ])
 
-    try:
-        await callback.message.edit_text(f"📅 {DAYS[day-1]} — выберите неделю:", reply_markup=kb)
-    except Exception:
-        await callback.message.answer(f"📅 {DAYS[day-1]} — выберите неделю:", reply_markup=kb)
+    await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
     await callback.answer()
+
+# ======================
+# Команда для установки ника
+# ======================
+@dp.message(Command("setnick"))
+async def cmd_setnick(message: types.Message):
+    if message.from_user.id not in ALLOWED_USERS:
+        # ответим без приветствия — т.к. это попытка админской команды не от админа
+        await message.answer("⛔ У вас нет прав для этой команды")
+        return
+
+    try:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await message.answer("⚠ Использование: /setnick <user_id> <никнейм>")
+            return
+        user_id = int(parts[1])
+        nickname = parts[2].strip()
+        await set_nickname(pool, user_id, nickname)
+        await message.answer(f"✅ Никнейм для {user_id} установлен: {nickname}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
 
 # ======================
 # Показ расписания: callback_data = rasp_show_{day}_{week}
@@ -311,12 +394,11 @@ async def on_rasp_show(callback: types.CallbackQuery):
 
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
+        # информируем через callback.answer (без приветствия) и отправим сообщение с приветствием
         await callback.answer("ℹ На этот день нет расписания", show_alert=True)
+        await greet_and_send(callback.from_user, "На этот день нет расписания", callback=callback)
     else:
-        try:
-            await callback.message.edit_text(format_rasp_message(day, week_type, text))
-        except Exception:
-            await callback.message.answer(format_rasp_message(day, week_type, text))
+        await greet_and_send(callback.from_user, format_rasp_message(day, week_type, text), callback=callback)
     await callback.answer()
 
 # ======================
@@ -328,17 +410,11 @@ async def zvonki_handler(callback: types.CallbackQuery):
 
     if action == "zvonki_weekday":
         schedule = get_zvonki(is_saturday=False)
-        try:
-            await callback.message.edit_text(f"📌 Расписание звонков (будние дни):\n{schedule}")
-        except Exception:
-            await callback.message.answer(f"📌 Расписание звонков (будние дни):\n{schedule}")
+        await greet_and_send(callback.from_user, f"📌 Расписание звонков (будние дни):\n{schedule}", callback=callback)
 
     elif action == "zvonki_saturday":
         schedule = get_zvonki(is_saturday=True)
-        try:
-            await callback.message.edit_text(f"📌 Расписание звонков (суббота):\n{schedule}")
-        except Exception:
-            await callback.message.answer(f"📌 Расписание звонков (суббота):\n{schedule}")
+        await greet_and_send(callback.from_user, f"📌 Расписание звонков (суббота):\n{schedule}", callback=callback)
 
     await callback.answer()
 
@@ -350,7 +426,7 @@ async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
         return
-    await callback.message.answer("Введите день недели (1-6):")
+    await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
     await state.set_state(AddRaspState.day)
     await callback.answer()
 
@@ -361,10 +437,10 @@ async def add_rasp_day(message: types.Message, state: FSMContext):
         if not 1 <= day <= 6:
             raise ValueError
         await state.update_data(day=day)
-        await message.answer("Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):")
+        await greet_and_send(message.from_user, "Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):", message=message)
         await state.set_state(AddRaspState.week_type)
     except ValueError:
-        await message.answer("⚠ Введите число от 1 до 6.")
+        await greet_and_send(message.from_user, "⚠ Введите число от 1 до 6.", message=message)
 
 @dp.message(AddRaspState.week_type)
 async def add_rasp_week_type(message: types.Message, state: FSMContext):
@@ -373,17 +449,17 @@ async def add_rasp_week_type(message: types.Message, state: FSMContext):
         if week_type not in [0, 1, 2]:
             raise ValueError
         await state.update_data(week_type=week_type)
-        await message.answer("Введите текст расписания (используйте \\n для переносов):")
+        await greet_and_send(message.from_user, "Введите текст расписания (используйте \\n для переносов):", message=message)
         await state.set_state(AddRaspState.text)
     except ValueError:
-        await message.answer("⚠ Введите 0, 1 или 2.")
+        await greet_and_send(message.from_user, "⚠ Введите 0, 1 или 2.", message=message)
 
 @dp.message(AddRaspState.text)
 async def add_rasp_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     text = message.text.replace("\\n", "\n")
     await add_rasp(pool, DEFAULT_CHAT_ID, data["day"], data["week_type"], text)
-    await message.answer("✅ Расписание добавлено!")
+    await greet_and_send(message.from_user, "✅ Расписание добавлено!", message=message)
     await state.clear()
 
 # ======================
@@ -394,7 +470,7 @@ async def admin_clear_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
         return
-    await callback.message.answer("Введите день недели (1-6) или 0 для удаления всех:")
+    await greet_and_send(callback.from_user, "Введите день недели (1-6) или 0 для удаления всех:", callback=callback)
     await state.set_state(ClearRaspState.day)
     await callback.answer()
 
@@ -408,10 +484,10 @@ async def clear_rasp_day(message: types.Message, state: FSMContext):
             await delete_rasp(pool, day)
         else:
             raise ValueError
-        await message.answer("✅ Расписание удалено!")
+        await greet_and_send(message.from_user, "✅ Расписание удалено!", message=message)
         await state.clear()
     except ValueError:
-        await message.answer("⚠ Введите 0 или число от 1 до 6.")
+        await greet_and_send(message.from_user, "⚠ Введите 0 или число от 1 до 6.", message=message)
 
 # ======================
 # Админка — Установить четность
@@ -421,7 +497,7 @@ async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
         return
-    await callback.message.answer("Введите четность (1 - нечетная, 2 - четная):")
+    await greet_and_send(callback.from_user, "Введите четность (1 - нечетная, 2 - четная):", callback=callback)
     await state.set_state(SetChetState.week_type)
     await callback.answer()
 
@@ -432,10 +508,10 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         if week_type not in [1, 2]:
             raise ValueError
         await set_week_type(pool, message.chat.id, week_type)
-        await message.answer(f"✅ Четность установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})")
+        await greet_and_send(message.from_user, f"✅ Четность установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})", message=message)
         await state.clear()
     except ValueError:
-        await message.answer("⚠ Введите 1 или 2.")
+        await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
 
 # ======================
 # Автопостинг расписания
@@ -451,6 +527,7 @@ async def send_today_rasp():
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if text:
         msg = format_rasp_message(day, week_type, text)
+        # автопостинг в чат — без персонального приветствия (обычно это общий канал)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
 
 scheduler.add_job(send_today_rasp, CronTrigger(hour=1, minute=0))
