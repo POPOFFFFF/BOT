@@ -95,6 +95,18 @@ async def init_db(pool):
 # ----------------------
 # Nicknames
 # ----------------------
+
+async def ensure_columns(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Проверяем, есть ли колонка set_at
+            await cur.execute("SHOW COLUMNS FROM week_setting LIKE 'set_at'")
+            row = await cur.fetchone()
+            if not row:
+                # добавляем колонку
+                await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
+
+                
 async def set_nickname(pool, user_id: int, nickname: str):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -739,6 +751,7 @@ async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
+    await ensure_columns(pool)  # <--- добавляем это
     scheduler.start()
     await dp.start_polling(bot)
 
