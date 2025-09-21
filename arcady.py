@@ -513,30 +513,36 @@ async def on_rasp_day(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
     await callback.answer()
 
-@dp.message(Command(commands=["никнейм"]))
+@dp.message()
 async def user_set_nickname(message: types.Message):
+    # Игнорируем сообщения без текста
+    if not message.text:
+        return
 
-    txt = message.text.strip()
-    # убираем команду с упоминанием бота
-    txt = txt.split(maxsplit=1)
-    if len(txt) < 2 or not txt[1].strip():
+    # Проверяем, начинается ли с /никнейм (с бот-аппендом или без)
+    if not message.text.lower().startswith("/никнейм"):
+        return
+
+    # Парсим аргумент никнейма
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
         await message.reply("⚠ Использование: /никнейм <ваш никнейм>")
         return
 
-    nickname = txt[1].strip()
+    nickname = parts[1].strip()
     user_id = message.from_user.id
 
-    # Проверяем, не заблокирован ли никнейм
+    # Проверяем locked
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT locked FROM nicknames WHERE user_id=%s", (user_id,))
             row = await cur.fetchone()
-            if row and row[0]:
+            if row and row[0]:  # locked = True
                 await message.reply("⚠ Ваш ник закреплён администратором и не может быть изменён.")
                 return
 
+    # Сохраняем никнейм
     try:
-        # Устанавливаем никнейм
         await set_nickname(pool, user_id, nickname)
         await message.reply(f"✅ Ваш никнейм установлен: {nickname}")
     except Exception as e:
