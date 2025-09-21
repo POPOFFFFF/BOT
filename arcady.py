@@ -212,7 +212,7 @@ async def get_week_setting(pool, chat_id):
 
 async def get_current_week_type(pool, chat_id: int):
     """
-    Вычислить текущую четность недели для заданного chat_id,
+    Вычисляет текущую четность недели для chat_id, 
     опираясь на сохранённую базовую четность и дату установки.
     Возвращает 1 (нечетная) или 2 (четная).
     Если настройки нет — fallback на календарь.
@@ -221,27 +221,24 @@ async def get_current_week_type(pool, chat_id: int):
     now_date = datetime.datetime.now(TZ).date()
 
     if not setting:
-        # fallback: обычный календарный расчёт
+        # fallback на обычный календарный расчет
         week_number = now_date.isocalendar()[1]
         return 1 if week_number % 2 != 0 else 2
 
     base_week_type, set_at = setting
-
-    # ensure set_at is date
     if isinstance(set_at, datetime.datetime):
         set_at = set_at.date()
 
     delta_days = (now_date - set_at).days
     weeks_passed = abs(delta_days) // 7
 
-    if delta_days >= 0:
-        # прошедшие недели
-        current_week = base_week_type if weeks_passed % 2 == 0 else 1 if base_week_type == 2 else 2
+    # Если прошло четное количество недель — текущая неделя = базовая
+    # Если прошло нечетное — текущая неделя противоположная
+    if weeks_passed % 2 == 0:
+        return base_week_type
     else:
-        # будущее
-        current_week = base_week_type if weeks_passed % 2 == 0 else 1 if base_week_type == 2 else 2
+        return 1 if base_week_type == 2 else 2
 
-    return current_week
 
 # ======================
 # Вспомогательные
@@ -734,9 +731,13 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         week_type = int(message.text)
         if week_type not in [1, 2]:
             raise ValueError
-        # сохраняем базовую четность и дату установки (по Омску)
-        await set_week_type(pool, message.chat.id, week_type)
-        await greet_and_send(message.from_user, f"✅ Четность установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})", message=message)
+        # Сохраняем базовую четность и дату установки для DEFAULT_CHAT_ID
+        await set_week_type(pool, DEFAULT_CHAT_ID, week_type)
+        await greet_and_send(
+            message.from_user,
+            f"✅ Четность установлена: {week_type} ({'нечетная' if week_type==1 else 'четная'})",
+            message=message
+        )
         await state.clear()
     except ValueError:
         await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
