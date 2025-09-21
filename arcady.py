@@ -489,13 +489,10 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
         await callback.answer()
 
-# ======================
-# Выбор дня: показываем кнопки выбор четности
-# callback_data: rasp_day_{day}
-# ======================
+
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
-    # формат callback.data = "rasp_day_{day}"
+
     parts = callback.data.split("_")
     try:
         day = int(parts[-1])
@@ -512,13 +509,10 @@ async def on_rasp_day(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
     await callback.answer()
 
-# ======================
-# Команда для установки ника
-# ======================
+
 @dp.message(Command("setnick"))
 async def cmd_setnick(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
-        # ответим без приветствия — т.к. это попытка админской команды не от админа
         await message.answer("⛔ У вас нет прав для этой команды")
         return
 
@@ -534,9 +528,6 @@ async def cmd_setnick(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
-# ======================
-# Показ расписания: callback_data = rasp_show_{day}_{week}
-# ======================
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -552,16 +543,13 @@ async def on_rasp_show(callback: types.CallbackQuery):
 
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
     if not text:
-        # информируем через callback.answer (без приветствия) и отправим сообщение с приветствием
+
         await callback.answer("ℹ На этот день нет расписания", show_alert=True)
         await greet_and_send(callback.from_user, "На этот день нет расписания", callback=callback)
     else:
         await greet_and_send(callback.from_user, format_rasp_message(day, week_type, text), callback=callback)
     await callback.answer()
 
-# ======================
-# Звонки (будни/суббота)
-# ======================
 @dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
     action = callback.data
@@ -576,16 +564,13 @@ async def zvonki_handler(callback: types.CallbackQuery):
 
     await callback.answer()
 
-# ======================
-# Админ: Узнать четность недели
-# ======================
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
 
-    # вычисляем текущую четность относительно сохранённой установки
+
     current = await get_current_week_type(pool, DEFAULT_CHAT_ID)
     current_str = "нечетная (1)" if current == 1 else "четная (2)"
 
@@ -602,9 +587,6 @@ async def admin_show_chet(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, msg, callback=callback)
     await callback.answer()
 
-# ======================
-# Админ: Просмотр/Установка времени публикаций
-# ======================
 @dp.callback_query(F.data == "admin_list_publish_times")
 async def admin_list_publish_times(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -628,14 +610,14 @@ async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContex
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
 
-    await callback.answer()  # убираем часы ожидания
+    await callback.answer() 
     await greet_and_send(
         callback.from_user,
         "Введите время публикации в формате ЧЧ:ММ по Омску (например: 20:00):",
         callback=callback
     )
 
-    # ✅ Устанавливаем FSM-состояние для ожидания ввода времени
+
     await state.set_state(SetPublishTimeState.time)
 
 @dp.message(Command("delptime"))
@@ -683,10 +665,6 @@ async def set_publish_time_handler(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
-
-# ======================
-# Админка — Добавить расписание (только в ЛС, проверка ниже)
-# ======================
 @dp.callback_query(F.data == "admin_add")
 async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -728,9 +706,7 @@ async def add_rasp_text(message: types.Message, state: FSMContext):
     await greet_and_send(message.from_user, "✅ Расписание добавлено!", message=message)
     await state.clear()
 
-# ======================
-# Админка — Очистить расписание
-# ======================
+
 @dp.callback_query(F.data == "admin_clear")
 async def admin_clear_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -755,9 +731,7 @@ async def clear_rasp_day(message: types.Message, state: FSMContext):
     except ValueError:
         await greet_and_send(message.from_user, "⚠ Введите 0 или число от 1 до 6.", message=message)
 
-# ======================
-# Админка — Установить четность
-# ======================
+
 @dp.callback_query(F.data == "admin_setchet")
 async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -773,7 +747,7 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         week_type = int(message.text)
         if week_type not in [1, 2]:
             raise ValueError
-        # Сохраняем базовую четность и дату установки для DEFAULT_CHAT_ID
+
         await set_week_type(pool, DEFAULT_CHAT_ID, week_type)
         await greet_and_send(
             message.from_user,
@@ -784,34 +758,31 @@ async def setchet_handler(message: types.Message, state: FSMContext):
     except ValueError:
         await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
 
-# ======================
-# Автопостинг расписания
 async def send_today_rasp():
     now = datetime.datetime.now(TZ)
-    day = now.isoweekday()
-    if day == 7:  # воскресенье
-        return
+    day = now.isoweekday()  # 1 = Понедельник, 7 = Воскресенье
+
+    # если воскресенье, публикуем расписание на понедельник
+    if day == 7:
+        day_to_post = 1
+        day_name = "завтра (Понедельник)"
+    else:
+        day_to_post = day
+        day_name = "сегодня"
 
     week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID)
-    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
+    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day_to_post, week_type)
+
     if text:
-        msg = format_rasp_message(day, week_type, text)
+        msg = f"📌 Расписание на {day_name}:\n\n" + format_rasp_message(day_to_post, week_type, text)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
 
-
-# при старте — пересоздаём задачи из БД
-# старые жёстко заданные job'ы убраны: используем publish_times из БД
-# добавление задач происходит в reschedule_publish_jobs(pool)
-
-# ======================
-# Main
-# ======================
 
 async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
-    await ensure_columns(pool)  # <--- добавляем это
+    await ensure_columns(pool)
     scheduler.start()
     await dp.start_polling(bot)
 
