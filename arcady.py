@@ -222,9 +222,9 @@ class SetChetState(StatesGroup):
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None):
     nickname = await get_nickname(pool, user.id)
     if nickname:
-        greet = f"👋 Привет, {nickname}!\n\n"
+        greet = f"👋 Салам, {nickname}!\n\n"
     else:
-        greet = "👋 Привет!\n\n"
+        greet = "👋 Салам!\n\n"
     full_text = greet + text
 
     # callback edit / answer
