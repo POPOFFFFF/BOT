@@ -96,6 +96,17 @@ async def init_db(pool):
 # Nicknames
 # ----------------------
 
+async def ensure_nicknames_column(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Добавляем колонку locked, если её нет
+            await cur.execute("SHOW COLUMNS FROM nicknames LIKE 'locked'")
+            row = await cur.fetchone()
+            if not row:
+                await cur.execute("ALTER TABLE nicknames ADD COLUMN locked BOOLEAN DEFAULT FALSE")
+            # всем существующим записям присваиваем FALSE
+            await cur.execute("UPDATE nicknames SET locked=FALSE WHERE locked IS NULL")
+
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -428,7 +439,7 @@ async def reschedule_publish_jobs(pool):
 # ======================
 # Хендлеры
 # ======================
-@dp.message(F.text == "/аркадий")
+@dp.message(F.text.lower().in_(["/аркадий", "/акрадый", "/акрадий"]))
 async def cmd_arkadiy(message: types.Message):
     is_private = message.chat.type == "private"
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
@@ -514,24 +525,68 @@ async def on_rasp_day(callback: types.CallbackQuery):
     await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
     await callback.answer()
 
+# ----------------------------
+# Пользователь устанавливает свой ник
+# ----------------------------
+@dp.message(Command("ник"))
+async def user_set_nick(message: types.Message):
+    txt = message.text.strip()
+    parts = txt.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("⚠ Использование: /ник <ваш никнейм>")
+        return
 
+    user_id = message.from_user.id
+    nickname = parts[1].strip()
+
+    # проверяем, locked ли ник
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT locked FROM nicknames WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            if row and row[0]:
+                await message.answer("⚠ Ваш ник закреплён администратором и не может быть изменён.")
+                return
+
+    try:
+        await set_nickname(pool, user_id, nickname)
+        await message.answer(f"✅ Ваш никнейм установлен: {nickname}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при установке: {e}")
+
+
+# ----------------------------
+# Админ устанавливает ник другому пользователю
+# ----------------------------
 @dp.message(Command("setnick"))
-async def cmd_setnick(message: types.Message):
+async def admin_setnick(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("⛔ У вас нет прав для этой команды")
         return
 
     try:
-        parts = message.text.split(maxsplit=2)
+        parts = message.text.split(maxsplit=3)
         if len(parts) < 3:
-            await message.answer("⚠ Использование: /setnick <user_id> <никнейм>")
+            await message.answer("⚠ Использование: /setnick <user_id> <никнейм> [true|false]")
             return
         user_id = int(parts[1])
         nickname = parts[2].strip()
-        await set_nickname(pool, user_id, nickname)
-        await message.answer(f"✅ Никнейм для {user_id} установлен: {nickname}")
+        lock = False
+        if len(parts) >= 4:
+            lock = parts[3].lower() == "true"
+
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    INSERT INTO nicknames (user_id, nickname, locked)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE nickname=%s, locked=%s
+                """, (user_id, nickname, lock, nickname, lock))
+
+        await message.answer(f"✅ Никнейм для пользователя {user_id} установлен: {nickname} | locked={lock}")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+
 
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
