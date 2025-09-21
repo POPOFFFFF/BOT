@@ -516,15 +516,15 @@ async def on_rasp_day(callback: types.CallbackQuery):
 @dp.message(Command(commands=["никнейм"]))
 async def user_set_nickname(message: types.Message):
 
-    cmd_len = len(message.get_command())
-    text_after = message.text[cmd_len:].strip()
-
-    if not text_after:
+    txt = message.text.strip()
+    # убираем команду с упоминанием бота
+    txt = txt.split(maxsplit=1)
+    if len(txt) < 2 or not txt[1].strip():
         await message.reply("⚠ Использование: /никнейм <ваш никнейм>")
         return
 
+    nickname = txt[1].strip()
     user_id = message.from_user.id
-    nickname = text_after
 
     # Проверяем, не заблокирован ли никнейм
     async with pool.acquire() as conn:
@@ -541,6 +541,7 @@ async def user_set_nickname(message: types.Message):
         await message.reply(f"✅ Ваш никнейм установлен: {nickname}")
     except Exception as e:
         await message.reply(f"❌ Ошибка при установке: {e}")
+
 @dp.message(Command("setnick"))
 async def admin_setnick(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
