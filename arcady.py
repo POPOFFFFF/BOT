@@ -528,12 +528,12 @@ async def on_rasp_day(callback: types.CallbackQuery):
 # ----------------------------
 # Пользователь устанавливает свой ник
 # ----------------------------
-@dp.message(Command("ник"))
-async def user_set_nick(message: types.Message):
+@dp.message(Command("никнейм"))
+async def user_set_nickname(message: types.Message):
     txt = message.text.strip()
     parts = txt.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
-        await message.answer("⚠ Использование: /ник <ваш никнейм>")
+        await message.reply("⚠ Использование: /никнейм <ваш никнейм>")
         return
 
     user_id = message.from_user.id
@@ -545,14 +545,15 @@ async def user_set_nick(message: types.Message):
             await cur.execute("SELECT locked FROM nicknames WHERE user_id=%s", (user_id,))
             row = await cur.fetchone()
             if row and row[0]:
-                await message.answer("⚠ Ваш ник закреплён администратором и не может быть изменён.")
+                await message.reply("⚠ Ваш ник закреплён администратором и не может быть изменён.")
                 return
 
     try:
         await set_nickname(pool, user_id, nickname)
-        await message.answer(f"✅ Ваш никнейм установлен: {nickname}")
+        await message.reply(f"✅ Ваш никнейм установлен: {nickname}")
     except Exception as e:
-        await message.answer(f"❌ Ошибка при установке: {e}")
+        await message.reply(f"❌ Ошибка при установке: {e}")
+
 
 
 # ----------------------------
