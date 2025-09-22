@@ -333,10 +333,12 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
+
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT name FROM subjects")
+            await cur.execute("SELECT name, rK FROM subjects")
             subjects = await cur.fetchall()
+
     buttons = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")] 
@@ -346,16 +348,37 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     await callback.message.edit_text("Выберите предмет:", reply_markup=buttons)
     await state.set_state(AddLessonState.subject)
 
+
 @dp.callback_query(F.data.startswith("choose_subject_"))
 async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
-    subject = callback.data[len("choose_subject_"):]
-    await state.update_data(subject=subject)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
-    ])
-    await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
-    await state.set_state(AddLessonState.week_type)
+    subject_name = callback.data[len("choose_subject_"):]
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT rK FROM subjects WHERE name=%s", (subject_name,))
+            rK_flag = (await cur.fetchone())[0]
+
+    await state.update_data(subject=subject_name, rK=rK_flag)
+
+    if rK_flag:  # если rK=True, нужно выбрать кабинет
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
+            [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
+        ])
+        await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
+        await state.set_state(AddLessonState.week_type)
+    else:
+        # для обычного предмета с фиксированным кабинетом можно сразу добавить урок
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
+                subject_id = (await cur.fetchone())[0]
+                await cur.execute("""
+                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (DEFAULT_CHAT_ID, 0, 0, 0, subject_id, "по умолчанию"))
+        await callback.message.answer(f"✅ Урок '{subject_name}' добавлен с кабинетом по умолчанию.")
+        await state.clear()
+
 
 @dp.callback_query(F.data.startswith("week_"))
 async def choose_week(callback: types.CallbackQuery, state: FSMContext):
