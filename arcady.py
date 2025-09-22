@@ -297,6 +297,11 @@ ZVONKI_SATURDAY = [
     "6 пара: 1-2 урок 17:05-18:50"
 ]
 
+# --- проверка, что пользователь админ ---
+def is_admin(user_id: int, chat_type: str) -> bool:
+    return user_id in ALLOWED_USERS and chat_type == "private"
+    
+
 def get_zvonki(is_saturday: bool):
     return "\n".join(ZVONKI_SATURDAY if is_saturday else ZVONKI_DEFAULT)
 
@@ -349,36 +354,44 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(AddLessonState.subject)
 
 
+# --- выбор предмета с безопасной обработкой ---
 async def choose_subject(message: types.Message, state: FSMContext):
-    subject_name = message.text
+    if not is_admin(message.from_user.id, message.chat.type):
+        # бот в ЛС не отвечает обычным пользователям
+        return
+
+    subject_name = message.text.strip()
     async with pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:  # DictCursor удобно для отсутствующих колонок
+        async with conn.cursor(aiomysql.DictCursor) as cur:
             try:
-                await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
+                await cur.execute("SELECT id, rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
                 subject_data = await cur.fetchone()
-                
-                if subject_data is None:
-                    await message.answer("Такого предмета нет в базе.")
+
+                if not subject_data:
+                    await message.answer("⚠ Такого предмета нет в базе.")
                     return
 
-                rK = subject_data.get('rK')
-                cabinet = subject_data.get('cabinet', "не указано")  # безопасно, если колонки нет
+                subject_id = subject_data.get("id")
+                rK = subject_data.get("rK", False)
+                cabinet = subject_data.get("cabinet") or "не указано"
 
-                await message.answer(f"Вы выбрали предмет: {subject_name}\nКабинет: {cabinet}\nrK: {rK}")
-                await state.update_data(subject_name=subject_name, rK=rK, cabinet=cabinet)
+                await message.answer(
+                    f"Вы выбрали предмет: {subject_name}\n"
+                    f"Кабинет: {cabinet}\n"
+                    f"rK: {rK}"
+                )
+                await state.update_data(subject_name=subject_name, subject_id=subject_id, rK=rK, cabinet=cabinet)
 
             except Exception as e:
                 print(f"[WARN] Ошибка с предметом '{subject_name}': {e}")
-                # удаляем только если явно ошибка с отсутствующей колонкой
-                if "Unknown column 'cabinet'" in str(e):
-                    try:
-                        await cur.execute("DELETE FROM subjects WHERE name=%s", (subject_name,))
-                        await conn.commit()
-                        print(f"[INFO] Предмет '{subject_name}' удалён из базы")
-                    except Exception as delete_error:
-                        print(f"[ERROR] Не удалось удалить предмет '{subject_name}': {delete_error}")
-                await message.answer("Произошла ошибка с этим предметом, он удалён из базы.")
+                try:
+                    await cur.execute("DELETE FROM subjects WHERE name=%s", (subject_name,))
+                    await conn.commit()
+                    print(f"[INFO] Предмет '{subject_name}' удалён из базы из-за ошибки")
+                except Exception as delete_error:
+                    print(f"[ERROR] Не удалось удалить предмет '{subject_name}': {delete_error}")
 
+                await message.answer("⚠ Произошла ошибка с этим предметом, он удалён из базы.")
 
 
 @dp.callback_query(F.data.startswith("week_"))
