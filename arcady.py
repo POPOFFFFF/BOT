@@ -489,9 +489,15 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
                     VALUES (%s, %s, %s, %s, %s)
                 """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], cabinet))
 
+    # Сообщение о добавлении
     await greet_and_send(message.from_user,
                          f"✅ Кабинет установлен: день {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}",
                          message=message)
+
+    # Открываем админ-меню
+    await greet_and_send(message.from_user, "⚙ Админ-панель:", message=message, markup=admin_menu())
+
+    # Очистка состояния
     await state.clear()
 
 
