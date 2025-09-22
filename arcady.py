@@ -2,6 +2,7 @@ import asyncio
 import os
 import datetime
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import BotCommand
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -782,11 +783,14 @@ async def main():
     await init_db(pool)
     await ensure_columns(pool)
 
+    # 🔹 Устанавливаем команды в меню
+    await bot.set_my_commands([
+        BotCommand(command="Аркадий", description="Открыть меню бота")
+    ])
+
     scheduler.start()
-    await reschedule_publish_jobs(pool)   # 🔹 вот этого не хватает!
-
+    await reschedule_publish_jobs(pool)
     await dp.start_polling(bot)
-
 
 
 if __name__ == "__main__":
