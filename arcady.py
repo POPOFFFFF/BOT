@@ -1000,11 +1000,13 @@ ANEKDOTY = [
 @dp.message(Command("анекдот"))
 async def cmd_anekdot(message: types.Message):
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-        if row:
-            await message.answer(f"😂 Анекдот:\n\n{row['text']}")
-        else:
-            await message.answer("❌ В базе пока нет анекдотов.")
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+            row = await cur.fetchone()
+            if row:
+                await message.answer(f"😂 Анекдот:\n\n{row[0]}")
+            else:
+                await message.answer("❌ В базе пока нет анекдотов.")
 
 
 @dp.callback_query(F.data.startswith("rasp_show_"))
