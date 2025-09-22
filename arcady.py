@@ -349,24 +349,44 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(AddLessonState.subject)
 
 
-@dp.callback_query(F.data.startswith("choose_subject_"))
-async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
-    subject_name = callback.data[len("choose_subject_"):]
+async def choose_subject(message: types.Message, state: FSMContext):
+    subject_name = message.text
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
-            rK_flag, cabinet = await cur.fetchone()
 
-    # Если предмет без rK, сразу задаём week_type = 0 (любая неделя)
-    week_type = 0 if not rK_flag else None
+            # Вспомогательная функция для безопасного получения предмета
+            async def get_subject_safe(subject_name):
+                try:
+                    # Основной SELECT
+                    await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
+                    return await cur.fetchone()
+                except Exception as e:
+                    print(f"[WARN] Ошибка при получении предмета '{subject_name}': {e}")
+                    # Попытка удалить проблемный предмет
+                    try:
+                        await cur.execute("DELETE FROM subjects WHERE name=%s", (subject_name,))
+                        await conn.commit()
+                        print(f"[INFO] Предмет '{subject_name}' удалён из базы")
+                    except Exception as delete_error:
+                        print(f"[ERROR] Не удалось удалить предмет '{subject_name}': {delete_error}")
+                    return None
 
-    await state.update_data(subject=subject_name, rK=rK_flag, cabinet=cabinet, week_type=week_type)
+            # Получаем данные предмета
+            subject_data = await get_subject_safe(subject_name)
+            if subject_data is None:
+                await message.answer("Произошла ошибка с этим предметом, он удалён из базы.")
+                return
 
-    kb_days = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
-    )
-    await callback.message.edit_text("Выберите день недели:", reply_markup=kb_days)
-    await state.set_state(AddLessonState.day)
+            # Распаковываем данные
+            rK, cabinet = subject_data
+
+            # Дальнейшая логика работы с rK и cabinet
+            # Например, сообщение пользователю
+            await message.answer(f"Вы выбрали предмет: {subject_name}\nКабинет: {cabinet}\nrK: {rK}")
+
+            # Если используете FSM, можете сохранить данные в состояние
+            await state.update_data(subject_name=subject_name, rK=rK, cabinet=cabinet)
+
 
 
 
