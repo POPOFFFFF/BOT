@@ -187,21 +187,28 @@ async def get_week_setting(pool, chat_id):
                 set_at = set_at.date()
             return (wt, set_at)
 
-async def init_anekdoty(pool):
+async def init_anekdoty(pool, jokes):
     async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS anekdoty (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                text TEXT NOT NULL
-            )
-        """)
-        # проверяем, есть ли записи
-        count = await conn.fetchval("SELECT COUNT(*) FROM anekdoty")
-        if count == 0:
-            # если пусто → вставляем анекдоты из списка
-            for joke in ANEKDOTY:
-                await conn.execute("INSERT INTO anekdoty (text) VALUES (%s)", (joke,))
-            print(f"[INFO] Загружено {len(ANEKDOTY)} анекдотов в БД")
+        async with conn.cursor() as cur:
+            # Создаём таблицу
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS anekdoty (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    text TEXT NOT NULL
+                )
+            """)
+            await conn.commit()
+
+            # Проверяем, есть ли данные
+            await cur.execute("SELECT COUNT(*) FROM anekdoty")
+            (count,) = await cur.fetchone()
+
+            if count == 0:
+                # Загружаем шутки в БД
+                for joke in jokes:
+                    await cur.execute("INSERT INTO anekdoty (text) VALUES (%s)", (joke,))
+                await conn.commit()
+                print(f"[INFO] Загружено {len(jokes)} анекдотов в БД")
 
 
 async def get_current_week_type(pool, chat_id: int, target_date: datetime.date | None = None):
@@ -1285,7 +1292,7 @@ async def main():
     await reschedule_publish_jobs(pool)   # 🔹 вот этого не хватает!
 
     await dp.start_polling(bot)
-
+await init_anekdoty(pool, ANEKDOTY)
 
 
 if __name__ == "__main__":
