@@ -352,41 +352,32 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
 async def choose_subject(message: types.Message, state: FSMContext):
     subject_name = message.text
     async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
+        async with conn.cursor(aiomysql.DictCursor) as cur:  # DictCursor удобно для отсутствующих колонок
+            try:
+                await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
+                subject_data = await cur.fetchone()
+                
+                if subject_data is None:
+                    await message.answer("Такого предмета нет в базе.")
+                    return
 
-            # Вспомогательная функция для безопасного получения предмета
-            async def get_subject_safe(subject_name):
-                try:
-                    # Основной SELECT
-                    await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
-                    return await cur.fetchone()
-                except Exception as e:
-                    print(f"[WARN] Ошибка при получении предмета '{subject_name}': {e}")
-                    # Попытка удалить проблемный предмет
+                rK = subject_data.get('rK')
+                cabinet = subject_data.get('cabinet', "не указано")  # безопасно, если колонки нет
+
+                await message.answer(f"Вы выбрали предмет: {subject_name}\nКабинет: {cabinet}\nrK: {rK}")
+                await state.update_data(subject_name=subject_name, rK=rK, cabinet=cabinet)
+
+            except Exception as e:
+                print(f"[WARN] Ошибка с предметом '{subject_name}': {e}")
+                # удаляем только если явно ошибка с отсутствующей колонкой
+                if "Unknown column 'cabinet'" in str(e):
                     try:
                         await cur.execute("DELETE FROM subjects WHERE name=%s", (subject_name,))
                         await conn.commit()
                         print(f"[INFO] Предмет '{subject_name}' удалён из базы")
                     except Exception as delete_error:
                         print(f"[ERROR] Не удалось удалить предмет '{subject_name}': {delete_error}")
-                    return None
-
-            # Получаем данные предмета
-            subject_data = await get_subject_safe(subject_name)
-            if subject_data is None:
                 await message.answer("Произошла ошибка с этим предметом, он удалён из базы.")
-                return
-
-            # Распаковываем данные
-            rK, cabinet = subject_data
-
-            # Дальнейшая логика работы с rK и cabinet
-            # Например, сообщение пользователю
-            await message.answer(f"Вы выбрали предмет: {subject_name}\nКабинет: {cabinet}\nrK: {rK}")
-
-            # Если используете FSM, можете сохранить данные в состояние
-            await state.update_data(subject_name=subject_name, rK=rK, cabinet=cabinet)
-
 
 
 
