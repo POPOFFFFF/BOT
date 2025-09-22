@@ -421,7 +421,7 @@ async def choose_subject_callback(callback: types.CallbackQuery, state: FSMConte
         default_cabinet=subject["cabinet"] or None
     )
 
-    # Спрашиваем четность недели
+    # Сначала спрашиваем четность недели
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="0️⃣ Любая", callback_data="week_0")],
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
@@ -431,48 +431,28 @@ async def choose_subject_callback(callback: types.CallbackQuery, state: FSMConte
     await state.set_state(AddLessonState.week_type)
 
 
-@dp.callback_query(F.data.startswith("week_"))
-async def choose_week(callback: types.CallbackQuery, state: FSMContext):
-    week_type = int(callback.data[-1])
-    await state.update_data(week_type=week_type)
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
-    )
-    await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
-    await state.set_state(AddLessonState.day)
-
-
-@dp.callback_query(F.data.startswith("day_"))
-async def choose_day(callback: types.CallbackQuery, state: FSMContext):
-    day = int(callback.data[len("day_"):])
-    await state.update_data(day=day)
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")] for i in range(1, 7)]
-    )
-    await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
-    await state.set_state(AddLessonState.pair_number)
-
-
+# --- выбор пары ---
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
     await state.update_data(pair_number=pair_number)
 
     data = await state.get_data()
-    if data.get("rK"):  # если rK=True, спрашиваем кабинет для пары
+    # Если rK включен и кабинет пустой — спрашиваем кабинет
+    if data.get("rK") and not data.get("default_cabinet"):
         await callback.message.edit_text("Введите кабинет для этой пары:")
         await state.set_state(AddLessonState.cabinet)
-    else:  # используем кабинет по умолчанию
-        await save_lesson_from_state(data, data.get("default_cabinet"))
+    else:
+        cabinet_to_use = data.get("default_cabinet") or ""
+        await save_lesson_from_state(data, cabinet_to_use)
         await callback.message.answer(
             f"✅ Урок '{data['subject_name']}' добавлен на {DAYS[data['day']-1]}, "
-            f"пара {pair_number}, кабинет {data.get('default_cabinet', 'не указан')}"
+            f"пара {pair_number}, кабинет {cabinet_to_use or 'не указан'}"
         )
         await state.clear()
 
 
+# --- обработка ввода кабинета ---
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -485,6 +465,7 @@ async def set_cabinet(message: types.Message, state: FSMContext):
     await state.clear()
 
 
+# --- сохранение урока ---
 async def save_lesson_from_state(data, cabinet):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -648,11 +629,25 @@ async def cmd_addu(message: types.Message):
         return
     name = parts[1]
     param = parts[2] if len(parts) == 3 else None
-    rK_flag = param == "rK"
+
+    rK_flag = False
+    cabinet = None
+    if param == "rK":
+        rK_flag = True
+    elif param:
+        cabinet = param
+
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (name, rK_flag))
-    await message.answer(f"✅ Предмет '{name}' добавлен {'с rK' if rK_flag else f'с кабинетом {param}'}")
+            await cur.execute(
+                "INSERT INTO subjects (name, rK, cabinet) VALUES (%s, %s, %s)",
+                (name, rK_flag, cabinet)
+            )
+
+    await message.answer(
+        f"✅ Предмет '{name}' добавлен "
+        + ("с rK" if rK_flag else f"с кабинетом {cabinet}" if cabinet else "")
+    )
 
 class SetCabinetState(StatesGroup):
     week_type = State()
