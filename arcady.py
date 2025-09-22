@@ -412,18 +412,16 @@ async def reschedule_publish_jobs(pool):
 
 TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot"]
 
-@dp.message()
+@dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
-    text = message.text.lower().strip()
-    if text in TRIGGERS:
-        is_private = message.chat.type == "private"
-        is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
-        await greet_and_send(
-            message.from_user,
-            "Выберите действие:",
-            message=message,
-            markup=main_menu(is_admin)
-        )
+    is_private = message.chat.type == "private"
+    is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
+    await greet_and_send(
+        message.from_user,
+        "Выберите действие:",
+        message=message,
+        markup=main_menu(is_admin)
+    )
 
 
 @dp.callback_query(F.data.startswith("menu_"))
@@ -611,11 +609,10 @@ ANEKDOTY = [
 
 
 
-@dp.message()
+@dp.message(Command("анекдот"))
 async def cmd_anekdot(message: types.Message):
-    if message.text and message.text.lower().startswith("/анекдот"):
-        joke = random.choice(ANEKDOTY)
-        await message.answer(f"😂 Анекдот:\n\n{joke}")
+    joke = random.choice(ANEKDOTY)
+    await message.answer(f"😂 Анекдот:\n\n{joke}")
 
 
 @dp.callback_query(F.data.startswith("rasp_show_"))
