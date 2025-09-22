@@ -12,7 +12,6 @@ from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 import aiomysql
 import random
-
 import ssl
 import re
 
@@ -49,6 +48,7 @@ async def get_pool():
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+            # Существующие таблицы
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS rasp (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -56,36 +56,48 @@ async def init_db(pool):
                 day INT,
                 week_type INT,
                 text TEXT
-            )
-            """)
+            )""")
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS week_setting (
                 chat_id BIGINT PRIMARY KEY,
                 week_type INT,
                 set_at DATE
-            )
-            """)
+            )""")
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS nicknames (
                 user_id BIGINT PRIMARY KEY,
                 nickname VARCHAR(255)
-            )
-            """)
+            )""")
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS publish_times (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 hour INT NOT NULL,
                 minute INT NOT NULL
-            )
-            """)
+            )""")
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS anekdoty (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 text TEXT NOT NULL
-            )
-            """)
+            )""")
+            # Новые таблицы
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS subjects (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                rK BOOLEAN DEFAULT FALSE
+            )""")
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS rasp_detailed (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                day INT,
+                week_type INT,
+                pair_number INT,
+                subject_id INT,
+                cabinet VARCHAR(50),
+                FOREIGN KEY (subject_id) REFERENCES subjects(id)
+            )""")
             await conn.commit()
-
 
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
@@ -369,8 +381,8 @@ async def edit_rasp_text(message: types.Message, state: FSMContext):
 
 
 
+# --- основной greet_and_send ---
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False):
-    # Добавляем анекдот, если нужно
     if include_joke:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -380,32 +392,76 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                     text += f"\n\n😂 Анекдот:\n{row[0]}"
 
     nickname = await get_nickname(pool, user.id)
-    if nickname:
-        greet = f"👋 Салам, {nickname}!\n\n"
-    else:
-        greet = "👋 Салам!\n\n"
+    greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
     full_text = greet + text
 
     if callback:
         try:
             await callback.message.edit_text(full_text, reply_markup=markup)
-        except Exception:
-            try:
-                await callback.message.answer(full_text, reply_markup=markup)
-            except Exception:
-                await bot.send_message(chat_id=callback.message.chat.id, text=full_text, reply_markup=markup)
+        except:
+            await callback.message.answer(full_text, reply_markup=markup)
     elif message:
         try:
             await message.answer(full_text, reply_markup=markup)
-        except Exception:
+        except:
             await bot.send_message(chat_id=message.chat.id, text=full_text, reply_markup=markup)
     elif chat_id is not None:
         await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
     else:
-        try:
-            await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
-        except Exception:
-            pass
+        await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
+
+
+
+async def get_rasp_formatted(day, week_type):
+    msg_lines = []
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
+                   FROM rasp_detailed r
+                   LEFT JOIN subjects s ON r.subject_id = s.id
+                   WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
+                   ORDER BY r.pair_number""",
+                (DEFAULT_CHAT_ID, day, week_type)
+            )
+            rows = await cur.fetchall()
+    for i in range(1, 7):
+        row = next((r for r in rows if r[0] == i), None)
+        if row:
+            cabinet_text = f"{row[1]} " if row[1] else ""
+            msg_lines.append(f"{i}. {cabinet_text}{row[2]}")
+        else:
+            msg_lines.append(f"{i}. Свободно")
+    return "\n".join(msg_lines)
+
+@dp.message(Command("addu"))
+async def cmd_addu(message: types.Message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer("⚠ Использование: /addu <название предмета> [rK или кабинет]")
+        return
+    name = parts[1]
+    param = parts[2] if len(parts) == 3 else None
+    rK_flag = param == "rK"
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (name, rK_flag))
+    await message.answer(f"✅ Предмет '{name}' добавлен {'с rK' if rK_flag else f'с кабинетом {param}'}")
+
+class SetCabinetState(StatesGroup):
+    week_type = State()
+    day = State()
+    subject = State()
+    pair_number = State()
+    cabinet = State()
+
+# --- состояния для очистки пары ---
+class ClearPairState(StatesGroup):
+    week_type = State()
+    day = State()
+    pair_number = State()
+
+
 
 
 def _job_id_for_time(hour: int, minute: int) -> str:
@@ -552,31 +608,10 @@ async def cmd_anekdot(message: types.Message):
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
     parts = callback.data.split("_")
-    if len(parts) < 4:
-        await callback.answer("Неверные данные", show_alert=True)
-        return
-
-    try:
-        day = int(parts[2])
-        week_type = int(parts[3])
-    except Exception:
-        await callback.answer("Неверные данные", show_alert=True)
-        return
-
-    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
-
-    if not text:
-        await callback.answer("ℹ На этот день нет расписания", show_alert=True)
-        await greet_and_send(callback.from_user, "На этот день нет расписания", callback=callback)
-    else:
-        # Вставляем анекдот при показе расписания
-        await greet_and_send(
-            callback.from_user,
-            format_rasp_message(day, week_type, text),
-            callback=callback,
-            include_joke=True  # 🔹 ключевой параметр
-        )
-
+    day = int(parts[2])
+    week_type = int(parts[3])
+    text = await get_rasp_formatted(day, week_type)
+    await greet_and_send(callback.from_user, f"📌 Расписание:\n{text}", callback=callback, include_joke=True)
     await callback.answer()
 
 
@@ -831,23 +866,14 @@ async def send_today_rasp():
         msg = f"📌 Расписание на {day_name}:\n\n" + format_rasp_message(day_to_post, week_type, text)
         await bot.send_message(DEFAULT_CHAT_ID, msg)
 
-
-
-
-
 async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
-    await ensure_columns(pool)
-
-
 
     scheduler.start()
-    await reschedule_publish_jobs(pool)   # 🔹 вот этого не хватает!
-
+    # await reschedule_publish_jobs(pool)  # если используешь публикации
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
