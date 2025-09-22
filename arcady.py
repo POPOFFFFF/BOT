@@ -408,11 +408,21 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 
-@dp.message(F.text.lower().in_(["/аркадий", "/акрадый", "/акрадий"]))
-async def cmd_arkadiy(message: types.Message):
-    is_private = message.chat.type == "private"
-    is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
-    await greet_and_send(message.from_user, "Выберите действие:", message=message, markup=main_menu(is_admin))
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов"]
+
+@dp.message()
+async def trigger_handler(message: types.Message):
+    text = message.text.lower().strip()
+    if text in TRIGGERS:
+        is_private = message.chat.type == "private"
+        is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
+        await greet_and_send(
+            message.from_user,
+            "Выберите действие:",
+            message=message,
+            markup=main_menu(is_admin)
+        )
+
 
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
