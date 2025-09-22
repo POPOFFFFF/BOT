@@ -90,56 +90,77 @@ class ClearPairState(StatesGroup):
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Существующие таблицы
+            # Таблица для старого простого расписания (если нужно)
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS rasp (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                chat_id BIGINT,
-                day INT,
-                week_type INT,
-                text TEXT
-            )""")
+                CREATE TABLE IF NOT EXISTS rasp (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    chat_id BIGINT,
+                    day INT,
+                    week_type INT,
+                    text TEXT
+                )
+            """)
+
+            # Таблица настройки недели
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS week_setting (
-                chat_id BIGINT PRIMARY KEY,
-                week_type INT,
-                set_at DATE
-            )""")
+                CREATE TABLE IF NOT EXISTS week_setting (
+                    chat_id BIGINT PRIMARY KEY,
+                    week_type INT,
+                    set_at DATE
+                )
+            """)
+
+            # Таблица никнеймов
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS nicknames (
-                user_id BIGINT PRIMARY KEY,
-                nickname VARCHAR(255)
-            )""")
+                CREATE TABLE IF NOT EXISTS nicknames (
+                    user_id BIGINT PRIMARY KEY,
+                    nickname VARCHAR(255)
+                )
+            """)
+
+            # Таблица времени публикаций
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS publish_times (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                hour INT NOT NULL,
-                minute INT NOT NULL
-            )""")
+                CREATE TABLE IF NOT EXISTS publish_times (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    hour INT NOT NULL,
+                    minute INT NOT NULL
+                )
+            """)
+
+            # Таблица анекдотов
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS anekdoty (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                text TEXT NOT NULL
-            )""")
-            # Новые таблицы
+                CREATE TABLE IF NOT EXISTS anekdoty (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    text TEXT NOT NULL
+                )
+            """)
+
+            # Новая таблица предметов
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS subjects (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                rK BOOLEAN DEFAULT FALSE
-            )""")
+                CREATE TABLE IF NOT EXISTS subjects (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    rK BOOLEAN DEFAULT FALSE
+                )
+            """)
+
+            # Новая таблица детализированного расписания
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS rasp_detailed (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                chat_id BIGINT,
-                day INT,
-                week_type INT,
-                pair_number INT,
-                subject_id INT,
-                cabinet VARCHAR(50),
-                FOREIGN KEY (subject_id) REFERENCES subjects(id)
-            )""")
+                CREATE TABLE IF NOT EXISTS rasp_detailed (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    chat_id BIGINT,
+                    day INT,
+                    week_type INT,
+                    pair_number INT,
+                    subject_id INT,
+                    cabinet VARCHAR(50),
+                    FOREIGN KEY (subject_id) REFERENCES subjects(id)
+                        ON DELETE CASCADE
+                )
+            """)
+
             await conn.commit()
+
 
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
@@ -475,6 +496,7 @@ async def save_lesson_from_state(data, cabinet):
             """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], data["subject_id"], cabinet))
 
 
+
 @dp.callback_query(F.data == "admin_clear_pair")
 async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -603,15 +625,15 @@ async def get_rasp_formatted(day, week_type):
     msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
-                   FROM rasp_detailed r
-                   LEFT JOIN subjects s ON r.subject_id = s.id
-                   WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
-                   ORDER BY r.pair_number""",
-                (DEFAULT_CHAT_ID, day, week_type)
-            )
+            await cur.execute("""
+                SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
+                FROM rasp_detailed r
+                LEFT JOIN subjects s ON r.subject_id = s.id
+                WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
+                ORDER BY r.pair_number
+            """, (DEFAULT_CHAT_ID, day, week_type))
             rows = await cur.fetchall()
+
     for i in range(1, 7):
         row = next((r for r in rows if r[0] == i), None)
         if row:
@@ -621,32 +643,25 @@ async def get_rasp_formatted(day, week_type):
             msg_lines.append(f"{i}. Свободно")
     return "\n".join(msg_lines)
 
+
 @dp.message(Command("addu"))
 async def cmd_addu(message: types.Message):
     parts = message.text.split(maxsplit=2)
     if len(parts) < 2:
-        await message.answer("⚠ Использование: /addu <название предмета> [rK или кабинет]")
+        await message.answer("⚠ Использование: /addu <название предмета> [rK]")
         return
     name = parts[1]
-    param = parts[2] if len(parts) == 3 else None
-
-    rK_flag = False
-    cabinet = None
-    if param == "rK":
-        rK_flag = True
-    elif param:
-        cabinet = param
+    rK_flag = (len(parts) == 3 and parts[2] == "rK")
 
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "INSERT INTO subjects (name, rK, cabinet) VALUES (%s, %s, %s)",
-                (name, rK_flag, cabinet)
+                "INSERT INTO subjects (name, rK) VALUES (%s, %s)",
+                (name, rK_flag)
             )
 
     await message.answer(
-        f"✅ Предмет '{name}' добавлен "
-        + ("с rK" if rK_flag else f"с кабинетом {cabinet}" if cabinet else "")
+        f"✅ Предмет '{name}' добавлен " + ("с rK" if rK_flag else "")
     )
 
 class SetCabinetState(StatesGroup):
