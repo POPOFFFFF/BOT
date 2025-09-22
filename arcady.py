@@ -611,10 +611,11 @@ ANEKDOTY = [
 
 
 
-@dp.message(Command("/анекдот"))
+@dp.message()
 async def cmd_anekdot(message: types.Message):
-    joke = random.choice(ANEKDOTY)
-    await message.answer(f"😂 Анекдот:\n\n{joke}")
+    if message.text and message.text.lower().startswith("/анекдот"):
+        joke = random.choice(ANEKDOTY)
+        await message.answer(f"😂 Анекдот:\n\n{joke}")
 
 
 @dp.callback_query(F.data.startswith("rasp_show_"))
