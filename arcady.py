@@ -1,9 +1,3 @@
-[6bb8642641a5] [22.09.2025 23:05:53] Traceback (most recent call last):
-[6bb8642641a5] [22.09.2025 23:05:53] File "/app/arcady.py", line 345, in <module>
-[6bb8642641a5] [22.09.2025 23:05:53] @dp.message(AddLessonState.cabinet)
-[6bb8642641a5] [22.09.2025 23:05:53] ^^^^^^^^^^^^^^
-[6bb8642641a5] [22.09.2025 23:05:53] NameError: name 'AddLessonState' is not defined
-
 import asyncio
 import os
 import datetime
