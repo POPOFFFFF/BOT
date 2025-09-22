@@ -771,8 +771,12 @@ async def main():
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
+
     scheduler.start()
+    await reschedule_publish_jobs(pool)   # 🔹 вот этого не хватает!
+
     await dp.start_polling(bot)
+
 
 
 if __name__ == "__main__":
