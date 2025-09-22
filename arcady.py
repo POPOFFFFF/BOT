@@ -291,12 +291,73 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-    # Показываем клавиатуру с предметами, если у тебя есть список постоянных
-    lesson_buttons = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=lesson, callback_data=f"addlesson_{lesson}")] for lesson in ["Математика", "История", "Физика"]
-    ])
-    await greet_and_send(callback.from_user, "Выберите предмет:", callback=callback, markup=lesson_buttons)
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name FROM subjects")
+            subjects = await cur.fetchall()
+    buttons = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")] 
+            for subj in subjects
+        ]
+    )
+    await callback.message.edit_text("Выберите предмет:", reply_markup=buttons)
+    await state.set_state(AddLessonState.subject)
 
+@dp.callback_query(F.data.startswith("choose_subject_"))
+async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
+    subject = callback.data[len("choose_subject_"):]
+    await state.update_data(subject=subject)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
+    ])
+    await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
+    await state.set_state(AddLessonState.week_type)
+
+@dp.callback_query(F.data.startswith("week_"))
+async def choose_week(callback: types.CallbackQuery, state: FSMContext):
+    week_type = int(callback.data[-1])
+    await state.update_data(week_type=week_type)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
+    )
+    await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
+    await state.set_state(AddLessonState.day)
+
+@dp.callback_query(F.data.startswith("day_"))
+async def choose_day(callback: types.CallbackQuery, state: FSMContext):
+    day = int(callback.data[len("day_"):])
+    await state.update_data(day=day)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")] for i in range(1, 7)]
+    )
+    await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
+    await state.set_state(AddLessonState.pair_number)
+
+@dp.callback_query(F.data.startswith("pair_"))
+async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
+    pair_number = int(callback.data[len("pair_"):])
+    await state.update_data(pair_number=pair_number)
+    await callback.message.edit_text("Введите кабинет для этой пары:")
+    await state.set_state(AddLessonState.cabinet)
+
+@dp.message(AddLessonState.cabinet)
+async def set_cabinet(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    cabinet = message.text.strip()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # получаем id предмета
+            await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
+            subject_id = (await cur.fetchone())[0]
+            # вставляем в rasp_detailed
+            await cur.execute("""
+                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
+    await message.answer(f"✅ Урок '{data['subject']}' добавлен на {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}")
+    await state.clear()
 
 @dp.callback_query(F.data.startswith("addlesson_"))
 async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
@@ -381,9 +442,12 @@ class EditRaspState(StatesGroup):
     week_type = State()
     text = State()
 
-    class AddLessonState(StatesGroup):
-    lesson = State()
-    default_cabinet = State()  # если сразу задаем кабинет
+class AddLessonState(StatesGroup):
+    subject = State()
+    week_type = State()
+    day = State()
+    pair_number = State()
+    cabinet = State()
 
 class SetCabinetState(StatesGroup):
     week_type = State()
