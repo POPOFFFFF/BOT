@@ -628,6 +628,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
 
 
 async def get_rasp_formatted(day, week_type):
+    """Форматирует расписание для публикации. Не выводит свободные пары после последней занятой."""
     msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -640,14 +641,26 @@ async def get_rasp_formatted(day, week_type):
                 (DEFAULT_CHAT_ID, day, week_type)
             )
             rows = await cur.fetchall()
+
+    # Найдем последнюю занятую пару
+    last_pair = 0
     for i in range(1, 7):
+        if any(r[0] == i for r in rows):
+            last_pair = i
+
+    if last_pair == 0:
+        return "Расписание пустое."
+
+    for i in range(1, last_pair + 1):
         row = next((r for r in rows if r[0] == i), None)
         if row:
             cabinet_text = f"{row[1]} " if row[1] else ""
             msg_lines.append(f"{i}. {cabinet_text}{row[2]}")
         else:
             msg_lines.append(f"{i}. Свободно")
+
     return "\n".join(msg_lines)
+
 
 @dp.message(Command("addu"))
 async def cmd_addu(message: types.Message):
@@ -1062,6 +1075,7 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
 
 async def send_today_rasp():
+    """Автопубликация расписания на сегодня (или понедельник, если воскресенье)"""
     now = datetime.datetime.now(TZ)
     day = now.isoweekday()
 
@@ -1075,12 +1089,11 @@ async def send_today_rasp():
         day_name = "сегодня"
 
     week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
-    text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day_to_post, week_type)
+    text = await get_rasp_formatted(day_to_post, week_type)
 
-    if text:
-        msg = f"📌 Расписание на {day_name}:\n\n" + format_rasp_message(day_to_post, week_type, text)
-        await bot.send_message(DEFAULT_CHAT_ID, msg)
-
+    msg = f"📌 Расписание на {day_name}:\n\n{text}"
+    await bot.send_message(DEFAULT_CHAT_ID, msg)
+    
 async def main():
     global pool
     pool = await get_pool()
