@@ -270,16 +270,75 @@ def main_menu(is_admin=False):
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
-        [InlineKeyboardButton(text="✏ Изменить расписание", callback_data="admin_edit")],  # ✅ новая кнопка
+        [InlineKeyboardButton(text="✏ Изменить расписание", callback_data="admin_edit")],
         [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
+        # Новые кнопки
+        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
+        [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")],
+        [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
+        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
+        [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+
+@dp.callback_query(F.data == "admin_add_lesson")
+async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+    # Показываем клавиатуру с предметами, если у тебя есть список постоянных
+    lesson_buttons = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=lesson, callback_data=f"addlesson_{lesson}")] for lesson in ["Математика", "История", "Физика"]
+    ])
+    await greet_and_send(callback.from_user, "Выберите предмет:", callback=callback, markup=lesson_buttons)
+
+
+@dp.callback_query(F.data.startswith("addlesson_"))
+async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
+    lesson = callback.data[len("addlesson_"):]
+    await state.update_data(lesson=lesson)
+    # Если предмет требует rK (кабинет на каждую пару)
+    if lesson.endswith("rK"):
+        # запускаем FSM для выбора кабинета
+        await greet_and_send(callback.from_user, "Сначала выберите четность недели:", callback=callback,
+                             markup=InlineKeyboardMarkup(inline_keyboard=[
+                                 [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="cab_week_1")],
+                                 [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")]
+                             ]))
+        await state.set_state(SetCabinetState.week_type)
+    else:
+        # иначе сразу можно добавить урок с указанным кабинетом
+        await greet_and_send(callback.from_user, f"Урок '{lesson}' добавлен с кабинетом по умолчанию.", callback=callback)
+        await state.clear()
+
+
+@dp.callback_query(F.data == "admin_set_cabinet")
+async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+    await greet_and_send(callback.from_user, "Выберите четность недели (1 - нечетная, 2 - четная):", callback=callback)
+    await state.set_state(SetCabinetState.week_type)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_clear_pair")
+async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+    await greet_and_send(callback.from_user, "Выберите четность недели (1 - нечетная, 2 - четная):", callback=callback)
+    await state.set_state(ClearPairState.week_type)
+    await callback.answer()
+
 
 
 @dp.callback_query(F.data == "admin_my_publish_time")
@@ -324,6 +383,19 @@ class EditRaspState(StatesGroup):
     day = State()
     week_type = State()
     text = State()
+
+    class AddLessonState(StatesGroup):
+    lesson = State()
+    default_cabinet = State()  # если сразу задаем кабинет
+
+class SetCabinetState(StatesGroup):
+    week_type = State()
+    day = State()
+    lesson = State()
+    cabinet = State()
+    pair_num = State()
+
+
 
 @dp.callback_query(F.data == "admin_edit")
 async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
