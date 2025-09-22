@@ -322,6 +322,7 @@ def admin_menu():
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
         [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
+        [InlineKeyboardButton(text="🗑 Удалить урок", callback_data="admin_delete_subject")],
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
