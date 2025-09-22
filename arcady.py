@@ -2,7 +2,7 @@ import asyncio
 import os
 import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -777,20 +777,36 @@ async def send_today_rasp():
 
 
 
+
+
 async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
 
-    # 🔹 Устанавливаем команды в меню
-    await bot.set_my_commands([
-        BotCommand(command="Аркадий", description="Открыть меню бота")
-    ])
+    # 🔹 Команды для всех чатов (по умолчанию)
+    await bot.set_my_commands(
+        [BotCommand(command="Аркадий", description="Открыть меню бота")],
+        scope=BotCommandScopeDefault()
+    )
+
+    # 🔹 Дополнительно для всех ЛС
+    await bot.set_my_commands(
+        [BotCommand(command="Аркадий", description="Открыть меню бота")],
+        scope=BotCommandScopeAllPrivateChats()
+    )
+
+    # 🔹 Дополнительно для всех групп
+    await bot.set_my_commands(
+        [BotCommand(command="Аркадий", description="Открыть меню бота")],
+        scope=BotCommandScopeAllGroupChats()
+    )
 
     scheduler.start()
     await reschedule_publish_jobs(pool)
     await dp.start_polling(bot)
+
 
 
 if __name__ == "__main__":
