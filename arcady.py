@@ -330,30 +330,6 @@ def admin_menu():
     return kb
 
 
-# --- добавление урока (новая система) ---
-@dp.callback_query(F.data == "admin_add_lesson")
-async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id, callback.message.chat.type):
-        await callback.answer("⛔ Только админам!", show_alert=True)
-        return
-
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT name, rK FROM subjects")
-            subjects = await cur.fetchall()
-
-    buttons = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")] 
-            for subj in subjects
-        ]
-    )
-    await callback.message.edit_text("Выберите предмет:", reply_markup=buttons)
-    await state.set_state(AddLessonState.subject)
-
-
-
-
 # --- обработчик кнопки удаления предмета ---
 @dp.callback_query(F.data == "admin_delete_subject")
 async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMContext):
@@ -413,7 +389,7 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
 
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT name, rK FROM subjects")
+            await cur.execute("SELECT name, rK, cabinet FROM subjects")
             subjects = await cur.fetchall()
 
     buttons = InlineKeyboardMarkup(
@@ -426,62 +402,97 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(AddLessonState.subject)
 
 
-# --- выбор предмета для добавления пары ---
 @dp.callback_query(F.data.startswith("choose_subject_"))
 async def choose_subject_callback(callback: types.CallbackQuery, state: FSMContext):
     subject_name = callback.data[len("choose_subject_"):]
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT id, rK FROM subjects WHERE name=%s", (subject_name,))
-            subject_data = await cur.fetchone()
-            if not subject_data:
-                await callback.message.answer("⚠ Предмет не найден.")
-                return
+            await cur.execute("SELECT id, rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
+            subject = await cur.fetchone()
 
-            await state.update_data(subject_name=subject_name, subject_id=subject_data["id"], rK=subject_data["rK"])
-            # Выбор дня
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
-            )
-            await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
-            await state.set_state(AddLessonState.day)
+    if not subject:
+        await callback.message.answer("⚠ Предмет не найден.")
+        return
 
-# --- выбор дня ---
+    await state.update_data(
+        subject_id=subject["id"],
+        subject_name=subject_name,
+        rK=subject["rK"],
+        default_cabinet=subject["cabinet"] or None
+    )
+
+    # Спрашиваем четность недели
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="0️⃣ Любая", callback_data="week_0")],
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
+    ])
+    await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
+    await state.set_state(AddLessonState.week_type)
+
+
+@dp.callback_query(F.data.startswith("week_"))
+async def choose_week(callback: types.CallbackQuery, state: FSMContext):
+    week_type = int(callback.data[-1])
+    await state.update_data(week_type=week_type)
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
+    )
+    await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
+    await state.set_state(AddLessonState.day)
+
+
 @dp.callback_query(F.data.startswith("day_"))
 async def choose_day(callback: types.CallbackQuery, state: FSMContext):
     day = int(callback.data[len("day_"):])
     await state.update_data(day=day)
+
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")] for i in range(1, 7)]
     )
     await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
     await state.set_state(AddLessonState.pair_number)
 
-# --- выбор пары ---
+
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
     await state.update_data(pair_number=pair_number)
-    await callback.message.edit_text("Введите кабинет для этой пары:")
-    await state.set_state(AddLessonState.cabinet)
 
-# --- установка кабинета и сохранение пары ---
+    data = await state.get_data()
+    if data.get("rK"):  # если rK=True, спрашиваем кабинет для пары
+        await callback.message.edit_text("Введите кабинет для этой пары:")
+        await state.set_state(AddLessonState.cabinet)
+    else:  # используем кабинет по умолчанию
+        await save_lesson_from_state(data, data.get("default_cabinet"))
+        await callback.message.answer(
+            f"✅ Урок '{data['subject_name']}' добавлен на {DAYS[data['day']-1]}, "
+            f"пара {pair_number}, кабинет {data.get('default_cabinet', 'не указан')}"
+        )
+        await state.clear()
+
+
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""INSERT INTO rasp_detailed 
-                (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                VALUES (%s, %s, %s, %s, %s, %s)""",
-                (DEFAULT_CHAT_ID, data["day"], data.get("week_type", 0), data["pair_number"], data["subject_id"], cabinet)
-            )
+    await save_lesson_from_state(data, cabinet)
     await message.answer(
         f"✅ Урок '{data['subject_name']}' добавлен на {DAYS[data['day']-1]}, "
         f"пара {data['pair_number']}, кабинет {cabinet}"
     )
     await state.clear()
+
+
+async def save_lesson_from_state(data, cabinet):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], data["subject_id"], cabinet))
+
 
 @dp.callback_query(F.data == "admin_clear_pair")
 async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
