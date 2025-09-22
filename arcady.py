@@ -359,7 +359,8 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(subject=subject_name, rK=rK_flag)
 
-    if rK_flag:  # если rK=True, нужно выбрать кабинет
+    # Если rK=True, нужно выбрать день, неделю, пару, кабинет
+    if rK_flag:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
             [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
@@ -367,17 +368,12 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
         await state.set_state(AddLessonState.week_type)
     else:
-        # для обычного предмета с фиксированным кабинетом можно сразу добавить урок
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
-                subject_id = (await cur.fetchone())[0]
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (DEFAULT_CHAT_ID, 0, 0, 0, subject_id, "по умолчанию"))
-        await callback.message.answer(f"✅ Урок '{subject_name}' добавлен с кабинетом по умолчанию.")
-        await state.clear()
+        # Запускаем FSM даже для фиксированного кабинета, чтобы выбрать день и пару
+        kb_days = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
+        )
+        await callback.message.edit_text("Выберите день недели:", reply_markup=kb_days)
+        await state.set_state(AddLessonState.day)
 
 
 @dp.callback_query(F.data.startswith("week_"))
@@ -652,7 +648,7 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
 
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
