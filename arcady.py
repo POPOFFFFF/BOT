@@ -1075,24 +1075,34 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
 
 async def send_today_rasp():
-    """Автопубликация расписания на сегодня (или понедельник, если воскресенье)"""
+    """Автопубликация расписания. После 18:00 публикует на завтра."""
     now = datetime.datetime.now(TZ)
+    hour = now.hour
     day = now.isoweekday()
 
-    if day == 7:  # воскресенье
-        day_to_post = 1  # понедельник
+    if hour >= 18:
+        # После 18:00 публикуем на следующий день
         target_date = now.date() + datetime.timedelta(days=1)
-        day_name = "завтра (Понедельник)"
+        day_to_post = target_date.isoweekday()
+        if day_to_post == 7:  # Воскресенье → понедельник
+            day_to_post = 1
+        day_name = "завтра"
     else:
-        day_to_post = day
+        # До 18:00 публикуем на сегодня
         target_date = now.date()
+        day_to_post = day
         day_name = "сегодня"
+        if day_to_post == 7:  # Воскресенье → понедельник
+            day_to_post = 1
+            target_date += datetime.timedelta(days=1)
+            day_name = "завтра (Понедельник)"
 
     week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
     text = await get_rasp_formatted(day_to_post, week_type)
 
     msg = f"📌 Расписание на {day_name}:\n\n{text}"
     await bot.send_message(DEFAULT_CHAT_ID, msg)
+
     
 async def main():
     global pool
