@@ -611,7 +611,7 @@ ANEKDOTY = [
 
 
 
-@dp.message(Command("аркаша_анекдот"))
+@dp.message(Command("/анекдот"))
 async def cmd_anekdot(message: types.Message):
     joke = random.choice(ANEKDOTY)
     await message.answer(f"😂 Анекдот:\n\n{joke}")
