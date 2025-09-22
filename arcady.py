@@ -45,6 +45,48 @@ async def get_pool():
         autocommit=True
     )
 
+
+    # --- состояния FSM ---
+class AddRaspState(StatesGroup):
+    day = State()
+    week_type = State()
+    text = State()
+
+class ClearRaspState(StatesGroup):
+    day = State()
+
+class SetChetState(StatesGroup):
+    week_type = State()
+
+class SetPublishTimeState(StatesGroup):
+    time = State()  
+
+class EditRaspState(StatesGroup):
+    day = State()
+    week_type = State()
+    text = State()
+
+class AddLessonState(StatesGroup):
+    subject = State()
+    week_type = State()
+    day = State()
+    pair_number = State()
+    cabinet = State()
+
+class SetCabinetState(StatesGroup):
+    week_type = State()
+    day = State()
+    subject = State()
+    pair_number = State()
+    cabinet = State()
+
+class ClearPairState(StatesGroup):
+    week_type = State()
+    day = State()
+    pair_number = State()
+
+
+
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -422,39 +464,6 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
 
     await greet_and_send(callback.from_user, msg, callback=callback)
     await callback.answer()
-
-class AddRaspState(StatesGroup):
-    day = State()
-    week_type = State()
-    text = State()
-
-class ClearRaspState(StatesGroup):
-    day = State()
-
-class SetChetState(StatesGroup):
-    week_type = State()
-
-class SetPublishTimeState(StatesGroup):
-    time = State()  
-
-class EditRaspState(StatesGroup):
-    day = State()
-    week_type = State()
-    text = State()
-
-class AddLessonState(StatesGroup):
-    subject = State()
-    week_type = State()
-    day = State()
-    pair_number = State()
-    cabinet = State()
-
-class SetCabinetState(StatesGroup):
-    week_type = State()
-    day = State()
-    lesson = State()
-    cabinet = State()
-    pair_num = State()
 
 
 
