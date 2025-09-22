@@ -78,6 +78,13 @@ async def init_db(pool):
                 minute INT NOT NULL
             )
             """)
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS anekdoty (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                text TEXT NOT NULL
+            )
+            """)
+
 
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
