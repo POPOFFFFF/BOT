@@ -354,26 +354,17 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
     subject_name = callback.data[len("choose_subject_"):]
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT rK FROM subjects WHERE name=%s", (subject_name,))
-            rK_flag = (await cur.fetchone())[0]
+            await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
+            rK_flag, cabinet = await cur.fetchone()
 
-    await state.update_data(subject=subject_name, rK=rK_flag)
+    await state.update_data(subject=subject_name, rK=rK_flag, cabinet=cabinet)
 
-    # Если rK=True, нужно выбрать день, неделю, пару, кабинет
-    if rK_flag:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-            [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
-        ])
-        await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
-        await state.set_state(AddLessonState.week_type)
-    else:
-        # Запускаем FSM даже для фиксированного кабинета, чтобы выбрать день и пару
-        kb_days = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
-        )
-        await callback.message.edit_text("Выберите день недели:", reply_markup=kb_days)
-        await state.set_state(AddLessonState.day)
+    # FSM должен спросить день и пару
+    kb_days = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
+    )
+    await callback.message.edit_text("Выберите день недели:", reply_markup=kb_days)
+    await state.set_state(AddLessonState.day)
 
 
 @dp.callback_query(F.data.startswith("week_"))
