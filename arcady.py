@@ -357,14 +357,17 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
             await cur.execute("SELECT rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
             rK_flag, cabinet = await cur.fetchone()
 
-    await state.update_data(subject=subject_name, rK=rK_flag, cabinet=cabinet)
+    # Если предмет без rK, сразу задаём week_type = 0 (любая неделя)
+    week_type = 0 if not rK_flag else None
 
-    # FSM должен спросить день и пару
+    await state.update_data(subject=subject_name, rK=rK_flag, cabinet=cabinet, week_type=week_type)
+
     kb_days = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
     )
     await callback.message.edit_text("Выберите день недели:", reply_markup=kb_days)
     await state.set_state(AddLessonState.day)
+
 
 
 @dp.callback_query(F.data.startswith("week_"))
@@ -398,18 +401,25 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
+
+    # Если week_type ещё None, задаём по умолчанию 0
+    week_type = data.get("week_type", 0)
+
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # получаем id предмета
             await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
             subject_id = (await cur.fetchone())[0]
-            # вставляем в rasp_detailed
             await cur.execute("""
                 INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
-    await message.answer(f"✅ Урок '{data['subject']}' добавлен на {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}")
+            """, (DEFAULT_CHAT_ID, data["day"], week_type, data["pair_number"], subject_id, cabinet))
+
+    await message.answer(
+        f"✅ Урок '{data['subject']}' добавлен на {DAYS[data['day']-1]}, "
+        f"пара {data['pair_number']}, кабинет {cabinet}"
+    )
     await state.clear()
+
 
 @dp.callback_query(F.data.startswith("addlesson_"))
 async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
