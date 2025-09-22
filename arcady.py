@@ -448,7 +448,7 @@ async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SetCabinetState.pair_number)
     await callback.answer()
 
-    @dp.callback_query(F.data.startswith("cab_pair_"))
+@dp.callback_query(F.data.startswith("cab_pair_"))
 async def set_cab_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("cab_pair_"):])
     await state.update_data(pair_number=pair_number)
