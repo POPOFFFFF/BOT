@@ -277,16 +277,13 @@ def admin_menu():
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
-        # Новые кнопки
-        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
-        [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")],
         [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
 
 
 @dp.callback_query(F.data == "admin_add_lesson")
@@ -598,11 +595,11 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
     elif action == "menu_admin":
         if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-            await callback.answer("⛔ Админка доступна только в личных сообщениях админам", show_alert=True)
+            await callback.answer("⛔ Админка доступна только в ЛС админам", show_alert=True)
             return
-
         await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
         await callback.answer()
+
 
     elif action == "menu_back":
         try:
