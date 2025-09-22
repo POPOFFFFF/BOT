@@ -2,7 +2,6 @@ import asyncio
 import os
 import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -409,7 +408,7 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy"]
 
 @dp.message()
 async def trigger_handler(message: types.Message):
@@ -785,26 +784,9 @@ async def main():
     await init_db(pool)
     await ensure_columns(pool)
 
-    # 🔹 Команды для всех чатов (по умолчанию)
-    await bot.set_my_commands(
-        [BotCommand(command="Аркадий", description="Открыть меню бота")],
-        scope=BotCommandScopeDefault()
-    )
-
-    # 🔹 Дополнительно для всех ЛС
-    await bot.set_my_commands(
-        [BotCommand(command="Аркадий", description="Открыть меню бота")],
-        scope=BotCommandScopeAllPrivateChats()
-    )
-
-    # 🔹 Дополнительно для всех групп
-    await bot.set_my_commands(
-        [BotCommand(command="Аркадий", description="Открыть меню бота")],
-        scope=BotCommandScopeAllGroupChats()
-    )
-
     scheduler.start()
-    await reschedule_publish_jobs(pool)
+    await reschedule_publish_jobs(pool)   # 🔹 вот этого не хватает!
+
     await dp.start_polling(bot)
 
 
