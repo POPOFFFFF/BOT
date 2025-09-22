@@ -555,6 +555,7 @@ async def on_rasp_show(callback: types.CallbackQuery):
     if len(parts) < 4:
         await callback.answer("Неверные данные", show_alert=True)
         return
+
     try:
         day = int(parts[2])
         week_type = int(parts[3])
@@ -563,13 +564,21 @@ async def on_rasp_show(callback: types.CallbackQuery):
         return
 
     text = await get_rasp_for_day(pool, DEFAULT_CHAT_ID, day, week_type)
-    if not text:
 
+    if not text:
         await callback.answer("ℹ На этот день нет расписания", show_alert=True)
         await greet_and_send(callback.from_user, "На этот день нет расписания", callback=callback)
     else:
-        await greet_and_send(callback.from_user, format_rasp_message(day, week_type, text), callback=callback)
+        # Вставляем анекдот при показе расписания
+        await greet_and_send(
+            callback.from_user,
+            format_rasp_message(day, week_type, text),
+            callback=callback,
+            include_joke=True  # 🔹 ключевой параметр
+        )
+
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
@@ -577,13 +586,24 @@ async def zvonki_handler(callback: types.CallbackQuery):
 
     if action == "zvonki_weekday":
         schedule = get_zvonki(is_saturday=False)
-        await greet_and_send(callback.from_user, f"📌 Расписание звонков (будние дни):\n{schedule}", callback=callback)
+        await greet_and_send(
+            callback.from_user,
+            f"📌 Расписание звонков (будние дни):\n{schedule}",
+            callback=callback,
+            include_joke=True  # 🔹 добавляем анекдот
+        )
 
     elif action == "zvonki_saturday":
         schedule = get_zvonki(is_saturday=True)
-        await greet_and_send(callback.from_user, f"📌 Расписание звонков (суббота):\n{schedule}", callback=callback)
+        await greet_and_send(
+            callback.from_user,
+            f"📌 Расписание звонков (суббота):\n{schedule}",
+            callback=callback,
+            include_joke=True  # 🔹 добавляем анекдот
+        )
 
     await callback.answer()
+
 
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
