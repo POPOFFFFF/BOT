@@ -84,6 +84,7 @@ async def init_db(pool):
                 text TEXT NOT NULL
             )
             """)
+            await conn.commit()
 
 
 async def ensure_columns(pool):
@@ -1295,11 +1296,13 @@ async def main():
     await init_db(pool)
     await ensure_columns(pool)
 
+    # 🔹 добавляем анекдоты после создания таблиц
+    await init_anekdoty(pool, ANEKDOTY)
+
     scheduler.start()
     await reschedule_publish_jobs(pool)   # 🔹 вот этого не хватает!
 
     await dp.start_polling(bot)
-await init_anekdoty(pool, ANEKDOTY)
 
 
 if __name__ == "__main__":
