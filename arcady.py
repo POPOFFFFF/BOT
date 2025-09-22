@@ -261,7 +261,6 @@ ZVONKI_SATURDAY = [
     "6 пара: 1-2 урок 17:05-18:50"
 ]
 
-
 class AddRaspState(StatesGroup):
     day = State()
     week_type = State()
@@ -294,6 +293,7 @@ class SetCabinetState(StatesGroup):
     lesson = State()
     cabinet = State()
     pair_num = State()
+
 
 
 def get_zvonki(is_saturday: bool):
