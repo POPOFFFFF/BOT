@@ -304,9 +304,6 @@ def main_menu(is_admin=False):
 
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
-        [InlineKeyboardButton(text="✏ Изменить расписание", callback_data="admin_edit")],
-        [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
@@ -418,10 +415,64 @@ async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMConte
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-    await greet_and_send(callback.from_user, "Выберите четность недели (1 - нечетная, 2 - четная):", callback=callback)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="cab_week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")]
+    ])
+    await greet_and_send(callback.from_user, "Выберите четность недели:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.week_type)
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("cab_week_"))
+async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
+    week_type = int(callback.data[-1])
+    await state.update_data(week_type=week_type)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=day, callback_data=f"cab_day_{i+1}")] 
+        for i, day in enumerate(DAYS)
+    ])
+    await greet_and_send(callback.from_user, "Выберите день недели:", callback=callback, markup=kb)
+    await state.set_state(SetCabinetState.day)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("cab_day_"))
+async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
+    day = int(callback.data[len("cab_day_"):])
+    await state.update_data(day=day)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=str(i), callback_data=f"cab_pair_{i}")] for i in range(1, 7)
+    ])
+    await greet_and_send(callback.from_user, "Выберите номер пары:", callback=callback, markup=kb)
+    await state.set_state(SetCabinetState.pair_number)
+    await callback.answer()
+
+    @dp.callback_query(F.data.startswith("cab_pair_"))
+async def set_cab_pair(callback: types.CallbackQuery, state: FSMContext):
+    pair_number = int(callback.data[len("cab_pair_"):])
+    await state.update_data(pair_number=pair_number)
+    
+    await greet_and_send(callback.from_user, "Введите номер кабинета для этой пары:", callback=callback)
+    await state.set_state(SetCabinetState.cabinet)
+    await callback.answer()
+
+async def set_cabinet_final(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    cabinet = message.text.strip()
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Получаем id предмета для пары (или оставляем NULL)
+            subject_id = None
+            await cur.execute("""
+                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, cabinet, subject_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE cabinet=%s
+            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], cabinet, subject_id, cabinet))
+    
+    await message.answer(f"✅ Кабинет установлен: день {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}")
+    await state.clear()
 
 @dp.callback_query(F.data == "admin_clear_pair")
 async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
@@ -623,7 +674,7 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
 
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
