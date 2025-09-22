@@ -435,6 +435,20 @@ async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
     await greet_and_send(callback.from_user, "Выберите день недели:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.day)
     await callback.answer()
+# --- Шаг 4: ввод кабинета ---
+@dp.callback_query(F.data.startswith("cab_pair_"))
+async def set_cab_pair(callback: types.CallbackQuery, state: FSMContext):
+    pair_number = int(callback.data[len("cab_pair_"):])
+    await state.update_data(pair_number=pair_number)
+
+    # Просим пользователя ввести кабинет как сообщение
+    await greet_and_send(callback.from_user, "Введите номер кабинета для этой пары (например: 301):", callback=callback)
+    
+    # Устанавливаем состояние ожидания текста
+    await state.set_state(SetCabinetState.cabinet)
+    await callback.answer()
+
+
 
 @dp.callback_query(F.data.startswith("cab_day_"))
 async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
@@ -448,6 +462,7 @@ async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SetCabinetState.pair_number)
     await callback.answer()
 
+# --- Шаг 5: сохранение кабинета ---
 @dp.message(SetCabinetState.cabinet)
 async def set_cabinet_final(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -455,7 +470,7 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
 
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Проверяем, есть ли запись для этого дня, недели и пары
+            # Проверяем существующую пару
             await cur.execute("""
                 SELECT id FROM rasp_detailed
                 WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
@@ -463,24 +478,22 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
             row = await cur.fetchone()
 
             if row:
-                # Если запись есть — обновляем кабинет
                 await cur.execute("""
                     UPDATE rasp_detailed
                     SET cabinet=%s
                     WHERE id=%s
                 """, (cabinet, row[0]))
             else:
-                # Если нет — создаем новую запись
                 await cur.execute("""
                     INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, cabinet)
                     VALUES (%s, %s, %s, %s, %s)
                 """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], cabinet))
 
-    # Используем greet_and_send для уведомления
     await greet_and_send(message.from_user,
                          f"✅ Кабинет установлен: день {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}",
                          message=message)
     await state.clear()
+
 
 
 @dp.callback_query(F.data == "admin_clear_pair")
