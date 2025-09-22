@@ -1,3 +1,9 @@
+[6bb8642641a5] [22.09.2025 23:05:53] Traceback (most recent call last):
+[6bb8642641a5] [22.09.2025 23:05:53] File "/app/arcady.py", line 345, in <module>
+[6bb8642641a5] [22.09.2025 23:05:53] @dp.message(AddLessonState.cabinet)
+[6bb8642641a5] [22.09.2025 23:05:53] ^^^^^^^^^^^^^^
+[6bb8642641a5] [22.09.2025 23:05:53] NameError: name 'AddLessonState' is not defined
+
 import asyncio
 import os
 import datetime
@@ -45,122 +51,59 @@ async def get_pool():
         autocommit=True
     )
 
-
-    # --- состояния FSM ---
-class AddRaspState(StatesGroup):
-    day = State()
-    week_type = State()
-    text = State()
-
-class ClearRaspState(StatesGroup):
-    day = State()
-
-class SetChetState(StatesGroup):
-    week_type = State()
-
-class SetPublishTimeState(StatesGroup):
-    time = State()  
-
-class EditRaspState(StatesGroup):
-    day = State()
-    week_type = State()
-    text = State()
-
-class AddLessonState(StatesGroup):
-    subject = State()
-    week_type = State()
-    day = State()
-    pair_number = State()
-    cabinet = State()
-
-class SetCabinetState(StatesGroup):
-    week_type = State()
-    day = State()
-    subject = State()
-    pair_number = State()
-    cabinet = State()
-
-class ClearPairState(StatesGroup):
-    week_type = State()
-    day = State()
-    pair_number = State()
-
-
-
 async def init_db(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Таблица для старого простого расписания (если нужно)
+            # Существующие таблицы
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS rasp (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    chat_id BIGINT,
-                    day INT,
-                    week_type INT,
-                    text TEXT
-                )
-            """)
-
-            # Таблица настройки недели
+            CREATE TABLE IF NOT EXISTS rasp (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                day INT,
+                week_type INT,
+                text TEXT
+            )""")
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS week_setting (
-                    chat_id BIGINT PRIMARY KEY,
-                    week_type INT,
-                    set_at DATE
-                )
-            """)
-
-            # Таблица никнеймов
+            CREATE TABLE IF NOT EXISTS week_setting (
+                chat_id BIGINT PRIMARY KEY,
+                week_type INT,
+                set_at DATE
+            )""")
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS nicknames (
-                    user_id BIGINT PRIMARY KEY,
-                    nickname VARCHAR(255)
-                )
-            """)
-
-            # Таблица времени публикаций
+            CREATE TABLE IF NOT EXISTS nicknames (
+                user_id BIGINT PRIMARY KEY,
+                nickname VARCHAR(255)
+            )""")
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS publish_times (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    hour INT NOT NULL,
-                    minute INT NOT NULL
-                )
-            """)
-
-            # Таблица анекдотов
+            CREATE TABLE IF NOT EXISTS publish_times (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                hour INT NOT NULL,
+                minute INT NOT NULL
+            )""")
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS anekdoty (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    text TEXT NOT NULL
-                )
-            """)
-
-            # Новая таблица предметов
+            CREATE TABLE IF NOT EXISTS anekdoty (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                text TEXT NOT NULL
+            )""")
+            # Новые таблицы
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS subjects (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    rK BOOLEAN DEFAULT FALSE
-                )
-            """)
-
-            # Новая таблица детализированного расписания
+            CREATE TABLE IF NOT EXISTS subjects (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                rK BOOLEAN DEFAULT FALSE
+            )""")
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS rasp_detailed (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    chat_id BIGINT,
-                    day INT,
-                    week_type INT,
-                    pair_number INT,
-                    subject_id INT,
-                    cabinet VARCHAR(50),
-                    FOREIGN KEY (subject_id) REFERENCES subjects(id)
-                        ON DELETE CASCADE
-                )
-            """)
-
+            CREATE TABLE IF NOT EXISTS rasp_detailed (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                day INT,
+                week_type INT,
+                pair_number INT,
+                subject_id INT,
+                cabinet VARCHAR(50),
+                FOREIGN KEY (subject_id) REFERENCES subjects(id)
+            )""")
             await conn.commit()
-
 
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
@@ -318,9 +261,39 @@ ZVONKI_SATURDAY = [
     "6 пара: 1-2 урок 17:05-18:50"
 ]
 
-# --- проверка, что пользователь админ ---
-def is_admin(user_id: int, chat_type: str) -> bool:
-    return user_id in ALLOWED_USERS and chat_type == "private"
+
+class AddRaspState(StatesGroup):
+    day = State()
+    week_type = State()
+    text = State()
+
+class ClearRaspState(StatesGroup):
+    day = State()
+
+class SetChetState(StatesGroup):
+    week_type = State()
+
+class SetPublishTimeState(StatesGroup):
+    time = State()  
+
+class EditRaspState(StatesGroup):
+    day = State()
+    week_type = State()
+    text = State()
+
+class AddLessonState(StatesGroup):
+    subject = State()
+    week_type = State()
+    day = State()
+    pair_number = State()
+    cabinet = State()
+
+class SetCabinetState(StatesGroup):
+    week_type = State()
+    day = State()
+    lesson = State()
+    cabinet = State()
+    pair_num = State()
 
 
 def get_zvonki(is_saturday: bool):
@@ -337,13 +310,15 @@ def main_menu(is_admin=False):
 
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить расписание", callback_data="admin_add")],
+        [InlineKeyboardButton(text="✏ Изменить расписание", callback_data="admin_edit")],
+        [InlineKeyboardButton(text="🗑 Очистить расписание", callback_data="admin_clear")],
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
         [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
-        [InlineKeyboardButton(text="🗑 Удалить урок", callback_data="admin_delete_subject")],
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
@@ -351,68 +326,16 @@ def admin_menu():
     return kb
 
 
-# --- обработчик кнопки удаления предмета ---
-@dp.callback_query(F.data == "admin_delete_subject")
-async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id, callback.message.chat.type):
-        await callback.answer("⛔ Только админам!", show_alert=True)
-        return
-
-    # Получаем список предметов
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT id, name FROM subjects ORDER BY name")
-            subjects = await cur.fetchall()
-
-    if not subjects:
-        await callback.message.answer("⚠ Предметов пока нет.")
-        return
-
-    buttons = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=subj[1], callback_data=f"delete_subject_{subj[0]}")] 
-            for subj in subjects
-        ]
-    )
-    await callback.message.edit_text("Выберите предмет для удаления:", reply_markup=buttons)
-    await state.set_state(None)
-
-# --- обработчик выбора предмета для удаления ---
-@dp.callback_query(F.data.startswith("delete_subject_"))
-async def admin_delete_subject_confirm(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id, callback.message.chat.type):
-        await callback.answer("⛔ Только админам!", show_alert=True)
-        return
-
-    subject_id = int(callback.data[len("delete_subject_"):])
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            # Получаем имя для сообщения
-            await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
-            row = await cur.fetchone()
-            if not row:
-                await callback.answer("⚠ Предмет не найден", show_alert=True)
-                return
-            name = row[0]
-            # Удаляем все пары и предмет
-            await cur.execute("DELETE FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
-            await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
-            await conn.commit()
-
-    await callback.message.edit_text(f"✅ Предмет '{name}' и все его пары удалены.")
-
 
 @dp.callback_query(F.data == "admin_add_lesson")
 async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT name, rK, cabinet FROM subjects")
+            await cur.execute("SELECT name FROM subjects")
             subjects = await cur.fetchall()
-
     buttons = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")] 
@@ -422,79 +345,88 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     await callback.message.edit_text("Выберите предмет:", reply_markup=buttons)
     await state.set_state(AddLessonState.subject)
 
-
 @dp.callback_query(F.data.startswith("choose_subject_"))
-async def choose_subject_callback(callback: types.CallbackQuery, state: FSMContext):
-    subject_name = callback.data[len("choose_subject_"):]
-    async with pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT id, rK, cabinet FROM subjects WHERE name=%s", (subject_name,))
-            subject = await cur.fetchone()
-
-    if not subject:
-        await callback.message.answer("⚠ Предмет не найден.")
-        return
-
-    await state.update_data(
-        subject_id=subject["id"],
-        subject_name=subject_name,
-        rK=subject["rK"],
-        default_cabinet=subject["cabinet"] or None
-    )
-
-    # Сначала спрашиваем четность недели
+async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
+    subject = callback.data[len("choose_subject_"):]
+    await state.update_data(subject=subject)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="0️⃣ Любая", callback_data="week_0")],
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
         [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
     ])
     await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
     await state.set_state(AddLessonState.week_type)
 
+@dp.callback_query(F.data.startswith("week_"))
+async def choose_week(callback: types.CallbackQuery, state: FSMContext):
+    week_type = int(callback.data[-1])
+    await state.update_data(week_type=week_type)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
+    )
+    await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
+    await state.set_state(AddLessonState.day)
 
-# --- выбор пары ---
+@dp.callback_query(F.data.startswith("day_"))
+async def choose_day(callback: types.CallbackQuery, state: FSMContext):
+    day = int(callback.data[len("day_"):])
+    await state.update_data(day=day)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")] for i in range(1, 7)]
+    )
+    await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
+    await state.set_state(AddLessonState.pair_number)
+
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
     await state.update_data(pair_number=pair_number)
+    await callback.message.edit_text("Введите кабинет для этой пары:")
+    await state.set_state(AddLessonState.cabinet)
 
-    data = await state.get_data()
-    # Если rK включен и кабинет пустой — спрашиваем кабинет
-    if data.get("rK") and not data.get("default_cabinet"):
-        await callback.message.edit_text("Введите кабинет для этой пары:")
-        await state.set_state(AddLessonState.cabinet)
-    else:
-        cabinet_to_use = data.get("default_cabinet") or ""
-        await save_lesson_from_state(data, cabinet_to_use)
-        await callback.message.answer(
-            f"✅ Урок '{data['subject_name']}' добавлен на {DAYS[data['day']-1]}, "
-            f"пара {pair_number}, кабинет {cabinet_to_use or 'не указан'}"
-        )
-        await state.clear()
-
-
-# --- обработка ввода кабинета ---
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
-    await save_lesson_from_state(data, cabinet)
-    await message.answer(
-        f"✅ Урок '{data['subject_name']}' добавлен на {DAYS[data['day']-1]}, "
-        f"пара {data['pair_number']}, кабинет {cabinet}"
-    )
-    await state.clear()
-
-
-# --- сохранение урока ---
-async def save_lesson_from_state(data, cabinet):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+            # получаем id предмета
+            await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
+            subject_id = (await cur.fetchone())[0]
+            # вставляем в rasp_detailed
             await cur.execute("""
                 INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], data["subject_id"], cabinet))
+            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
+    await message.answer(f"✅ Урок '{data['subject']}' добавлен на {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}")
+    await state.clear()
 
+@dp.callback_query(F.data.startswith("addlesson_"))
+async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
+    lesson = callback.data[len("addlesson_"):]
+    await state.update_data(lesson=lesson)
+    # Если предмет требует rK (кабинет на каждую пару)
+    if lesson.endswith("rK"):
+        # запускаем FSM для выбора кабинета
+        await greet_and_send(callback.from_user, "Сначала выберите четность недели:", callback=callback,
+                             markup=InlineKeyboardMarkup(inline_keyboard=[
+                                 [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="cab_week_1")],
+                                 [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")]
+                             ]))
+        await state.set_state(SetCabinetState.week_type)
+    else:
+        # иначе сразу можно добавить урок с указанным кабинетом
+        await greet_and_send(callback.from_user, f"Урок '{lesson}' добавлен с кабинетом по умолчанию.", callback=callback)
+        await state.clear()
+
+
+@dp.callback_query(F.data == "admin_set_cabinet")
+async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+    await greet_and_send(callback.from_user, "Выберите четность недели (1 - нечетная, 2 - четная):", callback=callback)
+    await state.set_state(SetCabinetState.week_type)
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "admin_clear_pair")
@@ -531,6 +463,7 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
 
     await greet_and_send(callback.from_user, msg, callback=callback)
     await callback.answer()
+
 
 
 
@@ -625,15 +558,15 @@ async def get_rasp_formatted(day, week_type):
     msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("""
-                SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
-                FROM rasp_detailed r
-                LEFT JOIN subjects s ON r.subject_id = s.id
-                WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
-                ORDER BY r.pair_number
-            """, (DEFAULT_CHAT_ID, day, week_type))
+            await cur.execute(
+                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
+                   FROM rasp_detailed r
+                   LEFT JOIN subjects s ON r.subject_id = s.id
+                   WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
+                   ORDER BY r.pair_number""",
+                (DEFAULT_CHAT_ID, day, week_type)
+            )
             rows = await cur.fetchall()
-
     for i in range(1, 7):
         row = next((r for r in rows if r[0] == i), None)
         if row:
@@ -643,26 +576,19 @@ async def get_rasp_formatted(day, week_type):
             msg_lines.append(f"{i}. Свободно")
     return "\n".join(msg_lines)
 
-
 @dp.message(Command("addu"))
 async def cmd_addu(message: types.Message):
     parts = message.text.split(maxsplit=2)
     if len(parts) < 2:
-        await message.answer("⚠ Использование: /addu <название предмета> [rK]")
+        await message.answer("⚠ Использование: /addu <название предмета> [rK или кабинет]")
         return
     name = parts[1]
-    rK_flag = (len(parts) == 3 and parts[2] == "rK")
-
+    param = parts[2] if len(parts) == 3 else None
+    rK_flag = param == "rK"
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                "INSERT INTO subjects (name, rK) VALUES (%s, %s)",
-                (name, rK_flag)
-            )
-
-    await message.answer(
-        f"✅ Предмет '{name}' добавлен " + ("с rK" if rK_flag else "")
-    )
+            await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (name, rK_flag))
+    await message.answer(f"✅ Предмет '{name}' добавлен {'с rK' if rK_flag else f'с кабинетом {param}'}")
 
 class SetCabinetState(StatesGroup):
     week_type = State()
@@ -703,7 +629,7 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot"]
 
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
