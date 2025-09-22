@@ -408,7 +408,7 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot"]
 
 @dp.message()
 async def trigger_handler(message: types.Message):
