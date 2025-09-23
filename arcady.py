@@ -99,27 +99,13 @@ async def init_db(pool):
             )""")
             await conn.commit()
 
-# ЗАМЕНИТЬ / ДОБАВИТЬ: ensure_columns
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # week_setting.set_at (как у тебя было)
             await cur.execute("SHOW COLUMNS FROM week_setting LIKE 'set_at'")
             row = await cur.fetchone()
             if not row:
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
-
-            # rasp_detailed.group_number — добавим, если нет
-            # (MySQL: SHOW COLUMNS ... LIKE ...)
-            await cur.execute("SHOW TABLES LIKE 'rasp_detailed'")
-            if await cur.fetchone():
-                await cur.execute("SHOW COLUMNS FROM rasp_detailed LIKE 'group_number'")
-                row = await cur.fetchone()
-                if not row:
-                    await cur.execute("ALTER TABLE rasp_detailed ADD COLUMN group_number INT DEFAULT NULL")
-
-            await conn.commit()
-
 
 async def set_nickname(pool, user_id: int, nickname: str):
     async with pool.acquire() as conn:
@@ -277,12 +263,6 @@ class AddRaspState(StatesGroup):
 class ClearRaspState(StatesGroup):
     day = State()
 
-class ClearPairState(StatesGroup):
-    week_type = State()
-    day = State()
-    pair_number = State()
-
-
 class SetChetState(StatesGroup):
     week_type = State()
 
@@ -322,7 +302,6 @@ def main_menu(is_admin=False):
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ЗАМЕНИТЬ: admin_menu()
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
@@ -331,7 +310,6 @@ def admin_menu():
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
         [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
-        [InlineKeyboardButton(text="➗ Разделить пару", callback_data="admin_split_pair")],  # <- новая кнопка
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
@@ -340,58 +318,23 @@ def admin_menu():
 
 
 
-
-# ЗАМЕНИТЬ: admin_add_lesson_start (или добавить, если его нет)
 @dp.callback_query(F.data == "admin_add_lesson")
 async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-
-    # Пометить, что это обычное добавление
-    await state.update_data(add_type="single")
-
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT name FROM subjects")
             subjects = await cur.fetchall()
-
     buttons = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")]
+            [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")] 
             for subj in subjects
         ]
     )
     await callback.message.edit_text("Выберите предмет:", reply_markup=buttons)
     await state.set_state(AddLessonState.subject)
-    await callback.answer()
-
-
-# ДОБАВИТЬ: admin_split_pair_start
-@dp.callback_query(F.data == "admin_split_pair")
-async def admin_split_pair_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
-        return
-
-    # Пометить, что это разделение на группы
-    await state.update_data(add_type="split")
-
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT name FROM subjects")
-            subjects = await cur.fetchall()
-
-    buttons = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")]
-            for subj in subjects
-        ]
-    )
-    await callback.message.edit_text("Выберите предмет для разделения на группы:", reply_markup=buttons)
-    await state.set_state(AddLessonState.subject)
-    await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("choose_subject_"))
 async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
@@ -431,74 +374,22 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите кабинет для этой пары:")
     await state.set_state(AddLessonState.cabinet)
 
-# ЗАМЕНИТЬ: @dp.message(AddLessonState.cabinet) handler
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    cabinet_text = message.text.strip()
-    subject_name = data.get("subject")
-    add_type = data.get("add_type", "single")
-
+    cabinet = message.text.strip()
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             # получаем id предмета
-            await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
-            row = await cur.fetchone()
-            if not row:
-                await message.answer("❌ Не найден предмет в базе.")
-                await state.clear()
-                return
-            subject_id = row[0]
-
-            if add_type == "split":
-                # Ожидаем либо "328,329", либо "328" (тогда вторая = +1 если числовой)
-                parts = [p.strip() for p in cabinet_text.split(",") if p.strip()]
-                if not parts:
-                    await message.answer("⚠ Укажите кабинеты через запятую: например '328,329' или один кабинет '328' (тогда второй будет 329).")
-                    return
-
-                cab1 = parts[0]
-                if len(parts) >= 2:
-                    cab2 = parts[1]
-                else:
-                    m = re.match(r"^(\d+)$", cab1)
-                    if m:
-                        cab2 = str(int(m.group(1)) + 1)
-                    else:
-                        # если не число — просто добавить суффикс
-                        cab2 = cab1 + "_2"
-
-                # Вставляем две записи с group_number 1 и 2
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet, group_number)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cab1, 1))
-
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet, group_number)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cab2, 2))
-
-                await conn.commit()
-
-                await message.answer(
-                    f"✅ Пара разделена:\n"
-                    f"{data['pair_number']}. {cab1} {subject_name} (1 группа)\n"
-                    f"{data['pair_number']}. {cab2} {subject_name} (2 группа)"
-                )
-
-            else:
-                # обычная одна запись, group_number = NULL
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet, group_number)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet_text, None))
-
-                await conn.commit()
-                await message.answer(f"✅ Урок '{subject_name}' добавлен на {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet_text}")
-
+            await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
+            subject_id = (await cur.fetchone())[0]
+            # вставляем в rasp_detailed
+            await cur.execute("""
+                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
+    await message.answer(f"✅ Урок '{data['subject']}' добавлен на {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}")
     await state.clear()
-
 
 @dp.callback_query(F.data.startswith("addlesson_"))
 async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
@@ -611,166 +502,14 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
 
 
 
-# ЗАМЕНИТЬ: admin_clear_pair_start (если есть) и ДОБАВИТЬ новые хендлеры для ClearPairState
-
 @dp.callback_query(F.data == "admin_clear_pair")
 async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="clearpair_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="clearpair_week_2")]
-    ])
-    await greet_and_send(callback.from_user, "Выберите четность недели для удаления пары:", callback=callback, markup=kb)
+    await greet_and_send(callback.from_user, "Выберите четность недели (1 - нечетная, 2 - четная):", callback=callback)
     await state.set_state(ClearPairState.week_type)
     await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("clearpair_week_"))
-async def clearpair_week_choice(callback: types.CallbackQuery, state: FSMContext):
-    week_type = int(callback.data.split("_")[-1])
-    await state.update_data(week_type=week_type)
-    await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
-    await state.set_state(ClearPairState.day)
-    await callback.answer()
-
-
-@dp.message(ClearPairState.day)
-async def clearpair_day_input(message: types.Message, state: FSMContext):
-    try:
-        day = int(message.text.strip())
-        if not 1 <= day <= 6:
-            raise ValueError
-        await state.update_data(day=day)
-        await greet_and_send(message.from_user, "Введите номер пары (1-6):", message=message)
-        await state.set_state(ClearPairState.pair_number)
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите число от 1 до 6.", message=message)
-
-
-@dp.message(ClearPairState.pair_number)
-async def clearpair_pair_input(message: types.Message, state: FSMContext):
-    try:
-        pair_number = int(message.text.strip())
-        if not 1 <= pair_number <= 6:
-            raise ValueError
-
-        data = await state.get_data()
-        day = data["day"]
-        week_type = data["week_type"]
-
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("""
-                    SELECT id, cabinet, subject_id, group_number
-                    FROM rasp_detailed
-                    WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
-                    ORDER BY COALESCE(group_number, 999)
-                """, (DEFAULT_CHAT_ID, day, week_type, pair_number))
-                rows = await cur.fetchall()
-
-        if not rows:
-            await greet_and_send(message.from_user, "⚠ Пара не найдена.", message=message)
-            await state.clear()
-            return
-
-        if len(rows) == 1:
-            # Одно занятие — удаляем
-            row_id = rows[0][0]
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("DELETE FROM rasp_detailed WHERE id=%s", (row_id,))
-                    await conn.commit()
-            await greet_and_send(message.from_user, f"✅ Пара {pair_number} на дне {DAYS[day-1]} удалена.", message=message)
-            await state.clear()
-            return
-
-        # Если несколько записей (в т.ч. 2 группы) — предложить варианты
-        # Ожидаем, что как минимум 2 записи → предложим кнопки "1 группа", "2 группа", "Обе"
-        # Найдём group_number'ы из rows
-        groups = [(r[0], r[3]) for r in rows]  # (id, group_number)
-        # Определим номера групп (если есть group_number). Если нет — подпишем как "общая"
-        # Сформируем кнопки:
-        kb_rows = []
-        # Если есть row с group_number == 1
-        has_g1 = any(r[3] == 1 for r in rows)
-        has_g2 = any(r[3] == 2 for r in rows)
-
-        if has_g1 and has_g2:
-            kb_rows = [
-                [InlineKeyboardButton(text="🗑 Очистить у 1 группы", callback_data=f"clearpair_exec_{day}_{week_type}_{pair_number}_1")],
-                [InlineKeyboardButton(text="🗑 Очистить у 2 группы", callback_data=f"clearpair_exec_{day}_{week_type}_{pair_number}_2")],
-                [InlineKeyboardButton(text="🗑 Очистить у обеих", callback_data=f"clearpair_exec_{day}_{week_type}_{pair_number}_all")]
-            ]
-        else:
-            # общий кейс: покажем кнопку на каждую запись + кнопку очистить все
-            for r in rows:
-                rid, gnum = r[0], r[3]
-                label = f"🗑 Очистить {'группу ' + str(gnum) if gnum else 'запись'}"
-                kb_rows.append([InlineKeyboardButton(text=label, callback_data=f"clearpair_exec_{day}_{week_type}_{pair_number}_{gnum or rid}")])
-            # добавить кнопку удалить все
-            kb_rows.append([InlineKeyboardButton(text="🗑 Очистить у обеих", callback_data=f"clearpair_exec_{day}_{week_type}_{pair_number}_all")])
-
-        kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
-        await greet_and_send(message.from_user, "Выберите вариант удаления:", message=message, markup=kb)
-        await state.clear()
-
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите номер пары (1-6).", message=message)
-
-
-@dp.callback_query(F.data.startswith("clearpair_exec_"))
-async def clearpair_exec(callback: types.CallbackQuery):
-    # формат: clearpair_exec_{day}_{week_type}_{pair_number}_{target}
-    parts = callback.data.split("_")
-    # parts = ['clearpair', 'exec', day, week_type, pair_number, target]
-    if len(parts) < 6:
-        await callback.answer("Ошибка данных.", show_alert=True)
-        return
-
-    day = int(parts[2])
-    week_type = int(parts[3])
-    pair_number = int(parts[4])
-    target = parts[5]
-
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            if target == "all":
-                await cur.execute("""
-                    DELETE FROM rasp_detailed WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
-                """, (DEFAULT_CHAT_ID, day, week_type, pair_number))
-                await conn.commit()
-                await greet_and_send(callback.from_user, f"✅ Пара {pair_number} на дне {DAYS[day-1]} удалена у обеих групп.", callback=callback)
-            else:
-                # Если target числов (group number) — удаляем по group_number
-                # Если target - id (в случаях, где мы положили id), попробуем удалить по group_number, иначе по id
-                try:
-                    gnum = int(target)
-                except Exception:
-                    gnum = None
-
-                if gnum in (1, 2):
-                    await cur.execute("""
-                        DELETE FROM rasp_detailed
-                        WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s AND group_number=%s
-                    """, (DEFAULT_CHAT_ID, day, week_type, pair_number, gnum))
-                    await conn.commit()
-                    await greet_and_send(callback.from_user, f"✅ Пара {pair_number} на дне {DAYS[day-1]} удалена у {gnum}-й группы.", callback=callback)
-                else:
-                    # возможно target — это id записи (если мы так сформировали callback)
-                    try:
-                        rid = int(target)
-                        await cur.execute("DELETE FROM rasp_detailed WHERE id=%s", (rid,))
-                        await conn.commit()
-                        await greet_and_send(callback.from_user, f"✅ Удалена запись id={rid}.", callback=callback)
-                    except Exception:
-                        await callback.answer("Невозможно удалить (неверный идентификатор).", show_alert=True)
-                        return
-
-    await callback.answer()
-
 
 
 
@@ -888,33 +627,39 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
 
 
 
-# ЗАМЕНИТЬ: get_rasp_formatted
 async def get_rasp_formatted(day, week_type):
+    """Форматирует расписание для публикации. Не выводит свободные пары после последней занятой."""
+    msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("""
-                SELECT r.pair_number, r.subject, r.teacher, r.room, r.group_number
-                FROM rasp r
-                WHERE r.day=%s AND r.week_type=%s
-                ORDER BY r.pair_number, r.group_number
-            """, (day, week_type))
+            await cur.execute(
+                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
+                   FROM rasp_detailed r
+                   LEFT JOIN subjects s ON r.subject_id = s.id
+                   WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
+                   ORDER BY r.pair_number""",
+                (DEFAULT_CHAT_ID, day, week_type)
+            )
             rows = await cur.fetchall()
 
-    if not rows:
-        return "Расписание не найдено."
+    # Найдем последнюю занятую пару
+    last_pair = 0
+    for i in range(1, 7):
+        if any(r[0] == i for r in rows):
+            last_pair = i
 
-    text = f"📅 День: {day}, Неделя: {week_type}\n\n"
+    if last_pair == 0:
+        return "Расписание пустое."
 
-    for row in rows:
-        pair_number, subject, teacher, room, group_number = row
-        if group_number == 1:
-            text += f"{pair_number}. {room} {subject} ({teacher})\n"
+    for i in range(1, last_pair + 1):
+        row = next((r for r in rows if r[0] == i), None)
+        if row:
+            cabinet_text = f"{row[1]} " if row[1] else ""
+            msg_lines.append(f"{i}. {cabinet_text}{row[2]}")
         else:
-            text += f"{pair_number}. {room} {subject} ({teacher}) [Группа {group_number}]\n"
+            msg_lines.append(f"{i}. Свободно")
 
-    return text
-
-
+    return "\n".join(msg_lines)
 
 
 @dp.message(Command("addu"))
