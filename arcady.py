@@ -890,47 +890,30 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
 
 # ЗАМЕНИТЬ: get_rasp_formatted
 async def get_rasp_formatted(day, week_type):
-    """Форматирует расписание для публикации. Поддерживает несколько записей на одну пару (группы)."""
-    msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name, r.group_number
-                   FROM rasp_detailed r
-                   LEFT JOIN subjects s ON r.subject_id = s.id
-                   WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
-                   ORDER BY r.pair_number, COALESCE(r.group_number, 999)""",
-                (DEFAULT_CHAT_ID, day, week_type)
-            )
+            await cur.execute("""
+                SELECT r.pair_number, r.subject, r.teacher, r.room, r.group_number
+                FROM rasp r
+                WHERE r.day=%s AND r.week_type=%s
+                ORDER BY r.pair_number, r.group_number
+            """, (day, week_type))
             rows = await cur.fetchall()
 
-    # Найдём последнюю занятую пару
-    last_pair = 0
-    for i in range(1, 7):
-        if any(r[0] == i for r in rows):
-            last_pair = i
+    if not rows:
+        return "Расписание не найдено."
 
-    if last_pair == 0:
-        return "Расписание пустое."
+    text = f"📅 День: {day}, Неделя: {week_type}\n\n"
 
-    for i in range(1, last_pair + 1):
-        pair_rows = [r for r in rows if r[0] == i]
-        if not pair_rows:
-            msg_lines.append(f"{i}. Свободно")
-            continue
+    for row in rows:
+        pair_number, subject, teacher, room, group_number = row
+        if group_number == 1:
+            text += f"{pair_number}. {room} {subject} ({teacher})\n"
+        else:
+            text += f"{pair_number}. {room} {subject} ({teacher}) [Группа {group_number}]\n"
 
-        # Если есть несколько записей для пары — выводим каждую на отдельной строке,
-        # при этом префикс номера пары остаётся тем же (требование ТЗ).
-        for r in pair_rows:
-            cabinet_text = f"{r[1]} " if r[1] else ""
-            subj = r[2] or ""
-            group_num = r[3]
-            if group_num is None:
-                msg_lines.append(f"{i}. {cabinet_text}{subj}")
-            else:
-                msg_lines.append(f"{i}. {cabinet_text}{subj} {group_num} группа")
+    return text
 
-    return "\n".join(msg_lines)
 
 
 
