@@ -311,42 +311,40 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
 
 @dp.message(SendMessageState.waiting_for_text)
 async def process_send_message(message: types.Message, state: FSMContext):
-    if message.from_user.id != SPECIAL_USER_ID[0]:  # только специальный пользователь
+    if message.from_user.id != SPECIAL_USER_ID[0]:
         await message.answer("⛔ Доступ запрещён")
         return
 
+    prefix = "Сообщение от (тест): "
+
     try:
-        # Текстовое сообщение
-        if message.text or message.caption:
-            text = message.text or message.caption
-            await bot.send_message(DEFAULT_CHAT_ID, text)
-
-        # Фото
-        if message.photo:
-            await bot.send_photo(DEFAULT_CHAT_ID, message.photo[-1].file_id, caption=message.caption)
-
-        # Документ / файл
-        if message.document:
-            await bot.send_document(DEFAULT_CHAT_ID, message.document.file_id, caption=message.caption)
-
-        # Видео
-        if message.video:
-            await bot.send_video(DEFAULT_CHAT_ID, message.video.file_id, caption=message.caption)
-
-        # Аудио / голосовые
-        if message.audio:
-            await bot.send_audio(DEFAULT_CHAT_ID, message.audio.file_id, caption=message.caption)
-        if message.voice:
-            await bot.send_voice(DEFAULT_CHAT_ID, message.voice.file_id, caption=message.caption)
-
-        # Стикеры
-        if message.sticker:
+        # Для текста
+        if message.text:
+            await bot.send_message(DEFAULT_CHAT_ID, f"{prefix}{message.text}")
+        # Для фото
+        elif message.photo:
+            await bot.send_photo(DEFAULT_CHAT_ID, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
+        # Для документа
+        elif message.document:
+            await bot.send_document(DEFAULT_CHAT_ID, message.document.file_id, caption=prefix + (message.caption or ""))
+        # Для видео
+        elif message.video:
+            await bot.send_video(DEFAULT_CHAT_ID, message.video.file_id, caption=prefix + (message.caption or ""))
+        # Для аудио / голосовых
+        elif message.audio:
+            await bot.send_audio(DEFAULT_CHAT_ID, message.audio.file_id, caption=prefix + (message.caption or ""))
+        elif message.voice:
+            await bot.send_voice(DEFAULT_CHAT_ID, message.voice.file_id, caption=prefix + (message.caption or ""))
+        # Для стикеров просто пересылаем
+        elif message.sticker:
             await bot.send_sticker(DEFAULT_CHAT_ID, message.sticker.file_id)
+        else:
+            await message.answer("⚠ Не удалось распознать тип сообщения.")
+            return
 
         await message.answer("✅ Сообщение отправлено в беседу!")
     except Exception as e:
         await message.answer(f"❌ Ошибка при отправке: {e}")
-
     finally:
         await state.clear()
 
