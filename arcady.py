@@ -18,7 +18,7 @@ import re
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344, 7620086223]
-SPECIAL_USER_ID = [7059079404]
+SPECIAL_USER_ID = [7228927149]
 
 
 DB_HOST = os.getenv("DB_HOST")
@@ -315,7 +315,7 @@ async def process_send_message(message: types.Message, state: FSMContext):
         await message.answer("⛔ Доступ запрещён")
         return
 
-    prefix = "Сообщение от (тест): "
+    prefix = "Сообщение от Анжелики Андреевной (Препод Математики): "
 
     try:
         # Для текста
