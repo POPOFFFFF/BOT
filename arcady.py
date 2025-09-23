@@ -277,6 +277,12 @@ class AddRaspState(StatesGroup):
 class ClearRaspState(StatesGroup):
     day = State()
 
+class ClearPairState(StatesGroup):
+    week_type = State()
+    day = State()
+    pair_number = State()
+
+
 class SetChetState(StatesGroup):
     week_type = State()
 
