@@ -232,30 +232,6 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     else:
         return 1 if base_week_type == 2 else 2
 
-@dp.callback_query(F.data == "send_message_chat")
-async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != SPECIAL_USER_ID or callback.message.chat.type != "private":
-        await callback.answer("⛔ Доступно только конкретному пользователю", show_alert=True)
-        return
-
-    await callback.message.answer("Введите текст сообщения для отправки в беседу:")
-    await state.set_state(SendMessageState.waiting_for_text)
-    await callback.answer()
-
-@dp.message(SendMessageState.waiting_for_text)
-async def process_send_message(message: types.Message, state: FSMContext):
-    if message.from_user.id != SPECIAL_USER_ID:
-        await message.answer("⛔ Доступ запрещён")
-        return
-
-    text = message.text.strip()
-    if not text:
-        await message.answer("⚠ Текст не может быть пустым.")
-        return
-
-    await bot.send_message(DEFAULT_CHAT_ID, f"Сообщение от (Тест): {text}")
-    await message.answer("✅ Сообщение отправлено в беседу!")
-    await state.clear()
 
 
 
@@ -283,6 +259,9 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
+
+class SendMessageState(StatesGroup):
+    waiting_for_text = State()
 
 class AddRaspState(StatesGroup):
     day = State()
@@ -317,6 +296,32 @@ class SetCabinetState(StatesGroup):
     cabinet = State()
     pair_num = State()
 
+
+
+@dp.callback_query(F.data == "send_message_chat")
+async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != SPECIAL_USER_ID or callback.message.chat.type != "private":
+        await callback.answer("⛔ Доступно только конкретному пользователю", show_alert=True)
+        return
+
+    await callback.message.answer("Введите текст сообщения для отправки в беседу:")
+    await state.set_state(SendMessageState.waiting_for_text)
+    await callback.answer()
+
+@dp.message(SendMessageState.waiting_for_text)
+async def process_send_message(message: types.Message, state: FSMContext):
+    if message.from_user.id != SPECIAL_USER_ID:
+        await message.answer("⛔ Доступ запрещён")
+        return
+
+    text = message.text.strip()
+    if not text:
+        await message.answer("⚠ Текст не может быть пустым.")
+        return
+
+    await bot.send_message(DEFAULT_CHAT_ID, f"Сообщение от (Тест): {text}")
+    await message.answer("✅ Сообщение отправлено в беседу!")
+    await state.clear()
 
 
 def get_zvonki(is_saturday: bool):
