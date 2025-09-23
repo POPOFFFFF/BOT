@@ -327,14 +327,13 @@ async def process_send_message(message: types.Message, state: FSMContext):
 def get_zvonki(is_saturday: bool):
     return "\n".join(ZVONKI_SATURDAY if is_saturday else ZVONKI_DEFAULT)
 
-def main_menu(is_admin=False):
+def main_menu(is_admin=False, is_special_user=False):
     buttons = [
         [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
         [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")],
     ]
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
     if is_special_user:
         buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -758,11 +757,13 @@ TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/арка�
 async def trigger_handler(message: types.Message):
     is_private = message.chat.type == "private"
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
+    is_special_user = (message.from_user.id in SPECIAL_USER_ID) and is_private
+
     await greet_and_send(
         message.from_user,
         "Выберите действие:",
         message=message,
-        markup=main_menu(is_admin)
+        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user)
     )
 
 
