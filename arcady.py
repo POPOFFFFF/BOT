@@ -18,6 +18,8 @@ import re
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344, 7620086223]
+SPECIAL_USER_ID = [7059079404]
+
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
@@ -230,6 +232,33 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     else:
         return 1 if base_week_type == 2 else 2
 
+@dp.callback_query(F.data == "send_message_chat")
+async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != SPECIAL_USER_ID or callback.message.chat.type != "private":
+        await callback.answer("⛔ Доступно только конкретному пользователю", show_alert=True)
+        return
+
+    await callback.message.answer("Введите текст сообщения для отправки в беседу:")
+    await state.set_state(SendMessageState.waiting_for_text)
+    await callback.answer()
+
+@dp.message(SendMessageState.waiting_for_text)
+async def process_send_message(message: types.Message, state: FSMContext):
+    if message.from_user.id != SPECIAL_USER_ID:
+        await message.answer("⛔ Доступ запрещён")
+        return
+
+    text = message.text.strip()
+    if not text:
+        await message.answer("⚠ Текст не может быть пустым.")
+        return
+
+    await bot.send_message(DEFAULT_CHAT_ID, f"Сообщение от (Тест): {text}")
+    await message.answer("✅ Сообщение отправлено в беседу!")
+    await state.clear()
+
+
+
 DAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
 
 def format_rasp_message(day_num, week_type, text):
@@ -300,6 +329,9 @@ def main_menu(is_admin=False):
     ]
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    if is_special_user:
+        buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def admin_menu():
