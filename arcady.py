@@ -300,13 +300,14 @@ class SetCabinetState(StatesGroup):
 
 @dp.callback_query(F.data == "send_message_chat")
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != SPECIAL_USER_ID or callback.message.chat.type != "private":
+    if callback.from_user.id not in SPECIAL_USER_ID or callback.message.chat.type != "private":
         await callback.answer("⛔ Доступно только конкретному пользователю", show_alert=True)
         return
 
     await callback.message.answer("Введите текст сообщения для отправки в беседу:")
     await state.set_state(SendMessageState.waiting_for_text)
     await callback.answer()
+
 
 @dp.message(SendMessageState.waiting_for_text)
 async def process_send_message(message: types.Message, state: FSMContext):
