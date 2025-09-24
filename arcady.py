@@ -308,7 +308,7 @@ async def process_send_message(message: types.Message, state: FSMContext):
     if message.from_user.id != SPECIAL_USER_ID[0]:
         await message.answer("⛔ Доступ запрещён")
         return
-prefix = "Сообщение от ПРОВЕРКА: "
+    prefix = "Сообщение от ПРОВЕРКА: "
   #  prefix = "Сообщение от Анжелики Олеговны (Препод Математики): "
 
     try:
@@ -596,7 +596,7 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
                          callback=callback)
     await state.clear()
     await callback.answer()
-    
+
 @dp.callback_query(F.data == "admin_my_publish_time")
 async def admin_my_publish_time(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
