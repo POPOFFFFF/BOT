@@ -218,6 +218,13 @@ class SendMessageState(StatesGroup):
     active = State()
 class SetChetState(StatesGroup):
     week_type = State()
+class AddSubjectState(StatesGroup):
+name = State()
+type_choice = State()
+cabinet = State()
+
+class DeleteSubjectState(StatesGroup):
+    subject_choice = State()
 
 class AddSpecialUserState(StatesGroup):
     user_id = State()
@@ -428,13 +435,20 @@ def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
+
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
-        [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
-        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
+
+        [InlineKeyboardButton(text="➕ Добавить пару", callback_data="admin_add_lesson")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
-        [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],  # Новая кнопка
+
+        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
+
+        [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],  # Новая кнопка
+        [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data="admin_delete_subject")],  # Новая кнопка
+
+        [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
@@ -490,6 +504,226 @@ async def choose_day(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
     await state.set_state(AddLessonState.pair_number)
 
+
+@dp.callback_query(F.data == "admin_add_subject")
+async def admin_add_subject_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        "📚 Добавление нового предмета\n\n"
+        "Введите название предмета:"
+    )
+    await state.set_state(AddSubjectState.name)
+    await callback.answer()
+
+@dp.message(AddSubjectState.name)
+async def process_subject_name(message: types.Message, state: FSMContext):
+    subject_name = message.text.strip()
+    if not subject_name:
+        await message.answer("❌ Название предмета не может быть пустым. Введите название:")
+        return
+    
+    await state.update_data(name=subject_name)
+    
+    # Предлагаем выбрать тип предмета
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏫 С фиксированным кабинетом", callback_data="subject_type_fixed")],
+        [InlineKeyboardButton(text="🔢 С запросом кабинета (rK)", callback_data="subject_type_rk")]
+    ])
+    
+    await message.answer(
+        f"📝 Предмет: {subject_name}\n\n"
+        "Выберите тип предмета:",
+        reply_markup=kb
+    )
+    await state.set_state(AddSubjectState.type_choice)
+
+@dp.callback_query(F.data.startswith("subject_type_"))
+async def process_subject_type(callback: types.CallbackQuery, state: FSMContext):
+    subject_type = callback.data.split("_")[2]  # fixed или rk
+    data = await state.get_data()
+    subject_name = data["name"]
+    
+    if subject_type == "fixed":
+        # Запрашиваем кабинет для фиксированного предмета
+        await callback.message.edit_text(
+            f"📝 Предмет: {subject_name}\n"
+            "🏫 Введите номер кабинета:"
+        )
+        await state.set_state(AddSubjectState.cabinet)
+    else:
+        # Для rK предмета сразу сохраняем
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (subject_name, True))
+        
+        await callback.message.edit_text(
+            f"✅ Предмет добавлен!\n\n"
+            f"📚 Название: {subject_name}\n"
+            f"🔢 Тип: с запросом кабинета (rK)\n\n"
+            f"Теперь при добавлении этого предмета в расписание "
+            f"система будет каждый раз запрашивать кабинет."
+        )
+        
+        # Показываем админ-меню
+        await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+    
+    await callback.answer()
+
+@dp.message(AddSubjectState.cabinet)
+async def process_subject_cabinet(message: types.Message, state: FSMContext):
+    cabinet = message.text.strip()
+    data = await state.get_data()
+    subject_name = data["name"]
+    
+    if not cabinet:
+        await message.answer("❌ Номер кабинета не может быть пустым. Введите кабинет:")
+        return
+    
+    # Формируем полное название предмета с кабинетом
+    full_subject_name = f"{subject_name} {cabinet}"
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (full_subject_name, False))
+    
+    await message.answer(
+        f"✅ Предмет добавлен!\n\n"
+        f"📚 Название: {full_subject_name}\n"
+        f"🏫 Тип: с фиксированным кабинетом\n\n"
+        f"Теперь при добавлении этого предмета в расписание "
+        f"кабинет будет подставляться автоматически."
+    )
+    
+    # Показываем админ-меню
+    await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_delete_subject")
+async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    # Получаем список всех предметов
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id, name, rK FROM subjects ORDER BY name")
+            subjects = await cur.fetchall()
+    
+    if not subjects:
+        await callback.message.edit_text("❌ В базе нет предметов для удаления.")
+        await callback.answer()
+        return
+    
+    # Создаем кнопки для выбора предмета
+    keyboard = []
+    for subject_id, name, rk in subjects:
+        type_icon = "🔢" if rk else "🏫"
+        button_text = f"{type_icon} {name}"
+        keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_subject_{subject_id}")])
+    
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback.message.edit_text(
+        "🗑️ Удаление предмета\n\n"
+        "Выберите предмет для удаления:\n"
+        "🏫 - с фиксированным кабинетом\n"
+        "🔢 - с запросом кабинета (rK)",
+        reply_markup=kb
+    )
+    await state.set_state(DeleteSubjectState.subject_choice)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("delete_subject_"))
+async def process_delete_subject(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "menu_admin":
+        await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        await callback.answer()
+        return
+    
+    subject_id = int(callback.data[len("delete_subject_"):])
+    
+    # Получаем информацию о предмете
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name, rK FROM subjects WHERE id=%s", (subject_id,))
+            subject = await cur.fetchone()
+            
+            if not subject:
+                await callback.message.edit_text("❌ Предмет не найден.")
+                await callback.answer()
+                return
+            
+            name, rk = subject
+            
+            # Проверяем, используется ли предмет в расписании
+            await cur.execute("SELECT COUNT(*) FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
+            usage_count = (await cur.fetchone())[0]
+            
+            if usage_count > 0:
+                # Предмет используется - предупреждаем
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Да, удалить вместе с уроками", callback_data=f"confirm_delete_{subject_id}")],
+                    [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete")]
+                ])
+                
+                await callback.message.edit_text(
+                    f"⚠️ Внимание!\n\n"
+                    f"Предмет '{name}' используется в {usage_count} урок(ах) расписания.\n\n"
+                    f"Удалить предмет и все связанные уроки?",
+                    reply_markup=kb
+                )
+            else:
+                # Предмет не используется - удаляем сразу
+                await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
+                await callback.message.edit_text(f"✅ Предмет '{name}' удален.")
+                
+                # Возвращаем в админ-меню
+                await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+                await state.clear()
+    
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_delete_"))
+async def confirm_delete_subject(callback: types.CallbackQuery, state: FSMContext):
+    subject_id = int(callback.data[len("confirm_delete_"):])
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Получаем название предмета перед удалением
+            await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+            subject_name = (await cur.fetchone())[0]
+            
+            # Удаляем уроки с этим предметом
+            await cur.execute("DELETE FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
+            
+            # Удаляем сам предмет
+            await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
+    
+    await callback.message.edit_text(
+        f"✅ Предмет '{subject_name}' и все связанные уроки удалены."
+    )
+    
+    # Возвращаем в админ-меню
+    await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+    await state.clear()
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_delete")
+async def cancel_delete_subject(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("❌ Удаление отменено.")
+    
+    # Возвращаем в админ-меню
+    await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+    await state.clear()
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
@@ -563,7 +797,7 @@ async def set_cabinet(message: types.Message, state: FSMContext):
         reply_markup=admin_menu()
     )
     await state.clear()
-    
+
 @dp.callback_query(F.data.startswith("addlesson_"))
 async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
     lesson = callback.data[len("addlesson_"):]
@@ -821,34 +1055,6 @@ async def get_rasp_formatted(day, week_type):
             msg_lines.append(f"{i}. Свободно")
     
     return "\n".join(msg_lines)
-@dp.message(Command("addu"))
-async def cmd_addu(message: types.Message):
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 2:
-        await message.answer("⚠ Использование: /addu <название предмета> [rK или кабинет]")
-        return
-    name = parts[1]
-    param = parts[2] if len(parts) == 3 else None
-    
-    # Определяем, является ли параметр rK или кабинетом
-    rK_flag = False
-    cabinet = None
-    
-    if param:
-        if param.lower() == "rk":
-            rK_flag = True
-        else:
-            # Если параметр не "rK", то это кабинет - добавляем его к названию
-            name = f"{name} {param}"
-    
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (name, rK_flag))
-    
-    if rK_flag:
-        await message.answer(f"✅ Предмет '{name}' добавлен с rK (кабинет будет запрашиваться при добавлении)")
-    else:
-        await message.answer(f"✅ Предмет '{name}' добавлен с фиксированным кабинетом")
 
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
