@@ -81,6 +81,11 @@ async def init_db(pool):
                 rK BOOLEAN DEFAULT FALSE
             )""")
             await cur.execute("""
+            CREATE TABLE IF NOT EXISTS special_users (
+                user_id BIGINT PRIMARY KEY,
+                signature VARCHAR(255) NOT NULL
+            )""")
+            await cur.execute("""
             CREATE TABLE IF NOT EXISTS rasp_detailed (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 chat_id BIGINT,
@@ -208,11 +213,15 @@ ZVONKI_SATURDAY = [
     "6 пара: 1-2 урок 17:05-18:50"
 ]
 
-class SendMessageState(StatesGroup):
-    waiting_for_text = State()
 
+class SendMessageState(StatesGroup):
+    active = State()
 class SetChetState(StatesGroup):
     week_type = State()
+
+class AddSpecialUserState(StatesGroup):
+    user_id = State()
+    signature = State()
 
 class SetPublishTimeState(StatesGroup):
     time = State()  
@@ -245,6 +254,22 @@ class ForwardModeState(StatesGroup):
     active = State()
 
 
+async def get_special_user_signature(pool, user_id: int) -> str | None:
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT signature FROM special_users WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+async def set_special_user_signature(pool, user_id: int, signature: str):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO special_users (user_id, signature) 
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE signature=%s
+            """, (user_id, signature, signature))
+
 
 @dp.callback_query(F.data == "send_message_chat")
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
@@ -252,18 +277,49 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
         await callback.answer("⛔ Доступно только конкретному пользователю", show_alert=True)
         return
 
-    await callback.message.answer("Введите текст сообщения для отправки в беседу:")
-    await state.set_state(SendMessageState.waiting_for_text)
+    # Получаем подпись пользователя
+    signature = await get_special_user_signature(pool, callback.from_user.id)
+    if not signature:
+        signature = "ПРОВЕРКА"  # значение по умолчанию
+
+    await state.update_data(
+        signature=signature,
+        start_time=datetime.datetime.now(TZ)
+    )
+    
+    # Активируем режим пересылки на 180 секунд
+    await state.set_state(SendMessageState.active)
+    
+    # Сообщаем о начале режима
+    await callback.message.edit_text(
+        f"✅ Режим пересылки активирован на 180 секунд!\n"
+        f"📝 Подпись: {signature}\n"
+        f"⏰ Время до: {(datetime.datetime.now(TZ) + datetime.timedelta(seconds=180)).strftime('%H:%M:%S')}\n\n"
+        f"Все ваши сообщения будут пересылаться в беседу. Режим автоматически отключится через 3 минуты."
+    )
+    
+    # Запускаем таймер отключения
+    asyncio.create_task(disable_forward_mode_after_timeout(callback.from_user.id, state))
+    
     await callback.answer()
 
-
-@dp.message(SendMessageState.waiting_for_text)
-async def process_send_message(message: types.Message, state: FSMContext):
-    if message.from_user.id != SPECIAL_USER_ID[0]:
-        await message.answer("⛔ Доступ запрещён")
-        return
-    prefix = "Сообщение от ПРОВЕРКА: "
-  #  prefix = "Сообщение от Анжелики Олеговны (Препод Математики): "
+async def disable_forward_mode_after_timeout(user_id: int, state: FSMContext):
+    await asyncio.sleep(180)  # 3 минуты
+    
+    # Проверяем, все еще ли пользователь в этом состоянии
+    current_state = await state.get_state()
+    if current_state == SendMessageState.active.state:
+        await state.clear()
+        try:
+            await bot.send_message(user_id, "⏰ Режим пересылки автоматически отключен (прошло 180 секунд)")
+        except:
+            pass  # Пользователь заблокировал бота или чат закрыт
+@dp.message(SendMessageState.active)
+async def process_forward_message(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    signature = data.get("signature", "ПРОВЕРКА")
+    
+    prefix = f"Сообщение от {signature}: "
 
     try:
         if message.text:
@@ -284,11 +340,74 @@ async def process_send_message(message: types.Message, state: FSMContext):
             await message.answer("⚠ Не удалось распознать тип сообщения.")
             return
 
-        await message.answer("✅ Сообщение отправлено в беседу!")
+        await message.answer("✅ Сообщение переслано в беседу!")
+        
     except Exception as e:
-        await message.answer(f"❌ Ошибка при отправке: {e}")
-    finally:
-        await state.clear()
+        await message.answer(f"❌ Ошибка при пересылке: {e}")
+
+@dp.callback_query(F.data == "admin_add_special_user")
+async def admin_add_special_user_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        "👤 Добавление спец-пользователя\n\n"
+        "Введите Telegram ID пользователя (только цифры):"
+    )
+    await state.set_state(AddSpecialUserState.user_id)
+    await callback.answer()
+
+@dp.message(AddSpecialUserState.user_id)
+async def process_special_user_id(message: types.Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        if user_id <= 0:
+            raise ValueError("ID должен быть положительным числом")
+        
+        await state.update_data(user_id=user_id)
+        await message.answer(
+            f"✅ ID пользователя: {user_id}\n\n"
+            "Теперь введите подпись для этого пользователя "
+            "(как будет отображаться при отправке сообщений):"
+        )
+        await state.set_state(AddSpecialUserState.signature)
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Введите только цифры:")
+
+@dp.message(AddSpecialUserState.signature)
+async def process_special_user_signature(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    user_id = data["user_id"]
+    signature = message.text.strip()
+    
+    if not signature:
+        await message.answer("❌ Подпись не может быть пустой. Введите подпись:")
+        return
+    
+    try:
+        # Добавляем пользователя в базу
+        await set_special_user_signature(pool, user_id, signature)
+        
+        # Обновляем список SPECIAL_USER_ID для текущей сессии
+        if user_id not in SPECIAL_USER_ID:
+            SPECIAL_USER_ID.append(user_id)
+        
+        await message.answer(
+            f"✅ Спец-пользователь добавлен!\n\n"
+            f"👤 ID: {user_id}\n"
+            f"📝 Подпись: {signature}\n\n"
+            f"Пользователь теперь может отправлять сообщения в беседу через кнопку в меню."
+        )
+        
+        # Показываем админ-меню
+        await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении пользователя: {e}")
+    
+    await state.clear()
 
 
 def get_zvonki(is_saturday: bool):
@@ -315,6 +434,7 @@ def admin_menu():
         [InlineKeyboardButton(text="➕ Добавить урок", callback_data="admin_add_lesson")],
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
+        [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],  # Новая кнопка
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
@@ -578,7 +698,7 @@ async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
     await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
     await state.set_state(EditRaspState.day)
     await callback.answer()
-async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False):
+async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False, include_week_info: bool = False):
     if include_joke:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -586,9 +706,18 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                 row = await cur.fetchone()
                 if row:
                     text += f"\n\n😂 Анекдот:\n{row[0]}"
+    
+    # Добавляем информацию о неделе если нужно
+    week_info = ""
+    if include_week_info:
+        current_week = await get_current_week_type(pool, DEFAULT_CHAT_ID)
+        week_name = "Нечетная" if current_week == 1 else "Четная"
+        week_info = f"\n\n📅 Сейчас неделя: {week_name}"
+    
     nickname = await get_nickname(pool, user.id)
     greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
-    full_text = greet + text
+    full_text = greet + text + week_info
+    
     if callback:
         try:
             await callback.message.edit_text(full_text, reply_markup=markup)
@@ -679,13 +808,19 @@ TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/арка�
 async def trigger_handler(message: types.Message):
     is_private = message.chat.type == "private"
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
-    is_special_user = (message.from_user.id in SPECIAL_USER_ID) and is_private
+    
+    # Проверяем спец-пользователей через базу данных
+    is_special_user = False
+    if is_private:
+        signature = await get_special_user_signature(pool, message.from_user.id)
+        is_special_user = signature is not None
 
     await greet_and_send(
         message.from_user,
         "Выберите действие:",
         message=message,
-        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user)
+        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user),
+        include_week_info=True
     )
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
