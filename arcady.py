@@ -733,58 +733,73 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     subject_name = data["subject"]
     
-    # Проверяем, есть ли у предмета фиксированный кабинет (rK)
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT rK FROM subjects WHERE name=%s", (subject_name,))
-            result = await cur.fetchone()
-            is_rk = result[0] if result else False
-    
-    if is_rk:
-        # Если предмет с rK - спрашиваем кабинет
-        await callback.message.edit_text("Введите кабинет для этой пары:")
-        await state.set_state(AddLessonState.cabinet)
-    else:
-        # Если предмет без rK - пытаемся извлечь кабинет из названия
-        import re
-        # Ищем кабинет в конце названия (числа, сп/з, буквенно-цифровые комбинации)
-        cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
-        
-        if cabinet_match:
-            # Если нашли кабинет в названии - извлекаем его
-            cabinet = cabinet_match.group(2)
-            # Очищаем название предмета от кабинета
-            clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
-        else:
-            # Если кабинета в названии нет
-            cabinet = "Не указан"
-            clean_subject_name = subject_name
-        
-        # Сохраняем кабинет
-        await state.update_data(cabinet=cabinet)
-        
-        # Добавляем урок
+    try:
+        # Проверяем, есть ли у предмета фиксированный кабинет (rK)
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
-                subject_id = (await cur.fetchone())[0]
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number, subject_id, cabinet))
+                await cur.execute("SELECT rK FROM subjects WHERE name=%s", (subject_name,))
+                result = await cur.fetchone()
+                is_rk = result[0] if result else False
         
-        # Обновляем название предмета в базе без кабинета (для чистоты)
-        if clean_subject_name != subject_name:
-            await cur.execute("UPDATE subjects SET name=%s WHERE id=%s", (clean_subject_name, subject_id))
-        
-        await callback.message.edit_text(
-            f"✅ Урок '{clean_subject_name}' добавлен!\n"
-            f"📅 День: {DAYS[data['day']-1]}\n"
-            f"🔢 Пара: {pair_number}\n"
-            f"🏫 Кабинет: {cabinet}\n\n"
-            f"⚙ Админ-панель:",
-            reply_markup=admin_menu()
-        )
+        if is_rk:
+            # Если предмет с rK - спрашиваем кабинет
+            await callback.message.edit_text("Введите кабинет для этой пары:")
+            await state.set_state(AddLessonState.cabinet)
+        else:
+            # Если предмет без rK - пытаемся извлечь кабинет из названия
+            import re
+            # Ищем кабинет в конце названия (числа, сп/з, буквенно-цифровые комбинации)
+            cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
+            
+            if cabinet_match:
+                # Если нашли кабинет в названии - извлекаем его
+                cabinet = cabinet_match.group(2)
+                # Очищаем название предмета от кабинета
+                clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
+            else:
+                # Если кабинета в названии нет
+                cabinet = "Не указан"
+                clean_subject_name = subject_name
+            
+            # Сохраняем кабинет
+            await state.update_data(cabinet=cabinet)
+            
+            # Добавляем урок и обновляем название предмета в одной транзакции
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    # Получаем ID предмета
+                    await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
+                    subject_result = await cur.fetchone()
+                    if not subject_result:
+                        await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
+                        await state.clear()
+                        return
+                    
+                    subject_id = subject_result[0]
+                    
+                    # Добавляем урок в расписание
+                    await cur.execute("""
+                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number, subject_id, cabinet))
+                    
+                    # Обновляем название предмета в базе без кабинета (если оно изменилось)
+                    if clean_subject_name != subject_name:
+                        await cur.execute("UPDATE subjects SET name=%s WHERE id=%s", (clean_subject_name, subject_id))
+            
+            await callback.message.edit_text(
+                f"✅ Урок '{clean_subject_name}' добавлен!\n"
+                f"📅 День: {DAYS[data['day']-1]}\n"
+                f"🔢 Пара: {pair_number}\n"
+                f"🏫 Кабинет: {cabinet}\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+            await state.clear()
+    
+    except Exception as e:
+        print(f"❌ Ошибка в choose_pair: {e}")
+        await callback.message.edit_text(f"❌ Ошибка при добавлении урока: {e}")
         await state.clear()
 
 @dp.message(AddLessonState.cabinet)
