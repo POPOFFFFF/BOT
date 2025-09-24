@@ -351,18 +351,19 @@ async def handle_forward_mode(message: types.Message, state: FSMContext):
 
 TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
 
-@dp.message(F.text.lower().in_(TRIGGERS))
+@dp.message(F.text)
 async def trigger_handler(message: types.Message, state: FSMContext):
-    is_private = message.chat.type == "private"
-    is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
-    is_special_user = (message.from_user.id in SPECIAL_USER_ID) and is_private
+    if message.text.lower() in TRIGGERS:
+        is_private = message.chat.type == "private"
+        is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
+        is_special_user = (message.from_user.id in SPECIAL_USERS) and is_private
 
-    await greet_and_send(
-        message.from_user,
-        "Выберите действие:",
-        message=message,
-        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user)
-    )
+        await greet_and_send(
+            message.from_user,
+            "Выберите действие:",
+            message=message,
+            markup=main_menu(is_admin=is_admin, is_special_user=is_special_user)
+        )
 
 # ------------------ main ------------------
 
