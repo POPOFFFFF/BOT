@@ -748,8 +748,8 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         else:
             # Если предмет без rK - пытаемся извлечь кабинет из названия
             import re
-            # Ищем кабинет в конце названия
-            cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
+            # Ищем кабинет в конце названия (учитываем точки, слеши, буквы)
+            cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
             
             if cabinet_match:
                 # Если нашли кабинет в названии - извлекаем его
@@ -1045,6 +1045,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
         await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
     else:
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
+
 async def get_rasp_formatted(day, week_type):
     msg_lines = []
     async with pool.acquire() as conn:
@@ -1082,14 +1083,15 @@ async def get_rasp_formatted(day, week_type):
             else:
                 # Для предметов с кабинетом в названии - извлекаем чистое название
                 import re
-                clean_subject_name = re.sub(r'\s+(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                # Обновленное регулярное выражение с учетом точек
+                clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
                 
                 if cabinet and cabinet != "Не указан":
                     # Если кабинет указан отдельно - используем его
                     msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
                 else:
                     # Если кабинета нет - пытаемся извлечь из названия
-                    cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
+                    cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
                     if cabinet_match:
                         extracted_cabinet = cabinet_match.group(2)
                         msg_lines.append(f"{i}. {extracted_cabinet} {clean_subject_name}")
@@ -1099,7 +1101,7 @@ async def get_rasp_formatted(day, week_type):
             msg_lines.append(f"{i}. Свободно")
     
     return "\n".join(msg_lines)
-    
+
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
 async def reschedule_publish_jobs(pool):
