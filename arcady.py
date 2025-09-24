@@ -745,16 +745,25 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Введите кабинет для этой пары:")
         await state.set_state(AddLessonState.cabinet)
     else:
-        # Если предмет без rK - используем кабинет из названия предмета
-        # Извлекаем кабинет из названия предмета (последнее число)
+        # Если предмет без rK - пытаемся извлечь кабинет из названия
         import re
-        numbers = re.findall(r'\d+', subject_name)
-        cabinet = numbers[-1] if numbers else "Не указан"
+        # Ищем кабинет в конце названия (числа, сп/з, буквенно-цифровые комбинации)
+        cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
         
-        # Сохраняем автоматически определенный кабинет
+        if cabinet_match:
+            # Если нашли кабинет в названии - извлекаем его
+            cabinet = cabinet_match.group(2)
+            # Очищаем название предмета от кабинета
+            clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
+        else:
+            # Если кабинета в названии нет
+            cabinet = "Не указан"
+            clean_subject_name = subject_name
+        
+        # Сохраняем кабинет
         await state.update_data(cabinet=cabinet)
         
-        # Добавляем урок сразу без запроса кабинета
+        # Добавляем урок
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
@@ -764,11 +773,15 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number, subject_id, cabinet))
         
+        # Обновляем название предмета в базе без кабинета (для чистоты)
+        if clean_subject_name != subject_name:
+            await cur.execute("UPDATE subjects SET name=%s WHERE id=%s", (clean_subject_name, subject_id))
+        
         await callback.message.edit_text(
-            f"✅ Урок '{subject_name}' добавлен!\n"
+            f"✅ Урок '{clean_subject_name}' добавлен!\n"
             f"📅 День: {DAYS[data['day']-1]}\n"
             f"🔢 Пара: {pair_number}\n"
-            f"🏫 Кабинет: {cabinet} (автоматически)\n\n"
+            f"🏫 Кабинет: {cabinet}\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
@@ -1041,11 +1054,9 @@ async def get_rasp_formatted(day, week_type):
         if pair_num > max_pair:
             max_pair = pair_num
     
-    # Если вообще нет пар в расписании
     if max_pair == 0:
         return "Расписание пустое."
     
-    # Формируем строки только до максимальной существующей пары
     for i in range(1, max_pair + 1):
         if i in pairs_dict:
             row = pairs_dict[i]
@@ -1054,22 +1065,10 @@ async def get_rasp_formatted(day, week_type):
             
             if subject_name == "Свободно":
                 msg_lines.append(f"{i}. Свободно")
-            elif cabinet:
-                # Убираем из названия предмета только простые числа (303, 311 и т.д.)
-                # Но оставляем сложные форматы (303/311, сп/з, 101а и т.п.)
-                import re
-                clean_subject_name = subject_name
-                
-                # Удаляем только простые числа в конце названия (через пробел)
-                # Не удаляем если есть слеши, буквы и т.д.
-                clean_subject_name = re.sub(r'\s+(\d+)$', '', clean_subject_name)
-                
-                msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
+            elif cabinet and cabinet != "Не указан":
+                msg_lines.append(f"{i}. {cabinet} {subject_name}")
             else:
-                # Если кабинета нет, тоже чистим название от простых чисел
-                import re
-                clean_subject_name = re.sub(r'\s+(\d+)$', '', subject_name)
-                msg_lines.append(f"{i}. {clean_subject_name}")
+                msg_lines.append(f"{i}. {subject_name}")
         else:
             msg_lines.append(f"{i}. Свободно")
     
