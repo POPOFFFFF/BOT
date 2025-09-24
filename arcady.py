@@ -135,39 +135,6 @@ async def clear_publish_times(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("DELETE FROM publish_times")
-async def add_rasp(pool, chat_id, day, week_type, text):
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "INSERT INTO rasp (chat_id, day, week_type, text) VALUES (%s, %s, %s, %s)",
-                (chat_id, day, week_type, text)
-            )
-async def get_rasp_for_day(pool, chat_id, day, week_type):
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT text FROM rasp WHERE chat_id=%s AND day=%s AND week_type=%s LIMIT 1",
-                (chat_id, day, week_type)
-            )
-            row = await cur.fetchone()
-            if row:
-                return row[0]
-            await cur.execute(
-                "SELECT text FROM rasp WHERE chat_id=%s AND day=%s AND week_type=0 LIMIT 1",
-                (chat_id, day)
-            )
-            row = await cur.fetchone()
-            return row[0] if row else None
-async def delete_rasp(pool, day=None, week_type=None):
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            if day and week_type is not None:
-                await cur.execute("DELETE FROM rasp WHERE chat_id=%s AND day=%s AND week_type=%s", 
-                                  (DEFAULT_CHAT_ID, day, week_type))
-            elif day:
-                await cur.execute("DELETE FROM rasp WHERE chat_id=%s AND day=%s", (DEFAULT_CHAT_ID, day))
-            else:
-                await cur.execute("DELETE FROM rasp WHERE chat_id=%s", (DEFAULT_CHAT_ID,))
 async def set_week_type(pool, chat_id, week_type):
     today = datetime.datetime.now(TZ).date()
     async with pool.acquire() as conn:
@@ -244,24 +211,11 @@ ZVONKI_SATURDAY = [
 class SendMessageState(StatesGroup):
     waiting_for_text = State()
 
-class AddRaspState(StatesGroup):
-    day = State()
-    week_type = State()
-    text = State()
-
-class ClearRaspState(StatesGroup):
-    day = State()
-
 class SetChetState(StatesGroup):
     week_type = State()
 
 class SetPublishTimeState(StatesGroup):
     time = State()  
-
-class EditRaspState(StatesGroup):
-    day = State()
-    week_type = State()
-    text = State()
 
 class AddLessonState(StatesGroup):
     subject = State()
@@ -624,45 +578,6 @@ async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
     await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
     await state.set_state(EditRaspState.day)
     await callback.answer()
-@dp.message(EditRaspState.day)
-async def edit_rasp_day(message: types.Message, state: FSMContext):
-    try:
-        day = int(message.text)
-        if not 1 <= day <= 6:
-            raise ValueError
-        await state.update_data(day=day)
-        await greet_and_send(message.from_user, "Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):", message=message)
-        await state.set_state(EditRaspState.week_type)
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите число от 1 до 6.", message=message)
-@dp.message(EditRaspState.week_type)
-async def edit_rasp_week_type(message: types.Message, state: FSMContext):
-    try:
-        week_type = int(message.text)
-        if week_type not in [0, 1, 2]:
-            raise ValueError
-        await state.update_data(week_type=week_type)
-        await greet_and_send(message.from_user, "Введите новый текст расписания:", message=message)
-        await state.set_state(EditRaspState.text)
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите 0, 1 или 2.", message=message)
-@dp.message(EditRaspState.text)
-async def edit_rasp_text(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    text = message.text.replace("\\n", "\n")
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                UPDATE rasp SET text=%s 
-                WHERE chat_id=%s AND day=%s AND week_type=%s
-            """, (text, DEFAULT_CHAT_ID, data["day"], data["week_type"]))
-            if cur.rowcount == 0:
-                await cur.execute(
-                    "INSERT INTO rasp (chat_id, day, week_type, text) VALUES (%s, %s, %s, %s)",
-                    (DEFAULT_CHAT_ID, data["day"], data["week_type"], text)
-                )
-    await greet_and_send(message.from_user, "✅ Расписание обновлено!", message=message)
-    await state.clear()
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False):
     if include_joke:
         async with pool.acquire() as conn:
@@ -693,7 +608,7 @@ async def get_rasp_formatted(day, week_type):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, s.name
+                """SELECT r.pair_number, COALESCE(r.cabinet, '') as cabinet, COALESCE(s.name, 'Свободно') as name
                    FROM rasp_detailed r
                    LEFT JOIN subjects s ON r.subject_id = s.id
                    WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
@@ -701,20 +616,21 @@ async def get_rasp_formatted(day, week_type):
                 (DEFAULT_CHAT_ID, day, week_type)
             )
             rows = await cur.fetchall()
-    last_pair = 0
+    
+    # Создаем словарь для быстрого доступа к данным по номеру пары
+    pairs_dict = {row[0]: row for row in rows}
+    
+    # Формируем строки для всех пар от 1 до 6
     for i in range(1, 7):
-        if any(r[0] == i for r in rows):
-            last_pair = i
-    if last_pair == 0:
-        return "Расписание пустое."
-    for i in range(1, last_pair + 1):
-        row = next((r for r in rows if r[0] == i), None)
-        if row:
+        if i in pairs_dict:
+            row = pairs_dict[i]
             cabinet_text = f"{row[1]} " if row[1] else ""
             msg_lines.append(f"{i}. {cabinet_text}{row[2]}")
         else:
             msg_lines.append(f"{i}. Свободно")
+    
     return "\n".join(msg_lines)
+
 @dp.message(Command("addu"))
 async def cmd_addu(message: types.Message):
     parts = message.text.split(maxsplit=2)
@@ -957,77 +873,6 @@ async def set_publish_time_handler(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при сохранении: {e}")
     finally:
         await state.clear()
-@dp.callback_query(F.data == "admin_add")
-async def admin_add_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-        await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
-        return
-    await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
-    await state.set_state(AddRaspState.day)
-    await callback.answer()
-@dp.message(AddRaspState.day)
-async def add_rasp_day(message: types.Message, state: FSMContext):
-    try:
-        day = int(message.text)
-        if not 1 <= day <= 6:
-            raise ValueError
-        await state.update_data(day=day)
-        await greet_and_send(message.from_user, "Введите тип недели (0 - любая, 1 - нечетная, 2 - четная):", message=message)
-        await state.set_state(AddRaspState.week_type)
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите число от 1 до 6.", message=message)
-@dp.message(AddRaspState.week_type)
-async def add_rasp_week_type(message: types.Message, state: FSMContext):
-    try:
-        week_type = int(message.text)
-        if week_type not in [0, 1, 2]:
-            raise ValueError
-        await state.update_data(week_type=week_type)
-        await greet_and_send(message.from_user, "Введите текст расписания (используйте \\n для переносов):", message=message)
-        await state.set_state(AddRaspState.text)
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите 0, 1 или 2.", message=message)
-@dp.message(AddRaspState.text)
-async def add_rasp_text(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    text = message.text.replace("\\n", "\n")
-    await add_rasp(pool, DEFAULT_CHAT_ID, data["day"], data["week_type"], text)
-    await greet_and_send(message.from_user, "✅ Расписание добавлено!", message=message)
-    await state.clear()
-@dp.callback_query(F.data == "admin_clear")
-async def admin_clear_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-        await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
-        return
-    await greet_and_send(callback.from_user, "Введите день недели (1-6) или 0 для удаления всех:", callback=callback)
-    await state.set_state(ClearRaspState.day)
-    await callback.answer()
-@dp.message(ClearRaspState.day)
-async def clear_rasp_day(message: types.Message, state: FSMContext):
-    try:
-        parts = message.text.split()
-        if len(parts) == 1:
-            day = int(parts[0])
-            week_type = None
-        elif len(parts) == 2:
-            day, week_type = map(int, parts)
-        else:
-            raise ValueError
-
-        if day == 0:
-            await delete_rasp(pool)
-        elif 1 <= day <= 6:
-            if week_type in [0, 1, 2]:
-                await delete_rasp(pool, day, week_type)
-            else:
-                raise ValueError
-        else:
-            raise ValueError
-
-        await greet_and_send(message.from_user, "✅ Расписание удалено!", message=message)
-        await state.clear()
-    except ValueError:
-        await greet_and_send(message.from_user, "⚠ Введите: <день> <четность>.\nПример: `3 1` (среда, нечетная)", message=message)
 @dp.callback_query(F.data == "admin_setchet")
 async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
