@@ -219,9 +219,9 @@ class SendMessageState(StatesGroup):
 class SetChetState(StatesGroup):
     week_type = State()
 class AddSubjectState(StatesGroup):
-name = State()
-type_choice = State()
-cabinet = State()
+    name = State()
+    type_choice = State()
+    cabinet = State()
 
 class DeleteSubjectState(StatesGroup):
     subject_choice = State()
