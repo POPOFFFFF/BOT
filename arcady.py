@@ -1052,17 +1052,27 @@ async def get_rasp_formatted(day, week_type):
             cabinet = row[1]
             subject_name = row[2]
             
-            # Меняем порядок: сначала предмет, потом кабинет
             if subject_name == "Свободно":
                 msg_lines.append(f"{i}. Свободно")
             elif cabinet:
-                msg_lines.append(f"{i}. {subject_name} {cabinet}")
+                # Убираем номер кабинета из названия предмета, если он там есть
+                # Оставляем только чистое название предмета
+                clean_subject_name = subject_name
+                # Удаляем последнее число из названия (если оно есть)
+                import re
+                clean_subject_name = re.sub(r'\s+\d+$', '', clean_subject_name)
+                
+                msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
             else:
-                msg_lines.append(f"{i}. {subject_name}")
+                # Если кабинета нет, тоже чистим название
+                import re
+                clean_subject_name = re.sub(r'\s+\d+$', '', subject_name)
+                msg_lines.append(f"{i}. {clean_subject_name}")
         else:
             msg_lines.append(f"{i}. Свободно")
     
     return "\n".join(msg_lines)
+    
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
 async def reschedule_publish_jobs(pool):
