@@ -490,17 +490,61 @@ async def choose_day(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
     await state.set_state(AddLessonState.pair_number)
 
+
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
     await state.update_data(pair_number=pair_number)
-    await callback.message.edit_text("Введите кабинет для этой пары:")
-    await state.set_state(AddLessonState.cabinet)
+    
+    data = await state.get_data()
+    subject_name = data["subject"]
+    
+    # Проверяем, есть ли у предмета фиксированный кабинет (rK)
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT rK FROM subjects WHERE name=%s", (subject_name,))
+            result = await cur.fetchone()
+            is_rk = result[0] if result else False
+    
+    if is_rk:
+        # Если предмет с rK - спрашиваем кабинет
+        await callback.message.edit_text("Введите кабинет для этой пары:")
+        await state.set_state(AddLessonState.cabinet)
+    else:
+        # Если предмет без rK - используем кабинет из названия предмета
+        # Извлекаем кабинет из названия предмета (последнее число)
+        import re
+        numbers = re.findall(r'\d+', subject_name)
+        cabinet = numbers[-1] if numbers else "Не указан"
+        
+        # Сохраняем автоматически определенный кабинет
+        await state.update_data(cabinet=cabinet)
+        
+        # Добавляем урок сразу без запроса кабинета
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
+                subject_id = (await cur.fetchone())[0]
+                await cur.execute("""
+                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number, subject_id, cabinet))
+        
+        await callback.message.edit_text(
+            f"✅ Урок '{subject_name}' добавлен!\n"
+            f"📅 День: {DAYS[data['day']-1]}\n"
+            f"🔢 Пара: {pair_number}\n"
+            f"🏫 Кабинет: {cabinet} (автоматически)\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        await state.clear()
 
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
@@ -509,9 +553,17 @@ async def set_cabinet(message: types.Message, state: FSMContext):
                 INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
-    await message.answer(f"✅ Урок '{data['subject']}' добавлен на {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}")
+    
+    await message.answer(
+        f"✅ Урок '{data['subject']}' добавлен!\n"
+        f"📅 День: {DAYS[data['day']-1]}\n" 
+        f"🔢 Пара: {data['pair_number']}\n"
+        f"🏫 Кабинет: {cabinet} (вручную)\n\n"
+        f"⚙ Админ-панель:",
+        reply_markup=admin_menu()
+    )
     await state.clear()
-
+    
 @dp.callback_query(F.data.startswith("addlesson_"))
 async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
     lesson = callback.data[len("addlesson_"):]
@@ -777,11 +829,26 @@ async def cmd_addu(message: types.Message):
         return
     name = parts[1]
     param = parts[2] if len(parts) == 3 else None
-    rK_flag = param == "rK"
+    
+    # Определяем, является ли параметр rK или кабинетом
+    rK_flag = False
+    cabinet = None
+    
+    if param:
+        if param.lower() == "rk":
+            rK_flag = True
+        else:
+            # Если параметр не "rK", то это кабинет - добавляем его к названию
+            name = f"{name} {param}"
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (name, rK_flag))
-    await message.answer(f"✅ Предмет '{name}' добавлен {'с rK' if rK_flag else f'с кабинетом {param}'}")
+    
+    if rK_flag:
+        await message.answer(f"✅ Предмет '{name}' добавлен с rK (кабинет будет запрашиваться при добавлении)")
+    else:
+        await message.answer(f"✅ Предмет '{name}' добавлен с фиксированным кабинетом")
 
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
