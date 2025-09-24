@@ -617,11 +617,21 @@ async def get_rasp_formatted(day, week_type):
             )
             rows = await cur.fetchall()
     
-    # Создаем словарь для быстрого доступа к данным по номеру пары
-    pairs_dict = {row[0]: row for row in rows}
+    # Находим максимальный номер пары, которая есть в расписании
+    max_pair = 0
+    pairs_dict = {}
+    for row in rows:
+        pair_num = row[0]
+        pairs_dict[pair_num] = row
+        if pair_num > max_pair:
+            max_pair = pair_num
     
-    # Формируем строки для всех пар от 1 до 6
-    for i in range(1, 7):
+    # Если вообще нет пар в расписании
+    if max_pair == 0:
+        return "Расписание пустое."
+    
+    # Формируем строки только до максимальной существующей пары
+    for i in range(1, max_pair + 1):
         if i in pairs_dict:
             row = pairs_dict[i]
             cabinet_text = f"{row[1]} " if row[1] else ""
@@ -630,7 +640,6 @@ async def get_rasp_formatted(day, week_type):
             msg_lines.append(f"{i}. Свободно")
     
     return "\n".join(msg_lines)
-
 @dp.message(Command("addu"))
 async def cmd_addu(message: types.Message):
     parts = message.text.split(maxsplit=2)
