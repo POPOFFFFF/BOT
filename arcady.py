@@ -1055,18 +1055,20 @@ async def get_rasp_formatted(day, week_type):
             if subject_name == "Свободно":
                 msg_lines.append(f"{i}. Свободно")
             elif cabinet:
-                # Убираем номер кабинета из названия предмета, если он там есть
-                # Оставляем только чистое название предмета
-                clean_subject_name = subject_name
-                # Удаляем последнее число из названия (если оно есть)
+                # Убираем из названия предмета только простые числа (303, 311 и т.д.)
+                # Но оставляем сложные форматы (303/311, сп/з, 101а и т.п.)
                 import re
-                clean_subject_name = re.sub(r'\s+\d+$', '', clean_subject_name)
+                clean_subject_name = subject_name
+                
+                # Удаляем только простые числа в конце названия (через пробел)
+                # Не удаляем если есть слеши, буквы и т.д.
+                clean_subject_name = re.sub(r'\s+(\d+)$', '', clean_subject_name)
                 
                 msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
             else:
-                # Если кабинета нет, тоже чистим название
+                # Если кабинета нет, тоже чистим название от простых чисел
                 import re
-                clean_subject_name = re.sub(r'\s+\d+$', '', subject_name)
+                clean_subject_name = re.sub(r'\s+(\d+)$', '', subject_name)
                 msg_lines.append(f"{i}. {clean_subject_name}")
         else:
             msg_lines.append(f"{i}. Свободно")
