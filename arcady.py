@@ -754,7 +754,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             if cabinet_match:
                 # Если нашли кабинет в названии - извлекаем его
                 cabinet = cabinet_match.group(2)
-                # Очищаем название предмета от кабинета
+                # Очищаем название предмета от кабинета только для отображения
                 clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
             else:
                 # Если кабинета в названии нет
@@ -764,7 +764,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             # Сохраняем кабинет
             await state.update_data(cabinet=cabinet)
             
-            # Добавляем урок
+            # Добавляем урок (НЕ обновляем название в базе!)
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     # Получаем ID предмета
@@ -782,19 +782,12 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                         INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number, subject_id, cabinet))
-                    
-                    # Обновляем название предмета в базе без кабинета (если оно изменилось)
-                    if clean_subject_name != subject_name:
-                        await cur.execute("UPDATE subjects SET name=%s WHERE id=%s", (clean_subject_name, subject_id))
-                        print(f"🔧 Обновлено название предмета: '{subject_name}' -> '{clean_subject_name}'")
-                    
-                    # Проверяем, что сохранилось
-                    await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
-                    updated_name = (await cur.fetchone())[0]
-                    print(f"🔍 В базе сохранено: '{updated_name}'")
+            
+            # Для отображения используем очищенное название
+            display_name = clean_subject_name
             
             await callback.message.edit_text(
-                f"✅ Урок '{clean_subject_name}' добавлен!\n"
+                f"✅ Урок '{display_name}' добавлен!\n"
                 f"📅 День: {DAYS[data['day']-1]}\n"
                 f"🔢 Пара: {pair_number}\n"
                 f"🏫 Кабинет: {cabinet}\n\n"
@@ -1086,10 +1079,22 @@ async def get_rasp_formatted(day, week_type):
             
             if subject_name == "Свободно":
                 msg_lines.append(f"{i}. Свободно")
-            elif cabinet and cabinet != "Не указан":
-                msg_lines.append(f"{i}. {cabinet} {subject_name}")
             else:
-                msg_lines.append(f"{i}. {subject_name}")
+                # Для предметов с кабинетом в названии - извлекаем чистое название
+                import re
+                clean_subject_name = re.sub(r'\s+(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                
+                if cabinet and cabinet != "Не указан":
+                    # Если кабинет указан отдельно - используем его
+                    msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
+                else:
+                    # Если кабинета нет - пытаемся извлечь из названия
+                    cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
+                    if cabinet_match:
+                        extracted_cabinet = cabinet_match.group(2)
+                        msg_lines.append(f"{i}. {extracted_cabinet} {clean_subject_name}")
+                    else:
+                        msg_lines.append(f"{i}. {clean_subject_name}")
         else:
             msg_lines.append(f"{i}. Свободно")
     
