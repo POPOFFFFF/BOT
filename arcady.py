@@ -748,7 +748,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         else:
             # Если предмет без rK - пытаемся извлечь кабинет из названия
             import re
-            # Ищем кабинет в конце названия (числа, сп/з, буквенно-цифровые комбинации)
+            # Ищем кабинет в конце названия
             cabinet_match = re.search(r'(\s+)(\d+[а-я]?|\d+/\d+|сп/з|актовый зал|спортзал)$', subject_name)
             
             if cabinet_match:
@@ -764,7 +764,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             # Сохраняем кабинет
             await state.update_data(cabinet=cabinet)
             
-            # Добавляем урок и обновляем название предмета в одной транзакции
+            # Добавляем урок
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     # Получаем ID предмета
@@ -786,6 +786,12 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                     # Обновляем название предмета в базе без кабинета (если оно изменилось)
                     if clean_subject_name != subject_name:
                         await cur.execute("UPDATE subjects SET name=%s WHERE id=%s", (clean_subject_name, subject_id))
+                        print(f"🔧 Обновлено название предмета: '{subject_name}' -> '{clean_subject_name}'")
+                    
+                    # Проверяем, что сохранилось
+                    await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                    updated_name = (await cur.fetchone())[0]
+                    print(f"🔍 В базе сохранено: '{updated_name}'")
             
             await callback.message.edit_text(
                 f"✅ Урок '{clean_subject_name}' добавлен!\n"
