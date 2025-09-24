@@ -1049,13 +1049,20 @@ async def get_rasp_formatted(day, week_type):
     for i in range(1, max_pair + 1):
         if i in pairs_dict:
             row = pairs_dict[i]
-            cabinet_text = f"{row[1]} " if row[1] else ""
-            msg_lines.append(f"{i}. {cabinet_text}{row[2]}")
+            cabinet = row[1]
+            subject_name = row[2]
+            
+            # Меняем порядок: сначала предмет, потом кабинет
+            if subject_name == "Свободно":
+                msg_lines.append(f"{i}. Свободно")
+            elif cabinet:
+                msg_lines.append(f"{i}. {subject_name} {cabinet}")
+            else:
+                msg_lines.append(f"{i}. {subject_name}")
         else:
             msg_lines.append(f"{i}. Свободно")
     
     return "\n".join(msg_lines)
-
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
 async def reschedule_publish_jobs(pool):
