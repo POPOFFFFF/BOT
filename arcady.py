@@ -977,7 +977,6 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
     
     await callback.answer()
 
-
 async def ask_gpt(text: str, image_url: str = None) -> str:
     """Отправляет запрос к ChatGPT API"""
     headers = {
@@ -987,15 +986,12 @@ async def ask_gpt(text: str, image_url: str = None) -> str:
     
     messages = [{"role": "user", "content": text}]
     
+    # Для GPT-3.5-turbo не поддерживается анализ изображений, поэтому используем только текст
     if image_url:
-        # Если есть изображение, добавляем его в запрос
-        messages[0]["content"] = [
-            {"type": "text", "text": text},
-            {"type": "image_url", "image_url": {"url": image_url}}
-        ]
+        messages[0]["content"] = f"{text}\n\n(К сообщению прикреплено изображение, но я его не вижу. Опишите его словами для лучшего ответа.)"
     
     data = {
-        "model": "gpt-4-vision-preview" if image_url else "gpt-4",
+        "model": "gpt-3.5-turbo",  # Используем модель, которая доступна всем
         "messages": messages,
         "max_tokens": 1000
     }
@@ -1109,12 +1105,11 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
             largest_photo = message.photo[-1]
             file_info = await bot.get_file(largest_photo.file_id)
             image_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
-        
-        # Отправляем запрос к ChatGPT
-        response_text = await ask_gpt(query, image_url)
+            # Добавляем информацию о фото к запросу
+            query = f"{query} (К сообщению прикреплено изображение)"
         
         # Проверяем, не запрашивает ли пользователь генерацию изображения
-        if any(word in query.lower() for word in ["нарисуй", "сгенерируй изображение", "создай картинку", "draw", "generate image", "изображение"]):
+        if any(word in query.lower() for word in ["нарисуй", "сгенерируй изображение", "создай картинку", "draw", "generate image", "изображение", "картинк"]):
             # Генерируем изображение
             image_url = await generate_image(query)
             if image_url:
@@ -1123,13 +1118,17 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
                 if image_data:
                     await message.reply_photo(
                         photo=types.BufferedInputFile(image_data.getvalue(), filename="generated_image.jpg"), 
-                        caption=response_text[:1000] if response_text else "Сгенерированное изображение"
+                        caption="🖼️ Сгенерированное изображение по вашему запросу"
                     )
                 else:
-                    await message.reply(f"✅ ChatGPT ответ:\n{response_text}\n\n⚠ Не удалось загрузить сгенерированное изображение")
+                    await message.reply("✅ Изображение сгенерировано!\n\n⚠ Но не удалось его загрузить. Попробуйте еще раз.")
             else:
-                await message.reply(f"✅ ChatGPT ответ:\n{response_text}\n\n⚠ Не удалось сгенерировать изображение")
+                await message.reply("❌ Не удалось сгенерировать изображение. Проверьте баланс API ключа или попробуйте другой запрос.")
+        
         else:
+            # Отправляем текстовый запрос к ChatGPT
+            response_text = await ask_gpt(query, image_url)
+            
             # Отправляем текстовый ответ (разбиваем на части если слишком длинный)
             if len(response_text) > 4000:
                 parts = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
@@ -1176,7 +1175,10 @@ async def gpt_request_handler(callback: types.CallbackQuery, state: FSMContext):
         "🤖 ChatGPT запрос\n\n"
         "Отправьте команду в формате:\n"
         "<code>/aigpt@arcadiyis07_bot ваш запрос</code>\n\n"
-        "Можно прикреплять фото для анализа.\n"
+        "📝 Примеры:\n"
+        "• /aigpt@arcadiyis07_bot расскажи о космосе\n"
+        "• /aigpt@arcadiyis07_bot нарисуй кота в космосе\n"
+        "• /aigpt@arcadiyis07_bot решить уравнение 2x+5=15\n\n"
         "⏰ Ограничение: 1 запрос в 10 секунд",
         parse_mode="HTML"
     )
