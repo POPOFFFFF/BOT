@@ -1022,7 +1022,7 @@ async def generate_image(prompt: str) -> str:
     }
     
     async with aiohttp.ClientSession() as session:
-        async with session.post("https://cdn.puter.com/puter.js", 
+        async with session.post("https://api.openai.com/v1/chat/completions", 
                               headers=headers, json=data) as response:
             if response.status == 200:
                 result = await response.json()
