@@ -18,10 +18,7 @@ import re
 import aiohttp
 import io
 
-# Добавляем API ключ ChatGPT
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# ... остальной импорт и настройки остаются без изменений ...
 
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -40,8 +37,6 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
-# Словарь для отслеживания времени последнего запроса пользователей
-user_last_request: Dict[int, datetime.datetime] = {}
 
 async def get_pool():
     return await aiomysql.create_pool(
@@ -274,8 +269,6 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
-class GPTRequestState(StatesGroup):
-    waiting_for_response = State()
 
 class ViewMessagesState(StatesGroup):
     browsing = State()
@@ -707,7 +700,6 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")])
-        buttons.append([InlineKeyboardButton(text="🤖 ChatGPT запрос", callback_data="gpt_request")])  # Новая кнопка
     
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
@@ -977,212 +969,6 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
     
     await callback.answer()
 
-async def ask_gpt(text: str, image_url: str = None) -> str:
-    """Отправляет запрос к ChatGPT API"""
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    messages = [{"role": "user", "content": text}]
-    
-    # Для GPT-3.5-turbo не поддерживается анализ изображений, поэтому используем только текст
-    if image_url:
-        messages[0]["content"] = f"{text}\n\n(К сообщению прикреплено изображение, но я его не вижу. Опишите его словами для лучшего ответа.)"
-    
-    data = {
-        "model": "gpt-4o-mini-transcribe",  # Используем модель, которая доступна всем
-        "messages": messages,
-        "max_tokens": 100
-    }
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post("https://api.openai.com/v1/chat/completions", 
-                              headers=headers, json=data) as response:
-            if response.status == 200:
-                result = await response.json()
-                return result["choices"][0]["message"]["content"]
-            else:
-                error_text = await response.text()
-                return f"❌ Ошибка API: {response.status} - {error_text}"
-
-async def generate_image(prompt: str) -> str:
-    """Генерирует изображение через DALL-E"""
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": "dall-e-3",
-        "prompt": prompt,
-        "size": "1024x1024",
-        "quality": "standard",
-        "n": 1
-    }
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post("https://api.openai.com/v1/chat/completions", 
-                              headers=headers, json=data) as response:
-            if response.status == 200:
-                result = await response.json()
-                return result["data"][0]["url"]
-            else:
-                error_text = await response.text()
-                return None
-
-async def download_image(url: str) -> io.BytesIO:
-    """Скачивает изображение по URL"""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                image_data = await response.read()
-                return io.BytesIO(image_data)
-            return None
-
-def can_user_make_request(user_id: int) -> Tuple[bool, int]:
-    """Проверяет, может ли пользователь сделать запрос (таймаут 10 секунд)"""
-    now = datetime.datetime.now()
-    
-    if user_id not in user_last_request:
-        return True, 0
-    
-    last_request = user_last_request[user_id]
-    time_since_last = (now - last_request).total_seconds()
-    
-    if time_since_last < 10:
-        return False, int(10 - time_since_last)
-    
-    return True, 0
-
-@dp.message(Command("aigpt"))
-async def handle_gpt_command(message: types.Message, state: FSMContext):
-    """Обработчик команды /aigpt"""
-    # Проверяем, что команда используется в беседе
-   # if message.chat.type not in ["group", "supergroup"]:
-    #    await message.answer("❌ Эта команда доступна только в беседе")
-     #   return
-    
-    # Проверяем таймаут пользователя
-    user_id = message.from_user.id
-    can_request, time_left = can_user_make_request(user_id)
-    
-    if not can_request:
-        await message.reply(f"⏳ Подождите {time_left} секунд перед следующим запросом")
-        return
-    
-    # Обновляем время последнего запроса
-    user_last_request[user_id] = datetime.datetime.now()
-    
-    # Проверяем, что есть запрос
-    if len(message.text.split()) < 2:
-        await message.answer("⚠ Использование: /aigpt@arcadiyis07_bot [ваш запрос]")
-        return
-    
-    # Извлекаем запрос
-    query = message.text.split(maxsplit=1)[1].strip()
-    
-    # Сохраняем информацию о запросе
-    await state.update_data(
-        original_message_id=message.message_id,
-        query=query,
-        chat_id=message.chat.id,
-        user_id=user_id
-    )
-    
-    # Устанавливаем состояние ожидания ответа
-    await state.set_state(GPTRequestState.waiting_for_response)
-    
-    # Отправляем сообщение о начале обработки
-    processing_msg = await message.reply("🔄 Запрос отправлен ChatGPT...")
-    await state.update_data(processing_message_id=processing_msg.message_id)
-    
-    try:
-        # Проверяем, есть ли прикрепленное фото
-        image_url = None
-        if message.photo:
-            # Получаем URL самого большого фото
-            largest_photo = message.photo[-1]
-            file_info = await bot.get_file(largest_photo.file_id)
-            image_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
-            # Добавляем информацию о фото к запросу
-            query = f"{query} (К сообщению прикреплено изображение)"
-        
-        # Проверяем, не запрашивает ли пользователь генерацию изображения
-        if any(word in query.lower() for word in ["нарисуй", "сгенерируй изображение", "создай картинку", "draw", "generate image", "изображение", "картинк"]):
-            # Генерируем изображение
-            image_url = await generate_image(query)
-            if image_url:
-                # Скачиваем и отправляем изображение
-                image_data = await download_image(image_url)
-                if image_data:
-                    await message.reply_photo(
-                        photo=types.BufferedInputFile(image_data.getvalue(), filename="generated_image.jpg"), 
-                        caption="🖼️ Сгенерированное изображение по вашему запросу"
-                    )
-                else:
-                    await message.reply("✅ Изображение сгенерировано!\n\n⚠ Но не удалось его загрузить. Попробуйте еще раз.")
-            else:
-                await message.reply("❌ Не удалось сгенерировать изображение. Проверьте баланс API ключа или попробуйте другой запрос.")
-        
-        else:
-            # Отправляем текстовый запрос к ChatGPT
-            response_text = await ask_gpt(query, image_url)
-            
-            # Отправляем текстовый ответ (разбиваем на части если слишком длинный)
-            if len(response_text) > 4000:
-                parts = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
-                for i, part in enumerate(parts):
-                    if i == 0:
-                        await message.reply(f"✅ ChatGPT ответ (часть {i+1}):\n{part}")
-                    else:
-                        await message.answer(f"📄 Продолжение (часть {i+1}):\n{part}")
-            else:
-                await message.reply(f"✅ ChatGPT ответ:\n{response_text}")
-        
-        # Удаляем сообщение о обработке
-        try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
-        except:
-            pass
-            
-    except Exception as e:
-        error_msg = f"❌ Ошибка при обращении к ChatGPT: {str(e)}"
-        await message.reply(error_msg)
-        try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
-        except:
-            pass
-    finally:
-        await state.clear()
-
-@dp.callback_query(F.data == "gpt_request")
-async def gpt_request_handler(callback: types.CallbackQuery, state: FSMContext):
-    """Обработчик кнопки ChatGPT запрос"""
-    if callback.message.chat.type not in ["group", "supergroup"]:
-        await callback.answer("❌ Эта функция доступна только в беседе", show_alert=True)
-        return
-    
-    # Проверяем таймаут пользователя
-    user_id = callback.from_user.id
-    can_request, time_left = can_user_make_request(user_id)
-    
-    if not can_request:
-        await callback.answer(f"⏳ Подождите {time_left} секунд перед следующим запросом", show_alert=True)
-        return
-    
-    await callback.message.edit_text(
-        "🤖 ChatGPT запрос\n\n"
-        "Отправьте команду в формате:\n"
-        "<code>/aigpt@arcadiyis07_bot ваш запрос</code>\n\n"
-        "📝 Примеры:\n"
-        "• /aigpt@arcadiyis07_bot расскажи о космосе\n"
-        "• /aigpt@arcadiyis07_bot нарисуй кота в космосе\n"
-        "• /aigpt@arcadiyis07_bot решить уравнение 2x+5=15\n\n"
-        "⏰ Ограничение: 1 запрос в 10 секунд",
-        parse_mode="HTML"
-    )
-    await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_delete_subject_"))
 async def confirm_delete_subject(callback: types.CallbackQuery):
@@ -1805,7 +1591,7 @@ async def reschedule_publish_jobs(pool):
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
         except Exception:
             pass
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy", "/aigpt@arcadiyis07_bot"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
 
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
