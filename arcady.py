@@ -10,17 +10,19 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import aiomysql
 import random
 import ssl
 import re
 import aiohttp
-import base64
 import io
-from PIL import Image
 
+# Добавляем API ключ ChatGPT
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# ... остальной импорт и настройки остаются без изменений ...
+
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344, 7620086223]
@@ -37,6 +39,10 @@ scheduler = AsyncIOScheduler(timezone=TZ)
 ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
+
+# Словарь для отслеживания времени последнего запроса пользователей
+user_last_request: Dict[int, datetime.datetime] = {}
+
 async def get_pool():
     return await aiomysql.create_pool(
         host=DB_HOST,
@@ -1038,6 +1044,21 @@ async def download_image(url: str) -> io.BytesIO:
                 return io.BytesIO(image_data)
             return None
 
+def can_user_make_request(user_id: int) -> Tuple[bool, int]:
+    """Проверяет, может ли пользователь сделать запрос (таймаут 10 секунд)"""
+    now = datetime.datetime.now()
+    
+    if user_id not in user_last_request:
+        return True, 0
+    
+    last_request = user_last_request[user_id]
+    time_since_last = (now - last_request).total_seconds()
+    
+    if time_since_last < 10:
+        return False, int(10 - time_since_last)
+    
+    return True, 0
+
 @dp.message(Command("aigpt"))
 async def handle_gpt_command(message: types.Message, state: FSMContext):
     """Обработчик команды /aigpt"""
@@ -1045,6 +1066,17 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("❌ Эта команда доступна только в беседе")
         return
+    
+    # Проверяем таймаут пользователя
+    user_id = message.from_user.id
+    can_request, time_left = can_user_make_request(user_id)
+    
+    if not can_request:
+        await message.reply(f"⏳ Подождите {time_left} секунд перед следующим запросом")
+        return
+    
+    # Обновляем время последнего запроса
+    user_last_request[user_id] = datetime.datetime.now()
     
     # Проверяем, что есть запрос
     if len(message.text.split()) < 2:
@@ -1058,7 +1090,8 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
     await state.update_data(
         original_message_id=message.message_id,
         query=query,
-        chat_id=message.chat.id
+        chat_id=message.chat.id,
+        user_id=user_id
     )
     
     # Устанавливаем состояние ожидания ответа
@@ -1077,18 +1110,21 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
             file_info = await bot.get_file(largest_photo.file_id)
             image_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
         
-        # Отправляем запрос к ChatGPT с таймаутом 10 секунд
-        response_text = await asyncio.wait_for(ask_gpt(query, image_url), timeout=10.0)
+        # Отправляем запрос к ChatGPT
+        response_text = await ask_gpt(query, image_url)
         
         # Проверяем, не запрашивает ли пользователь генерацию изображения
-        if any(word in query.lower() for word in ["нарисуй", "сгенерируй изображение", "создай картинку", "draw", "generate image"]):
+        if any(word in query.lower() for word in ["нарисуй", "сгенерируй изображение", "создай картинку", "draw", "generate image", "изображение"]):
             # Генерируем изображение
             image_url = await generate_image(query)
             if image_url:
                 # Скачиваем и отправляем изображение
                 image_data = await download_image(image_url)
                 if image_data:
-                    await message.reply_photo(photo=types.BufferedInputFile(image_data.getvalue(), filename="generated_image.png"), caption=response_text[:1000])
+                    await message.reply_photo(
+                        photo=types.BufferedInputFile(image_data.getvalue(), filename="generated_image.jpg"), 
+                        caption=response_text[:1000] if response_text else "Сгенерированное изображение"
+                    )
                 else:
                     await message.reply(f"✅ ChatGPT ответ:\n{response_text}\n\n⚠ Не удалось загрузить сгенерированное изображение")
             else:
@@ -1101,7 +1137,7 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
                     if i == 0:
                         await message.reply(f"✅ ChatGPT ответ (часть {i+1}):\n{part}")
                     else:
-                        await message.answer(f"✅ Продолжение (часть {i+1}):\n{part}")
+                        await message.answer(f"📄 Продолжение (часть {i+1}):\n{part}")
             else:
                 await message.reply(f"✅ ChatGPT ответ:\n{response_text}")
         
@@ -1111,14 +1147,9 @@ async def handle_gpt_command(message: types.Message, state: FSMContext):
         except:
             pass
             
-    except asyncio.TimeoutError:
-        await message.reply("❌ Время ожидания ответа истекло (10 секунд)")
-        try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
-        except:
-            pass
     except Exception as e:
-        await message.reply(f"❌ Ошибка при обращении к ChatGPT: {str(e)}")
+        error_msg = f"❌ Ошибка при обращении к ChatGPT: {str(e)}"
+        await message.reply(error_msg)
         try:
             await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
         except:
@@ -1133,16 +1164,23 @@ async def gpt_request_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Эта функция доступна только в беседе", show_alert=True)
         return
     
+    # Проверяем таймаут пользователя
+    user_id = callback.from_user.id
+    can_request, time_left = can_user_make_request(user_id)
+    
+    if not can_request:
+        await callback.answer(f"⏳ Подождите {time_left} секунд перед следующим запросом", show_alert=True)
+        return
+    
     await callback.message.edit_text(
         "🤖 ChatGPT запрос\n\n"
         "Отправьте команду в формате:\n"
         "<code>/aigpt@arcadiyis07_bot ваш запрос</code>\n\n"
         "Можно прикреплять фото для анализа.\n"
-        "Таймаут: 10 секунд",
+        "⏰ Ограничение: 1 запрос в 10 секунд",
         parse_mode="HTML"
     )
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("confirm_delete_subject_"))
 async def confirm_delete_subject(callback: types.CallbackQuery):
