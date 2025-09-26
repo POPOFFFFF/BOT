@@ -557,7 +557,7 @@ async def view_specific_message(callback: types.CallbackQuery):
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
     await callback.answer()
 
-    @dp.callback_query(F.data == "back_to_messages_list")
+@dp.callback_query(F.data == "back_to_messages_list")
 async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     current_page = data.get('current_page', 0)
