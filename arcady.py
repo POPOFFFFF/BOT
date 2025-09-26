@@ -1022,7 +1022,7 @@ async def generate_image(prompt: str) -> str:
     }
     
     async with aiohttp.ClientSession() as session:
-        async with session.post("https://api.openai.com/v1/images/generations", 
+        async with session.post("https://cdn.puter.com/puter.js", 
                               headers=headers, json=data) as response:
             if response.status == 200:
                 result = await response.json()
@@ -1059,9 +1059,9 @@ def can_user_make_request(user_id: int) -> Tuple[bool, int]:
 async def handle_gpt_command(message: types.Message, state: FSMContext):
     """Обработчик команды /aigpt"""
     # Проверяем, что команда используется в беседе
-    if message.chat.type not in ["group", "supergroup"]:
-        await message.answer("❌ Эта команда доступна только в беседе")
-        return
+   # if message.chat.type not in ["group", "supergroup"]:
+    #    await message.answer("❌ Эта команда доступна только в беседе")
+     #   return
     
     # Проверяем таймаут пользователя
     user_id = message.from_user.id
