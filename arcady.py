@@ -504,7 +504,7 @@ async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMCo
     await callback.answer()
 
 
-    @dp.callback_query(F.data.startswith("view_message_"))
+@dp.callback_query(F.data.startswith("view_message_"))
 async def view_specific_message(callback: types.CallbackQuery):
     try:
         message_db_id = int(callback.data.split("_")[2])
