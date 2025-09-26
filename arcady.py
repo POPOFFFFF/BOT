@@ -19,7 +19,7 @@ import re
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344, 7620086223]
-SPECIAL_USER_ID = [7228927149]
+SPECIAL_USER_ID = []
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER")
