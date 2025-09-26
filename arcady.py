@@ -273,7 +273,8 @@ class AddSubjectState(StatesGroup):
     name = State()
     type_choice = State()
     cabinet = State()
-
+class DeleteTeacherMessageState(StatesGroup):
+    message_id = State()
 class DeleteSubjectState(StatesGroup):
     subject_choice = State()
 
@@ -328,6 +329,14 @@ async def set_special_user_signature(pool, user_id: int, signature: str):
                 ON DUPLICATE KEY UPDATE signature=%s
             """, (user_id, signature, signature))
 
+async def delete_teacher_message(pool, message_id: int) -> bool:
+    """Удаляет сообщение преподавателя по ID"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM teacher_messages WHERE id = %s", (message_id,))
+            await conn.commit()
+            return cur.rowcount > 0
+
 
 @dp.callback_query(F.data == "send_message_chat")
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
@@ -374,6 +383,11 @@ async def disable_forward_mode_after_timeout(user_id: int, state: FSMContext):
             pass  # Пользователь заблокировал бота или чат закрыт
 @dp.message(SendMessageState.active)
 async def process_forward_message(message: types.Message, state: FSMContext):
+    # Фильтрация сообщений, начинающихся с /
+    if message.text and message.text.startswith('/'):
+        await message.answer("❌ Сообщения, начинающиеся с /, не отправляются.")
+        return
+    
     data = await state.get_data()
     signature = data.get("signature", "ПРОВЕРКА")
     
@@ -390,18 +404,34 @@ async def process_forward_message(message: types.Message, state: FSMContext):
         elif message.photo:
             message_text = message.caption or ""
             message_type = "photo"
+            # Фильтрация подписи к фото
+            if message.caption and message.caption.startswith('/'):
+                await message.answer("❌ Подписи к фото, начинающиеся с /, не отправляются.")
+                return
             sent_message = await bot.send_photo(DEFAULT_CHAT_ID, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
         elif message.document:
             message_text = message.caption or ""
             message_type = "document"
+            # Фильтрация подписи к документу
+            if message.caption and message.caption.startswith('/'):
+                await message.answer("❌ Подписи к документам, начинающиеся с /, не отправляются.")
+                return
             sent_message = await bot.send_document(DEFAULT_CHAT_ID, message.document.file_id, caption=prefix + (message.caption or ""))
         elif message.video:
             message_text = message.caption or ""
             message_type = "video"
+            # Фильтрация подписи к видео
+            if message.caption and message.caption.startswith('/'):
+                await message.answer("❌ Подписи к видео, начинающиеся с /, не отправляются.")
+                return
             sent_message = await bot.send_video(DEFAULT_CHAT_ID, message.video.file_id, caption=prefix + (message.caption or ""))
         elif message.audio:
             message_text = message.caption or ""
             message_type = "audio"
+            # Фильтрация подписи к аудио
+            if message.caption and message.caption.startswith('/'):
+                await message.answer("❌ Подписи к аудио, начинающиеся с /, не отправляются.")
+                return
             sent_message = await bot.send_audio(DEFAULT_CHAT_ID, message.audio.file_id, caption=prefix + (message.caption or ""))
         elif message.voice:
             message_text = "голосовое сообщение"
@@ -432,6 +462,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при пересылке: {e}")
 
 
+
 @dp.callback_query(F.data == "view_teacher_messages")
 async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
     # Проверяем, что это группой чат
@@ -441,6 +472,12 @@ async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMC
 
     await show_teacher_messages_page(callback, state, page=0)
     await callback.answer()
+
+
+@dp.callback_query(F.data == "menu_back_from_messages")
+async def menu_back_from_messages_handler(callback: types.CallbackQuery, state: FSMContext):
+    await menu_back_handler(callback, state)
+
 
 async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMContext, page: int = 0):
     limit = 10
@@ -483,7 +520,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
     
-    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
+    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))  # Используем menu_back
     
     if (page + 1) * limit < total_count:
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
@@ -576,7 +613,6 @@ async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext
     await callback.answer()
 
 
-
 @dp.callback_query(F.data == "admin_add_special_user")
 async def admin_add_special_user_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -607,6 +643,8 @@ async def process_special_user_id(message: types.Message, state: FSMContext):
         
     except ValueError:
         await message.answer("❌ Неверный формат ID. Введите только цифры:")
+
+
 
 @dp.message(AddSpecialUserState.signature)
 async def process_special_user_signature(message: types.Message, state: FSMContext):
@@ -676,10 +714,11 @@ def admin_menu():
 
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
 
-        [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],  # Новая кнопка
-        [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data="admin_delete_subject")],  # Новая кнопка
+        [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],
+        [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data="admin_delete_subject")],
 
         [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],
+        [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data="admin_delete_teacher_message")],  # Новая кнопка
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
@@ -947,13 +986,55 @@ async def confirm_delete_subject(callback: types.CallbackQuery, state: FSMContex
     await state.clear()
     await callback.answer()
 
+@dp.callback_query(F.data == "menu_back")
+async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        await state.clear()
+    except Exception:
+        pass
+    
+    is_private = callback.message.chat.type == "private"
+    is_group_chat = callback.message.chat.type in ["group", "supergroup"]  # Добавляем проверку группового чата
+    is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
+    
+    # Проверяем спец-пользователей через базу данных
+    is_special_user = False
+    if is_private:
+        signature = await get_special_user_signature(pool, callback.from_user.id)
+        is_special_user = signature is not None
+    
+    try:
+        await callback.message.delete()
+        await greet_and_send(
+            callback.from_user, 
+            "Выберите действие:", 
+            chat_id=callback.message.chat.id, 
+            markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat)
+        )
+    except Exception:
+        try:
+            await greet_and_send(
+                callback.from_user, 
+                "Выберите действие:", 
+                callback=callback, 
+                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat)
+            )
+        except Exception:
+            await greet_and_send(
+                callback.from_user, 
+                "Выберите действие:", 
+                chat_id=callback.message.chat.id, 
+                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat)
+            )
+
+    await callback.answer()
+
+
+
 @dp.callback_query(F.data == "cancel_delete")
 async def cancel_delete_subject(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("❌ Удаление отменено.")
-    
-    # Возвращаем в админ-меню
-    await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
-    await state.clear()
+    await menu_back_handler(callback, state)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("pair_"))
@@ -1214,6 +1295,146 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
                          callback=callback)
     await state.clear()
     await callback.answer()
+
+@dp.callback_query(F.data == "admin_delete_teacher_message")
+async def admin_delete_teacher_message_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    # Получаем последние сообщения для выбора
+    messages = await get_teacher_messages(pool, DEFAULT_CHAT_ID, limit=20)
+    
+    if not messages:
+        await callback.message.edit_text(
+            "🗑️ Удаление сообщения преподавателя\n\n"
+            "❌ В базе нет сообщений для удаления."
+        )
+        await callback.answer()
+        return
+    
+    # Создаем клавиатуру с сообщениями
+    keyboard = []
+    for i, (msg_id, message_id, signature, text, msg_type, created_at) in enumerate(messages):
+        # Обрезаем длинный текст
+        display_text = text[:30] + "..." if len(text) > 30 else text
+        if not display_text:
+            display_text = f"{msg_type}"
+        
+        # Форматируем дату
+        if isinstance(created_at, datetime.datetime):
+            date_str = created_at.strftime("%d.%m %H:%M")
+        else:
+            date_str = str(created_at)
+        
+        button_text = f"{signature}: {display_text} ({date_str})"
+        
+        keyboard.append([InlineKeyboardButton(
+            text=button_text, 
+            callback_data=f"delete_teacher_msg_{msg_id}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback.message.edit_text(
+        "🗑️ Удаление сообщения преподавателя\n\n"
+        "Выберите сообщение для удаления:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Обработчик выбора сообщения для удаления
+@dp.callback_query(F.data.startswith("delete_teacher_msg_"))
+async def process_delete_teacher_message(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "menu_admin":
+        await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        await callback.answer()
+        return
+    
+    try:
+        message_db_id = int(callback.data[len("delete_teacher_msg_"):])
+        
+        # Получаем информацию о сообщении
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT signature, message_text, message_type, created_at
+                    FROM teacher_messages WHERE id = %s
+                """, (message_db_id,))
+                message_data = await cur.fetchone()
+        
+        if not message_data:
+            await callback.answer("❌ Сообщение не найдено", show_alert=True)
+            return
+        
+        signature, text, msg_type, created_at = message_data
+        
+        # Форматируем дату
+        if isinstance(created_at, datetime.datetime):
+            date_str = created_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            date_str = str(created_at)
+        
+        # Показываем подтверждение удаления
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_msg_{message_db_id}")],
+            [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete_msg")]
+        ])
+        
+        message_info = f"🗑️ Подтвердите удаление сообщения:\n\n"
+        message_info += f"👨‍🏫 От: {signature}\n"
+        message_info += f"📅 Дата: {date_str}\n"
+        message_info += f"📊 Тип: {msg_type}\n"
+        
+        if text and text != "голосовое сообщение" and text != "стикер":
+            message_info += f"📝 Текст: {text}\n"
+        
+        await callback.message.edit_text(message_info, reply_markup=kb)
+        
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+    await callback.answer()
+
+# Обработчик подтверждения удаления
+@dp.callback_query(F.data.startswith("confirm_delete_msg_"))
+async def confirm_delete_teacher_message(callback: types.CallbackQuery):
+    try:
+        message_db_id = int(callback.data[len("confirm_delete_msg_"):])
+        
+        # Удаляем сообщение
+        success = await delete_teacher_message(pool, message_db_id)
+        
+        if success:
+            await callback.message.edit_text(
+                "✅ Сообщение преподавателя успешно удалено из базы данных.\n\n"
+                "⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+        else:
+            await callback.message.edit_text(
+                "❌ Не удалось удалить сообщение. Возможно, оно уже было удалено.\n\n"
+                "⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+            
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при удалении: {e}\n\n"
+            "⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    await callback.answer()
+
+# Обработчик отмены удаления
+@dp.callback_query(F.data == "cancel_delete_msg")
+async def cancel_delete_teacher_message(callback: types.CallbackQuery):
+    # Вместо прямого возврата в админ-меню, используем menu_back для корректного отображения
+    await menu_back_handler(callback, None)
+    await callback.answer()
+
 
 @dp.callback_query(F.data == "admin_my_publish_time")
 async def admin_my_publish_time(callback: types.CallbackQuery):
