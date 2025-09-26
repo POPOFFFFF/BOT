@@ -1426,6 +1426,7 @@ async def confirm_delete_teacher_message(callback: types.CallbackQuery):
             "⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
+    
     await callback.answer()
 
 # Обработчик отмены удаления
