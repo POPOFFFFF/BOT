@@ -162,6 +162,17 @@ async def set_week_type(pool, chat_id, week_type):
                 ON DUPLICATE KEY UPDATE week_type=%s, set_at=%s
             """, (chat_id, week_type, today, week_type, today))
 
+async def load_special_users(pool):
+    """Загружает список спец-пользователей из базы данных"""
+    global SPECIAL_USER_ID
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT user_id FROM special_users")
+            rows = await cur.fetchall()
+            SPECIAL_USER_ID = [row[0] for row in rows]
+    print(f"Загружено {len(SPECIAL_USER_ID)} спец-пользователей: {SPECIAL_USER_ID}")
+
+
 async def get_week_setting(pool, chat_id):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -1728,6 +1739,9 @@ async def main():
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
+    
+    # Загружаем спец-пользователей из базы данных
+    await load_special_users(pool)
     
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
