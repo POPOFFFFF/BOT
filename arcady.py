@@ -940,8 +940,8 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
             if usage_count > 0:
                 # Предмет используется - предупреждаем
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="✅ Да, удалить вместе с уроками", callback_data=f"confirm_delete_{subject_id}")],
-                    [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete")]
+                    [InlineKeyboardButton(text="✅ Да, удалить вместе с уроками", callback_data=f"confirm_delete_subject_{subject_id}")],
+                    [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete_subject")]
                 ])
                 
                 await callback.message.edit_text(
@@ -961,9 +961,9 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
     
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("confirm_delete_"))
-async def confirm_delete_subject(callback: types.CallbackQuery, state: FSMContext):
-    subject_id = int(callback.data[len("confirm_delete_"):])
+@dp.callback_query(F.data.startswith("confirm_delete_subject_"))
+async def confirm_delete_subject(callback: types.CallbackQuery):
+    subject_id = int(callback.data[len("confirm_delete_subject_"):])
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -983,7 +983,6 @@ async def confirm_delete_subject(callback: types.CallbackQuery, state: FSMContex
     
     # Возвращаем в админ-меню
     await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
-    await state.clear()
     await callback.answer()
 
 @dp.callback_query(F.data == "menu_back")
@@ -1031,12 +1030,12 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
 
 
 
-@dp.callback_query(F.data == "cancel_delete")
+@dp.callback_query(F.data == "cancel_delete_subject")
 async def cancel_delete_subject(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("❌ Удаление отменено.")
     await menu_back_handler(callback, state)
     await callback.answer()
-
+    
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
