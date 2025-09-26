@@ -1386,7 +1386,17 @@ async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
+    await ensure_columns(pool)
+    
+    # Пересоздаем задания публикации при старте
+    await reschedule_publish_jobs(pool)
+    
     scheduler.start()
+    # Проверяем текущие задания
+    jobs = scheduler.get_jobs()
+    for job in jobs:
+    
     await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
