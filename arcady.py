@@ -991,7 +991,7 @@ async def ask_gpt(text: str, image_url: str = None) -> str:
         messages[0]["content"] = f"{text}\n\n(К сообщению прикреплено изображение, но я его не вижу. Опишите его словами для лучшего ответа.)"
     
     data = {
-        "model": "gpt-3.5-turbo-0613",  # Используем модель, которая доступна всем
+        "model": "gpt-4o-mini-transcribe",  # Используем модель, которая доступна всем
         "messages": messages,
         "max_tokens": 100
     }
