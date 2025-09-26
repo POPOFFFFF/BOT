@@ -1392,11 +1392,16 @@ async def main():
     await reschedule_publish_jobs(pool)
     
     scheduler.start()
+    print("Планировщик запущен")
+    
     # Проверяем текущие задания
     jobs = scheduler.get_jobs()
+    print(f"Активные задания: {len(jobs)}")
     for job in jobs:
+        print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
     
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
