@@ -1765,7 +1765,7 @@ async def reschedule_publish_jobs(pool):
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
         except Exception:
             pass
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
+TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy", "/aigpt@arcadiyis07_bot"]
 
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
