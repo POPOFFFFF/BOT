@@ -10,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
+from typing import List, Tuple
 import aiomysql
 import random
 import ssl
@@ -95,6 +96,17 @@ async def init_db(pool):
                 subject_id INT,
                 cabinet VARCHAR(50),
                 FOREIGN KEY (subject_id) REFERENCES subjects(id)
+            )""")
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS teacher_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT,
+                message_id BIGINT,
+                from_user_id BIGINT,
+                signature VARCHAR(255),
+                message_text TEXT,
+                message_type VARCHAR(50),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""")
             await conn.commit()
 async def ensure_columns(pool):
@@ -185,6 +197,34 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     else:
         return 1 if base_week_type == 2 else 2
 
+async def save_teacher_message(pool, chat_id: int, message_id: int, from_user_id: int, 
+                              signature: str, message_text: str, message_type: str):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO teacher_messages (chat_id, message_id, from_user_id, signature, message_text, message_type)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (chat_id, message_id, from_user_id, signature, message_text, message_type))
+
+async def get_teacher_messages(pool, chat_id: int, offset: int = 0, limit: int = 10) -> List[Tuple]:
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT id, message_id, signature, message_text, message_type, created_at
+                FROM teacher_messages 
+                WHERE chat_id = %s 
+                ORDER BY created_at DESC 
+                LIMIT %s OFFSET %s
+            """, (chat_id, limit, offset))
+            return await cur.fetchall()
+
+async def get_teacher_messages_count(pool, chat_id: int) -> int:
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT COUNT(*) FROM teacher_messages WHERE chat_id = %s", (chat_id,))
+            result = await cur.fetchone()
+            return result[0] if result else 0
+
 
 
 
@@ -212,8 +252,8 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
-
-
+class ViewMessagesState(StatesGroup):
+    browsing = State()
 class SendMessageState(StatesGroup):
     active = State()
 class SetChetState(StatesGroup):
@@ -329,28 +369,202 @@ async def process_forward_message(message: types.Message, state: FSMContext):
     prefix = f"Сообщение от {signature}: "
 
     try:
+        # Сохраняем информацию о сообщении перед отправкой
+        message_text = ""
+        message_type = "text"
+        
         if message.text:
-            await bot.send_message(DEFAULT_CHAT_ID, f"{prefix}{message.text}")
+            message_text = message.text
+            sent_message = await bot.send_message(DEFAULT_CHAT_ID, f"{prefix}{message.text}")
         elif message.photo:
-            await bot.send_photo(DEFAULT_CHAT_ID, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
+            message_text = message.caption or ""
+            message_type = "photo"
+            sent_message = await bot.send_photo(DEFAULT_CHAT_ID, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
         elif message.document:
-            await bot.send_document(DEFAULT_CHAT_ID, message.document.file_id, caption=prefix + (message.caption or ""))
+            message_text = message.caption or ""
+            message_type = "document"
+            sent_message = await bot.send_document(DEFAULT_CHAT_ID, message.document.file_id, caption=prefix + (message.caption or ""))
         elif message.video:
-            await bot.send_video(DEFAULT_CHAT_ID, message.video.file_id, caption=prefix + (message.caption or ""))
+            message_text = message.caption or ""
+            message_type = "video"
+            sent_message = await bot.send_video(DEFAULT_CHAT_ID, message.video.file_id, caption=prefix + (message.caption or ""))
         elif message.audio:
-            await bot.send_audio(DEFAULT_CHAT_ID, message.audio.file_id, caption=prefix + (message.caption or ""))
+            message_text = message.caption or ""
+            message_type = "audio"
+            sent_message = await bot.send_audio(DEFAULT_CHAT_ID, message.audio.file_id, caption=prefix + (message.caption or ""))
         elif message.voice:
-            await bot.send_voice(DEFAULT_CHAT_ID, message.voice.file_id, caption=prefix + (message.caption or ""))
+            message_text = "голосовое сообщение"
+            message_type = "voice"
+            sent_message = await bot.send_voice(DEFAULT_CHAT_ID, message.voice.file_id, caption=prefix)
         elif message.sticker:
-            await bot.send_sticker(DEFAULT_CHAT_ID, message.sticker.file_id)
+            message_text = "стикер"
+            message_type = "sticker"
+            sent_message = await bot.send_sticker(DEFAULT_CHAT_ID, message.sticker.file_id)
         else:
             await message.answer("⚠ Не удалось распознать тип сообщения.")
             return
+
+        # Сохраняем сообщение в базу
+        await save_teacher_message(
+            pool, 
+            DEFAULT_CHAT_ID, 
+            sent_message.message_id,
+            message.from_user.id,
+            signature,
+            message_text,
+            message_type
+        )
 
         await message.answer("✅ Сообщение переслано в беседу!")
         
     except Exception as e:
         await message.answer(f"❌ Ошибка при пересылке: {e}")
+
+
+@dp.callback_query(F.data == "view_teacher_messages")
+async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
+    # Проверяем, что это группой чат
+    if callback.message.chat.type not in ["group", "supergroup"]:
+        await callback.answer("⛔ Эта функция доступна только в беседе", show_alert=True)
+        return
+
+    await show_teacher_messages_page(callback, state, page=0)
+    await callback.answer()
+
+async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMContext, page: int = 0):
+    limit = 10
+    offset = page * limit
+    
+    messages = await get_teacher_messages(pool, DEFAULT_CHAT_ID, offset, limit)
+    total_count = await get_teacher_messages_count(pool, DEFAULT_CHAT_ID)
+    
+    if not messages:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        ])
+        await callback.message.edit_text(
+            "📝 Сообщения от преподавателей\n\n"
+            "Пока нет сохраненных сообщений от преподавателей.",
+            reply_markup=kb
+        )
+        return
+    
+    # Создаем клавиатуру с сообщениями
+    keyboard = []
+    for i, (msg_id, message_id, signature, text, msg_type, created_at) in enumerate(messages):
+        # Обрезаем длинный текст
+        display_text = text[:50] + "..." if len(text) > 50 else text
+        if not display_text:
+            display_text = f"{msg_type} сообщение"
+        
+        emoji = "📝" if msg_type == "text" else "🖼️" if msg_type == "photo" else "📎" if msg_type == "document" else "🎵"
+        button_text = f"{emoji} {signature}: {display_text}"
+        
+        # Создаем callback_data для перехода к сообщению
+        keyboard.append([InlineKeyboardButton(
+            text=button_text, 
+            callback_data=f"view_message_{msg_id}"
+        )])
+    
+    # Добавляем кнопки навигации
+    nav_buttons = []
+    
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
+    
+    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
+    
+    if (page + 1) * limit < total_count:
+        nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    page_info = f" (страница {page + 1})" if total_count > limit else ""
+    await callback.message.edit_text(
+        f"📝 Сообщения от преподавателей{page_info}\n\n"
+        f"Всего сообщений: {total_count}\n"
+        f"Выберите сообщение для просмотра:",
+        reply_markup=kb
+    )
+    
+    # Сохраняем текущую страницу в состоянии
+    await state.update_data(current_page=page)
+
+
+@dp.callback_query(F.data.startswith("messages_page_"))
+async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split("_")[2])
+        await show_teacher_messages_page(callback, state, page)
+    except ValueError:
+        await callback.answer("❌ Ошибка пагинации")
+    await callback.answer()
+
+
+    @dp.callback_query(F.data.startswith("view_message_"))
+async def view_specific_message(callback: types.CallbackQuery):
+    try:
+        message_db_id = int(callback.data.split("_")[2])
+        
+        # Получаем информацию о сообщении
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT message_id, signature, message_text, message_type, created_at
+                    FROM teacher_messages 
+                    WHERE id = %s AND chat_id = %s
+                """, (message_db_id, DEFAULT_CHAT_ID))
+                
+                message_data = await cur.fetchone()
+        
+        if not message_data:
+            await callback.answer("❌ Сообщение не найдено", show_alert=True)
+            return
+        
+        message_id, signature, text, msg_type, created_at = message_data
+        
+        # Форматируем дату
+        if isinstance(created_at, datetime.datetime):
+            date_str = created_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            date_str = str(created_at)
+        
+        # Создаем ссылку на сообщение в беседе
+        message_link = f"https://t.me/c/{str(DEFAULT_CHAT_ID).replace('-100', '')}/{message_id}"
+        
+        # Создаем клавиатуру
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Перейти к сообщению", url=message_link)],
+            [InlineKeyboardButton(text="⬅ Назад к списку", callback_data="back_to_messages_list")]
+        ])
+        
+        # Формируем текст сообщения
+        message_info = f"👨‍🏫 От: {signature}\n"
+        message_info += f"📅 Дата: {date_str}\n"
+        message_info += f"📊 Тип: {msg_type}\n\n"
+        
+        if text and text != "голосовое сообщение" and text != "стикер":
+            message_info += f"📝 Текст: {text}\n\n"
+        
+        message_info += "Нажмите кнопку ниже чтобы перейти к сообщению в беседе."
+        
+        await callback.message.edit_text(message_info, reply_markup=kb)
+        
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+    await callback.answer()
+
+    @dp.callback_query(F.data == "back_to_messages_list")
+async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    current_page = data.get('current_page', 0)
+    await show_teacher_messages_page(callback, state, current_page)
+    await callback.answer()
+
+
 
 @dp.callback_query(F.data == "admin_add_special_user")
 async def admin_add_special_user_start(callback: types.CallbackQuery, state: FSMContext):
@@ -420,18 +634,23 @@ async def process_special_user_signature(message: types.Message, state: FSMConte
 def get_zvonki(is_saturday: bool):
     return "\n".join(ZVONKI_SATURDAY if is_saturday else ZVONKI_DEFAULT)
 
-def main_menu(is_admin=False, is_special_user=False):
+def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     buttons = [
         [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
-        [InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")],  # Новая кнопка
+        [InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")],
         [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")],
     ]
+    
+    # Добавляем кнопку просмотра сообщений только в беседе
+    if is_group_chat:
+        buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")])
+    
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     if is_special_user:
         buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
@@ -990,20 +1209,28 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
+    
     now = datetime.datetime.now(TZ)
     times = await get_publish_times(pool)
     if not times:
-        await greet_and_send(callback.from_user, "Время публикаций ещё не задано.", callback=callback)
-        return
-    future_times = sorted([(h, m) for _, h, m in times if (h, m) > (now.hour, now.minute)])
-    if future_times:
-        hh, mm = future_times[0]
-        msg = f"Следующая публикация сегодня в Омске: {hh:02d}:{mm:02d}"
+        text = "Время публикаций ещё не задано."
     else:
-        hh, mm = sorted([(h, m) for _, h, m in times])[0]
-        msg = f"Сегодня публикаций больше нет. Следующая публикация завтра в Омске: {hh:02d}:{mm:02d}"
-    await greet_and_send(callback.from_user, msg, callback=callback)
+        future_times = sorted([(h, m) for _, h, m in times if (h, m) > (now.hour, now.minute)])
+        if future_times:
+            hh, mm = future_times[0]
+            msg = f"Следующая публикация сегодня в Омске: {hh:02d}:{mm:02d}"
+        else:
+            hh, mm = sorted([(h, m) for _, h, m in times])[0]
+            msg = f"Сегодня публикаций больше нет. Следующая публикация завтра в Омске: {hh:02d}:{mm:02d}"
+        text = msg
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+    ])
+    
+    await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
     await callback.answer()
+
 @dp.callback_query(F.data == "admin_edit")
 async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -1124,9 +1351,11 @@ async def reschedule_publish_jobs(pool):
         except Exception:
             pass
 TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
+
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
     is_private = message.chat.type == "private"
+    is_group_chat = message.chat.type in ["group", "supergroup"]
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
     
     # Проверяем спец-пользователей через базу данных
@@ -1139,7 +1368,7 @@ async def trigger_handler(message: types.Message):
         message.from_user,
         "Выберите действие:",
         message=message,
-        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user),
+        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat),
         include_week_info=True
     )
 @dp.callback_query(F.data.startswith("menu_"))
@@ -1175,14 +1404,21 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
             pass
         is_private = callback.message.chat.type == "private"
         is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
+        
+        # Проверяем спец-пользователей через базу данных
+        is_special_user = False
+        if is_private:
+            signature = await get_special_user_signature(pool, callback.from_user.id)
+            is_special_user = signature is not None
+        
         try:
             await callback.message.delete()
-            await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
+            await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin=is_admin, is_special_user=is_special_user))
         except Exception:
             try:
-                await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin))
+                await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin=is_admin, is_special_user=is_special_user))
             except Exception:
-                await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
+                await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin=is_admin, is_special_user=is_special_user))
 
         await callback.answer()
 
@@ -1271,6 +1507,7 @@ async def on_rasp_day(callback: types.CallbackQuery):
     ])
     await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
     await callback.answer()
+
 @dp.message(Command("никнейм"))
 async def cmd_set_nickname(message: types.Message):
     parts = message.text.split(maxsplit=1)
@@ -1300,11 +1537,21 @@ async def on_rasp_show(callback: types.CallbackQuery):
     day = int(parts[2])
     week_type = int(parts[3])
     text = await get_rasp_formatted(day, week_type)
-    await greet_and_send(callback.from_user, f"📌 Расписание:\n{text}", callback=callback, include_joke=True)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=f"rasp_day_{day}")]
+    ])
+    
+    await greet_and_send(callback.from_user, f"📌 Расписание:\n{text}", callback=callback, markup=kb, include_joke=True)
     await callback.answer()
+
 @dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
     action = callback.data
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_zvonki")]
+    ])
 
     if action == "zvonki_weekday":
         schedule = get_zvonki(is_saturday=False)
@@ -1312,6 +1559,7 @@ async def zvonki_handler(callback: types.CallbackQuery):
             callback.from_user,
             f"📌 Расписание звонков (будние дни):\n{schedule}",
             callback=callback,
+            markup=kb,
             include_joke=True 
         )
     elif action == "zvonki_saturday":
@@ -1320,14 +1568,17 @@ async def zvonki_handler(callback: types.CallbackQuery):
             callback.from_user,
             f"📌 Расписание звонков (суббота):\n{schedule}",
             callback=callback,
+            markup=kb,
             include_joke=True  
         )
     await callback.answer()
+
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
+    
     current = await get_current_week_type(pool, DEFAULT_CHAT_ID)
     current_str = "нечетная (1)" if current == 1 else "четная (2)"
     setting = await get_week_setting(pool, DEFAULT_CHAT_ID)
@@ -1340,13 +1591,20 @@ async def admin_show_chet(callback: types.CallbackQuery):
         set_at_str = set_at.isoformat()
 
     msg = f"Текущая четность (отталкиваясь от установки): {current_str}\n\nБазовая (сохранённая в week_setting): {base_str}\nДата установки (Омск): {set_at_str}"
-    await greet_and_send(callback.from_user, msg, callback=callback)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+    ])
+    
+    await greet_and_send(callback.from_user, msg, callback=callback, markup=kb)
     await callback.answer()
+
 @dp.callback_query(F.data == "admin_list_publish_times")
 async def admin_list_publish_times(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
+    
     rows = await get_publish_times(pool)
     if not rows:
         text = "Время публикаций не задано."
@@ -1354,20 +1612,31 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
         lines = [f"{rid}: {hour:02d}:{minute:02d} (Омск)" for rid, hour, minute in rows]
         text = "Текущие времена публикаций (Омск):\n" + "\n".join(lines)
         text += "\n\nЧтобы удалить время, используйте команду /delptime <id>"
-    await greet_and_send(callback.from_user, text, callback=callback)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+    ])
+    
+    await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
     await callback.answer()
 @dp.callback_query(F.data == "admin_set_publish_time")
 async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
-    await callback.answer() 
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+    ])
+    
     await greet_and_send(
         callback.from_user,
         "Введите время публикации в формате ЧЧ:ММ по Омску (например: 20:00):",
-        callback=callback
+        callback=callback,
+        markup=kb
     )
     await state.set_state(SetPublishTimeState.time)
+
 @dp.message(Command("delptime"))
 async def cmd_delptime(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
