@@ -15,7 +15,12 @@ import aiomysql
 import random
 import ssl
 import re
+import aiohttp
+import base64
+import io
+from PIL import Image
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 ALLOWED_USERS = [5228681344, 7620086223]
@@ -263,6 +268,9 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
+class GPTRequestState(StatesGroup):
+    waiting_for_response = State()
+
 class ViewMessagesState(StatesGroup):
     browsing = State()
 class SendMessageState(StatesGroup):
@@ -693,6 +701,7 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")])
+        buttons.append([InlineKeyboardButton(text="🤖 ChatGPT запрос", callback_data="gpt_request")])  # Новая кнопка
     
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
@@ -700,6 +709,7 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
         buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
@@ -961,6 +971,179 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
     
     await callback.answer()
 
+
+async def ask_gpt(text: str, image_url: str = None) -> str:
+    """Отправляет запрос к ChatGPT API"""
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    messages = [{"role": "user", "content": text}]
+    
+    if image_url:
+        # Если есть изображение, добавляем его в запрос
+        messages[0]["content"] = [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": image_url}}
+        ]
+    
+    data = {
+        "model": "gpt-4-vision-preview" if image_url else "gpt-4",
+        "messages": messages,
+        "max_tokens": 1000
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://api.openai.com/v1/chat/completions", 
+                              headers=headers, json=data) as response:
+            if response.status == 200:
+                result = await response.json()
+                return result["choices"][0]["message"]["content"]
+            else:
+                error_text = await response.text()
+                return f"❌ Ошибка API: {response.status} - {error_text}"
+
+async def generate_image(prompt: str) -> str:
+    """Генерирует изображение через DALL-E"""
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": "dall-e-3",
+        "prompt": prompt,
+        "size": "1024x1024",
+        "quality": "standard",
+        "n": 1
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://api.openai.com/v1/images/generations", 
+                              headers=headers, json=data) as response:
+            if response.status == 200:
+                result = await response.json()
+                return result["data"][0]["url"]
+            else:
+                error_text = await response.text()
+                return None
+
+async def download_image(url: str) -> io.BytesIO:
+    """Скачивает изображение по URL"""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                image_data = await response.read()
+                return io.BytesIO(image_data)
+            return None
+
+@dp.message(Command("aigpt"))
+async def handle_gpt_command(message: types.Message, state: FSMContext):
+    """Обработчик команды /aigpt"""
+    # Проверяем, что команда используется в беседе
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эта команда доступна только в беседе")
+        return
+    
+    # Проверяем, что есть запрос
+    if len(message.text.split()) < 2:
+        await message.answer("⚠ Использование: /aigpt@arcadiyis07_bot [ваш запрос]")
+        return
+    
+    # Извлекаем запрос
+    query = message.text.split(maxsplit=1)[1].strip()
+    
+    # Сохраняем информацию о запросе
+    await state.update_data(
+        original_message_id=message.message_id,
+        query=query,
+        chat_id=message.chat.id
+    )
+    
+    # Устанавливаем состояние ожидания ответа
+    await state.set_state(GPTRequestState.waiting_for_response)
+    
+    # Отправляем сообщение о начале обработки
+    processing_msg = await message.reply("🔄 Запрос отправлен ChatGPT...")
+    await state.update_data(processing_message_id=processing_msg.message_id)
+    
+    try:
+        # Проверяем, есть ли прикрепленное фото
+        image_url = None
+        if message.photo:
+            # Получаем URL самого большого фото
+            largest_photo = message.photo[-1]
+            file_info = await bot.get_file(largest_photo.file_id)
+            image_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
+        
+        # Отправляем запрос к ChatGPT с таймаутом 10 секунд
+        response_text = await asyncio.wait_for(ask_gpt(query, image_url), timeout=10.0)
+        
+        # Проверяем, не запрашивает ли пользователь генерацию изображения
+        if any(word in query.lower() for word in ["нарисуй", "сгенерируй изображение", "создай картинку", "draw", "generate image"]):
+            # Генерируем изображение
+            image_url = await generate_image(query)
+            if image_url:
+                # Скачиваем и отправляем изображение
+                image_data = await download_image(image_url)
+                if image_data:
+                    await message.reply_photo(photo=types.BufferedInputFile(image_data.getvalue(), filename="generated_image.png"), caption=response_text[:1000])
+                else:
+                    await message.reply(f"✅ ChatGPT ответ:\n{response_text}\n\n⚠ Не удалось загрузить сгенерированное изображение")
+            else:
+                await message.reply(f"✅ ChatGPT ответ:\n{response_text}\n\n⚠ Не удалось сгенерировать изображение")
+        else:
+            # Отправляем текстовый ответ (разбиваем на части если слишком длинный)
+            if len(response_text) > 4000:
+                parts = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
+                for i, part in enumerate(parts):
+                    if i == 0:
+                        await message.reply(f"✅ ChatGPT ответ (часть {i+1}):\n{part}")
+                    else:
+                        await message.answer(f"✅ Продолжение (часть {i+1}):\n{part}")
+            else:
+                await message.reply(f"✅ ChatGPT ответ:\n{response_text}")
+        
+        # Удаляем сообщение о обработке
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+        except:
+            pass
+            
+    except asyncio.TimeoutError:
+        await message.reply("❌ Время ожидания ответа истекло (10 секунд)")
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+        except:
+            pass
+    except Exception as e:
+        await message.reply(f"❌ Ошибка при обращении к ChatGPT: {str(e)}")
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+        except:
+            pass
+    finally:
+        await state.clear()
+
+@dp.callback_query(F.data == "gpt_request")
+async def gpt_request_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Обработчик кнопки ChatGPT запрос"""
+    if callback.message.chat.type not in ["group", "supergroup"]:
+        await callback.answer("❌ Эта функция доступна только в беседе", show_alert=True)
+        return
+    
+    await callback.message.edit_text(
+        "🤖 ChatGPT запрос\n\n"
+        "Отправьте команду в формате:\n"
+        "<code>/aigpt@arcadiyis07_bot ваш запрос</code>\n\n"
+        "Можно прикреплять фото для анализа.\n"
+        "Таймаут: 10 секунд",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
 @dp.callback_query(F.data.startswith("confirm_delete_subject_"))
 async def confirm_delete_subject(callback: types.CallbackQuery):
     subject_id = int(callback.data[len("confirm_delete_subject_"):])
@@ -1035,7 +1218,7 @@ async def cancel_delete_subject(callback: types.CallbackQuery, state: FSMContext
     await callback.message.edit_text("❌ Удаление отменено.")
     await menu_back_handler(callback, state)
     await callback.answer()
-    
+
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
@@ -1955,6 +2138,8 @@ async def send_today_rasp():
     text = await get_rasp_formatted(day_to_post, week_type)
     msg = f"📌 Расписание на {day_name}:\n\n{text}"
     await bot.send_message(DEFAULT_CHAT_ID, msg)    
+
+
 async def main():
     global pool
     pool = await get_pool()
@@ -1977,7 +2162,6 @@ async def main():
         print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
     
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
