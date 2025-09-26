@@ -423,6 +423,7 @@ def get_zvonki(is_saturday: bool):
 def main_menu(is_admin=False, is_special_user=False):
     buttons = [
         [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
+        [InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")],  # Новая кнопка
         [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")],
     ]
     if is_admin:
@@ -1184,6 +1185,77 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
                 await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin))
 
         await callback.answer()
+
+@dp.callback_query(F.data == "tomorrow_rasp")
+async def tomorrow_rasp_handler(callback: types.CallbackQuery):
+    now = datetime.datetime.now(TZ)
+    hour = now.hour
+    day = now.isoweekday()
+    
+    # Определяем день для показа (логика как в автопостинге)
+    if hour >= 18:
+        target_date = now.date() + datetime.timedelta(days=1)
+        day_to_show = target_date.isoweekday()
+        if day_to_show == 7:  # Воскресенье
+            day_to_show = 1
+            target_date += datetime.timedelta(days=1)
+            day_name = "послезавтра (Понедельник)"
+        else:
+            day_name = "завтра"
+    else:
+        target_date = now.date()
+        day_to_show = day
+        day_name = "сегодня"
+        if day_to_show == 7:  # Воскресенье
+            day_to_show = 1
+            target_date += datetime.timedelta(days=1)
+            day_name = "завтра (Понедельник)"
+        else:
+            # Если сегодня не воскресенье и время до 18:00, показываем завтра
+            target_date += datetime.timedelta(days=1)
+            day_to_show = target_date.isoweekday()
+            if day_to_show == 7:  # Если завтра воскресенье
+                day_to_show = 1
+                target_date += datetime.timedelta(days=1)
+                day_name = "послезавтра (Понедельник)"
+            else:
+                day_name = "завтра"
+    
+    # Получаем тип недели
+    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
+    
+    # Получаем расписание
+    text = await get_rasp_formatted(day_to_show, week_type)
+    
+    # Формируем сообщение
+    day_names = {
+        1: "Понедельник",
+        2: "Вторник", 
+        3: "Среда",
+        4: "Четверг",
+        5: "Пятница",
+        6: "Суббота"
+    }
+    
+    week_name = "нечетная" if week_type == 1 else "четная"
+    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
+    
+    # Добавляем анекдот
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+            row = await cur.fetchone()
+            if row:
+                message += f"\n\n😂 Анекдот:\n{row[0]}"
+    
+    # Отправляем сообщение с кнопкой "Назад"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await greet_and_send(callback.from_user, message, callback=callback, markup=kb)
+    await callback.answer()
+
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
     parts = callback.data.split("_")
