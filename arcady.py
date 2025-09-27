@@ -461,7 +461,7 @@ async def cmd_admin_spam_clean(message: types.Message):
         await message.answer(f"❌ Ошибка при очистке спама: {e}")
 
 
-    def format_duration(seconds: int) -> str:
+def format_duration(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds} секунд"
     elif seconds < 3600:
