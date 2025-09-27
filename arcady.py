@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -17,8 +17,6 @@ import ssl
 import re
 import aiohttp
 import io
-
-
 
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -178,6 +176,305 @@ async def load_special_users(pool):
             SPECIAL_USER_ID = [row[0] for row in rows]
     print(f"Загружено {len(SPECIAL_USER_ID)} спец-пользователей: {SPECIAL_USER_ID}")
 
+
+
+
+@dp.message(Command("акик", "акick"))
+async def cmd_admin_kick(message: types.Message):
+    # Проверяем ID пользователя
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для использования этой команды")
+        return
+    
+    # Проверяем, что команда в групповом чате
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эта команда работает только в групповых чатах")
+        return
+    
+    # Проверяем, что бот админ в чате
+    try:
+        bot_member = await bot.get_chat_member(message.chat.id, bot.id)
+        if bot_member.status not in ["administrator", "creator"]:
+            await message.answer("❌ Бот должен быть администратором в чате")
+            return
+    except Exception:
+        await message.answer("❌ Ошибка проверки прав бота")
+        return
+    
+    # Проверяем реплай
+    if not message.reply_to_message:
+        await message.answer("⚠ Использование: Ответьте на сообщение пользователя командой /акик")
+        return
+    
+    try:
+        user_id = message.reply_to_message.from_user.id
+        user_to_kick = message.reply_to_message.from_user
+        
+        # Исключаем кик самого себя
+        if user_id == message.from_user.id:
+            await message.answer("❌ Нельзя кикнуть самого себя")
+            return
+        
+        # Исключаем кик других админов из ALLOWED_USERS
+        if user_id in ALLOWED_USERS:
+            await message.answer("❌ Нельзя кикнуть другого администратора")
+            return
+        
+        # Проверяем, не пытаемся ли кикнуть создателя чата
+        try:
+            target_member = await bot.get_chat_member(message.chat.id, user_id)
+            if target_member.status == "creator":
+                await message.answer("❌ Не могу кикнуть создателя чата")
+                return
+        except Exception as e:
+            print(f"Ошибка проверки прав цели: {e}")
+        
+        # Выполняем кик
+        await bot.ban_chat_member(message.chat.id, user_id)
+        await message.answer(f"🚫 Пользователь {user_to_kick.first_name} (@{user_to_kick.username or 'нет'}) был кикнут администратором")
+        
+        # Разбаниваем через 30 секунд, чтобы можно было вернуться
+        await asyncio.sleep(30)
+        await bot.unban_chat_member(message.chat.id, user_id)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при кике: {e}")
+
+@dp.message(Command("амут", "аmut"))
+async def cmd_admin_mute(message: types.Message):
+    # Проверяем ID пользователя
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для использования этой команды")
+        return
+    
+    # Проверяем, что команда в групповом чате
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эта команда работает только в групповых чатах")
+        return
+    
+    # Проверяем, что бот админ в чате
+    try:
+        bot_member = await bot.get_chat_member(message.chat.id, bot.id)
+        if bot_member.status not in ["administrator", "creator"]:
+            await message.answer("❌ Бот должен быть администратором в чате")
+            return
+    except Exception:
+        await message.answer("❌ Ошибка проверки прав бота")
+        return
+    
+    # Парсим аргументы
+    args = message.text.split()
+    
+    # Проверяем минимальное количество аргументов
+    if len(args) < 2:
+        await message.answer(
+            "⚠ Использование:\n"
+            "• /амут 10 секунд (в ответ на сообщение)\n"
+            "• /амут 2 часа (в ответ на сообщение)\n"
+            "• /амут 30 минут (в ответ на сообщение)\n"
+            "• /амут 1 день (в ответ на сообщение)\n\n"
+            "Доступные единицы: секунды, минуты, часы, дни"
+        )
+        return
+    
+    # Проверяем реплай
+    if not message.reply_to_message:
+        await message.answer("⚠ Ответьте на сообщение пользователя, которого нужно замутить")
+        return
+    
+    try:
+        user_id = message.reply_to_message.from_user.id
+        user_to_mute = message.reply_to_message.from_user
+        
+        # Исключаем мут самого себя
+        if user_id == message.from_user.id:
+            await message.answer("❌ Нельзя замутить самого себя")
+            return
+        
+        # Исключаем мут других админов из ALLOWED_USERS
+        if user_id in ALLOWED_USERS:
+            await message.answer("❌ Нельзя замутить другого администратора")
+            return
+        
+        # Проверяем, не пытаемся ли замутить создателя чата
+        try:
+            target_member = await bot.get_chat_member(message.chat.id, user_id)
+            if target_member.status == "creator":
+                await message.answer("❌ Не могу замутить создателя чата")
+                return
+        except Exception as e:
+            print(f"Ошибка проверки прав цели: {e}")
+        
+        # Парсим время
+        time_arg = args[1].lower()
+        duration = 0
+        
+        # Парсим число и единицу измерения
+        import re
+        match = re.match(r'^(\d+)\s*(секунд[ыу]?|минут[ыу]?|час[аов]?|день|дня|дней)$', time_arg)
+        
+        if not match:
+            await message.answer("❌ Неверный формат времени. Пример: /амут 10 секунд")
+            return
+        
+        number = int(match.group(1))
+        unit = match.group(2)
+        
+        # Конвертируем в секунды
+        if unit.startswith('секунд'):
+            duration = number
+        elif unit.startswith('минут'):
+            duration = number * 60
+        elif unit.startswith('час'):
+            duration = number * 3600
+        elif unit.startswith('день'):
+            duration = number * 86400
+        else:
+            await message.answer("❌ Неизвестная единица времени. Используйте: секунды, минуты, часы, дни")
+            return
+        
+        # Проверяем максимальное время (30 дней)
+        if duration > 2592000:  # 30 дней в секундах
+            await message.answer("❌ Максимальное время мута - 30 дней")
+            return
+        
+        # Проверяем минимальное время (10 секунд)
+        if duration < 10:
+            await message.answer("❌ Минимальное время мута - 10 секунд")
+            return
+        
+        # Устанавливаем мут
+        until_date = datetime.datetime.now() + datetime.timedelta(seconds=duration)
+        
+        await bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=user_id,
+            permissions=types.ChatPermissions(
+                can_send_messages=False,
+                can_send_media_messages=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+                can_send_polls=False,
+                can_invite_users=False,
+                can_pin_messages=False,
+                can_change_info=False
+            ),
+            until_date=until_date
+        )
+        
+        # Форматируем время для ответа
+        time_display = format_duration(duration)
+        await message.answer(f"🔇 Пользователь {user_to_mute.first_name} (@{user_to_mute.username or 'нет'}) замьючен на {time_display} администратором")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при муте: {e}")
+
+@dp.message(Command("аразмут", "аunmute"))
+async def cmd_admin_unmute(message: types.Message):
+    # Проверяем ID пользователя
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для использования этой команды")
+        return
+    
+    # Проверяем, что команда в групповом чате
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эта команда работает только в групповых чатах")
+        return
+    
+    # Проверяем, что бот админ в чате
+    try:
+        bot_member = await bot.get_chat_member(message.chat.id, bot.id)
+        if bot_member.status not in ["administrator", "creator"]:
+            await message.answer("❌ Бот должен быть администратором в чате")
+            return
+    except Exception:
+        await message.answer("❌ Ошибка проверки прав бота")
+        return
+    
+    # Проверяем реплай
+    if not message.reply_to_message:
+        await message.answer("⚠ Использование: Ответьте на сообщение пользователя командой /аразмут")
+        return
+    
+    try:
+        user_id = message.reply_to_message.from_user.id
+        user_to_unmute = message.reply_to_message.from_user
+        
+        # Восстанавливаем все права
+        await bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=user_id,
+            permissions=types.ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_send_polls=True,
+                can_invite_users=True,
+                can_pin_messages=False,
+                can_change_info=False
+            )
+        )
+        
+        await message.answer(f"🔊 Пользователь {user_to_unmute.first_name} (@{user_to_unmute.username or 'нет'}) размьючен администратором")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при размуте: {e}")
+
+@dp.message(Command("аспам", "аspam"))
+async def cmd_admin_spam_clean(message: types.Message):
+    # Проверяем ID пользователя
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для использования этой команды")
+        return
+    
+    # Проверяем, что команда в групповом чате
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эта команда работает только в групповых чатах")
+        return
+    
+    # Проверяем реплай
+    if not message.reply_to_message:
+        await message.answer("⚠ Использование: Ответьте на спам-сообщение командой /аспам")
+        return
+    
+    try:
+        spam_user_id = message.reply_to_message.from_user.id
+        spam_user = message.reply_to_message.from_user
+        
+        # Удаляем сообщение с командой
+        await message.delete()
+        
+        # Удаляем спам-сообщение
+        await message.reply_to_message.delete()
+        
+        # Кикаем спамера
+        await bot.ban_chat_member(message.chat.id, spam_user_id)
+        
+        await message.answer(f"🧹 Спам от {spam_user.first_name} (@{spam_user.username or 'нет'}) удален, пользователь кикнут")
+        
+        # Разбаниваем через минуту
+        await asyncio.sleep(60)
+        await bot.unban_chat_member(message.chat.id, spam_user_id)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при очистке спама: {e}")
+
+
+        def format_duration(seconds: int) -> str:
+    """Форматирует время в читаемый вид"""
+    if seconds < 60:
+        return f"{seconds} секунд"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes} минут"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours} час"
+    else:
+        days = seconds // 86400
+        return f"{days} день"
+        
 
 async def get_week_setting(pool, chat_id):
     async with pool.acquire() as conn:
