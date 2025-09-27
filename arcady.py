@@ -1946,24 +1946,59 @@ async def send_today_rasp():
     now = datetime.datetime.now(TZ)
     hour = now.hour
     day = now.isoweekday()
+    
+    # Определяем день для публикации
     if hour >= 18:
+        # После 18:00 показываем на завтра
         target_date = now.date() + datetime.timedelta(days=1)
         day_to_post = target_date.isoweekday()
-        if day_to_post == 7: 
-            day_to_post = 1
         day_name = "завтра"
+        
+        # Если завтра воскресенье - показываем на понедельник
+        if day_to_post == 7:
+            target_date += datetime.timedelta(days=1)
+            day_to_post = 1
+            day_name = "послезавтра (Понедельник)"
     else:
+        # До 18:00 показываем на сегодня
         target_date = now.date()
         day_to_post = day
         day_name = "сегодня"
-        if day_to_post == 7: 
-            day_to_post = 1
+        
+        # Если сегодня воскресенье - показываем на понедельник
+        if day_to_post == 7:
             target_date += datetime.timedelta(days=1)
+            day_to_post = 1
             day_name = "завтра (Понедельник)"
+    
+    # Получаем тип недели для целевой даты
     week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
+    
+    # Получаем расписание
     text = await get_rasp_formatted(day_to_post, week_type)
-    msg = f"📌 Расписание на {day_name}:\n\n{text}"
-    await bot.send_message(DEFAULT_CHAT_ID, msg)    
+    
+    # Формируем сообщение
+    day_names = {
+        1: "Понедельник",
+        2: "Вторник", 
+        3: "Среда",
+        4: "Четверг",
+        5: "Пятница",
+        6: "Суббота"
+    }
+    
+    week_name = "нечетная" if week_type == 1 else "четная"
+    msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
+    
+    # Добавляем анекдот
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+            row = await cur.fetchone()
+            if row:
+                msg += f"\n\n😂 Анекдот:\n{row[0]}"
+    
+    await bot.send_message(DEFAULT_CHAT_ID, msg)   
 
 
 async def main():
