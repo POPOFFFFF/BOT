@@ -266,7 +266,7 @@ async def cmd_admin_mute(message: types.Message):
     args = message.text.split()
     
     # Проверяем минимальное количество аргументов
-    if len(args) < 2:
+    if len(args) < 3:
         await message.answer(
             "⚠ Использование:\n"
             "• /амут 10 секунд (в ответ на сообщение)\n"
@@ -305,29 +305,26 @@ async def cmd_admin_mute(message: types.Message):
         except Exception as e:
             print(f"Ошибка проверки прав цели: {e}")
         
-        # Парсим время
-        time_arg = args[1].lower()
-        duration = 0
+        # Парсим время - берем второй и третий аргумент
+        number_str = args[1]
+        unit = args[2].lower()
         
-        # Парсим число и единицу измерения
-        import re
-        match = re.match(r'^(\d+)\s*(секунд[ыу]?|минут[ыу]?|час[аов]?|день|дня|дней)$', time_arg)
-        
-        if not match:
-            await message.answer("❌ Неверный формат времени. Пример: /амут 10 секунд")
+        # Проверяем, что число валидно
+        try:
+            number = int(number_str)
+        except ValueError:
+            await message.answer("❌ Неверное число. Пример: /амут 10 секунд")
             return
         
-        number = int(match.group(1))
-        unit = match.group(2)
-        
         # Конвертируем в секунды
-        if unit.startswith('секунд'):
+        duration = 0
+        if unit in ['секунд', 'секунды', 'секунду', 'сек', 'с']:
             duration = number
-        elif unit.startswith('минут'):
+        elif unit in ['минут', 'минуты', 'минуту', 'мин', 'м']:
             duration = number * 60
-        elif unit.startswith('час'):
+        elif unit in ['час', 'часа', 'часов', 'ч']:
             duration = number * 3600
-        elif unit.startswith('день'):
+        elif unit in ['день', 'дня', 'дней', 'дн']:
             duration = number * 86400
         else:
             await message.answer("❌ Неизвестная единица времени. Используйте: секунды, минуты, часы, дни")
@@ -462,17 +459,38 @@ async def cmd_admin_spam_clean(message: types.Message):
 
 
 def format_duration(seconds: int) -> str:
+    """Форматирует время в читаемый вид с правильным склонением"""
     if seconds < 60:
-        return f"{seconds} секунд"
+        if seconds == 1:
+            return "1 секунду"
+        elif 2 <= seconds <= 4:
+            return f"{seconds} секунды"
+        else:
+            return f"{seconds} секунд"
     elif seconds < 3600:
         minutes = seconds // 60
-        return f"{minutes} минут"
+        if minutes == 1:
+            return "1 минуту"
+        elif 2 <= minutes <= 4:
+            return f"{minutes} минуты"
+        else:
+            return f"{minutes} минут"
     elif seconds < 86400:
         hours = seconds // 3600
-        return f"{hours} час"
+        if hours == 1:
+            return "1 час"
+        elif 2 <= hours <= 4:
+            return f"{hours} часа"
+        else:
+            return f"{hours} часов"
     else:
         days = seconds // 86400
-        return f"{days} день"
+        if days == 1:
+            return "1 день"
+        elif 2 <= days <= 4:
+            return f"{days} дня"
+        else:
+            return f"{days} дней"
 
 
 async def get_week_setting(pool, chat_id):
