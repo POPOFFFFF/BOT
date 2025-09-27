@@ -461,8 +461,7 @@ async def cmd_admin_spam_clean(message: types.Message):
         await message.answer(f"❌ Ошибка при очистке спама: {e}")
 
 
-        def format_duration(seconds: int) -> str:
-    """Форматирует время в читаемый вид"""
+    def format_duration(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds} секунд"
     elif seconds < 3600:
@@ -474,7 +473,7 @@ async def cmd_admin_spam_clean(message: types.Message):
     else:
         days = seconds // 86400
         return f"{days} день"
-        
+
 
 async def get_week_setting(pool, chat_id):
     async with pool.acquire() as conn:
