@@ -1133,11 +1133,6 @@ async def get_weather_today_formatted() -> str:
         if feels_like:
             result += f"💭 {feels_like}\n"
         
-        # Описание
-        condition = await extract_condition(soup)
-        if condition:
-            result += f"☁ {condition}\n"
-        
         # Ветер
         wind = await extract_wind(soup)
         if wind:
