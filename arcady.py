@@ -17,6 +17,7 @@ import ssl
 import re
 import aiohttp
 import io
+from bs4 import BeautifulSoup
 
 TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
@@ -1005,15 +1006,23 @@ def get_zvonki(is_saturday: bool):
     return "\n".join(ZVONKI_SATURDAY if is_saturday else ZVONKI_DEFAULT)
 
 def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
-    buttons = [
+    buttons = []
+    """
         [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
         [InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")],
         [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")],
+        [InlineKeyboardButton(text="🌤️ Узнать погоду", callback_data="menu_weather")],  # Новая кнопка погоды
     ]
-    
+    """
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
-        buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")])
+        buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
+        buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
+        buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
+        buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
+        buttons.append([InlineKeyboardButton(text="🌤️ Узнать погоду", callback_data="menu_weather")])
+
+
     
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
@@ -1044,6 +1053,233 @@ def admin_menu():
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+
+@dp.callback_query(F.data == "menu_weather")
+async def menu_weather_handler(callback: types.CallbackQuery):
+    """Обработчик кнопки погоды в главном меню"""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌤️ Погода на сегодня", callback_data="weather_today")],
+        [InlineKeyboardButton(text="🌤️ Погода на завтра", callback_data="weather_tomorrow")],
+        [InlineKeyboardButton(text="📅 Погода на 7 дней", callback_data="weather_week")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await greet_and_send(
+        callback.from_user,
+        "🌤️ Выберите период для прогноза погоды:",
+        callback=callback,
+        markup=kb
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("weather_"))
+async def weather_period_handler(callback: types.CallbackQuery):
+    """Обработчик выбора периода погоды"""
+    period = callback.data
+    
+    try:
+        if period == "weather_today":
+            weather_data = await get_weather_forecast("today")
+            title = "🌤️ Погода в Омске на сегодня"
+        elif period == "weather_tomorrow":
+            weather_data = await get_weather_forecast("tomorrow")
+            title = "🌤️ Погода в Омске на завтра"
+        elif period == "weather_week":
+            weather_data = await get_weather_forecast("week")
+            title = "📅 Погода в Омске на 7 дней"
+        else:
+            await callback.answer("❌ Неизвестный период", show_alert=True)
+            return
+        
+        if weather_data:
+            message = f"{title}\n\n{weather_data}"
+        else:
+            message = "❌ Не удалось получить данные о погоде. Попробуйте позже."
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌤️ Выбрать другой период", callback_data="menu_weather")],
+            [InlineKeyboardButton(text="⬅ Назад в меню", callback_data="menu_back")]
+        ])
+        
+        await greet_and_send(callback.from_user, message, callback=callback, markup=kb)
+        
+    except Exception as e:
+        error_message = f"❌ Ошибка при получении погоды: {str(e)}"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_weather")]
+        ])
+        await greet_and_send(callback.from_user, error_message, callback=callback, markup=kb)
+    
+    await callback.answer()
+
+async def get_weather_forecast(period: str) -> str:
+    """
+    Получает прогноз погоды через парсинг Яндекс.Погоды
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        }
+        
+        # URL для Омска
+        url = "https://yandex.ru/pogoda/omsk"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    return None
+                
+                html = await response.text()
+        
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        if period == "today":
+            return await parse_today_weather(soup)
+        elif period == "tomorrow":
+            return await parse_tomorrow_weather(soup)
+        elif period == "week":
+            return await parse_week_weather(soup)
+            
+    except Exception as e:
+        print(f"Ошибка парсинга погоды: {e}")
+        return None
+
+async def parse_today_weather(soup: BeautifulSoup) -> str:
+    """Парсит погоду на сегодня"""
+    try:
+        # Основная информация о погоде
+        temp_now = soup.find('span', {'class': 'temp__value'})
+        condition = soup.find('div', {'class': 'link__condition'})
+        
+        # Дневная и ночная температура
+        day_temp = soup.find('div', {'class': 'day-template__daypart'})
+        
+        # Дополнительная информация
+        details = soup.find('div', {'class': 'fact__props'})
+        
+        result = "📊 Сейчас:\n"
+        
+        if temp_now:
+            result += f"🌡 Температура: {temp_now.text}°C\n"
+        
+        if condition:
+            result += f"☁ Состояние: {condition.text}\n"
+        
+        # Парсим дневную и ночную температуру
+        day_parts = soup.find_all('div', {'class': 'day-part'})
+        for part in day_parts[:2]:  # Берем первые две части (день и ночь)
+            time = part.find('div', {'class': 'day-part__name'})
+            temp = part.find('span', {'class': 'temp__value'})
+            if time and temp:
+                result += f"{time.text}: {temp.text}°C\n"
+        
+        # Дополнительные детали
+        if details:
+            detail_items = details.find_all('dl', {'class': 'term__item'})
+            for item in detail_items[:3]:  # Берем первые 3 детали
+                term = item.find('dt', {'class': 'term__label'})
+                desc = item.find('dd', {'class': 'term__value'})
+                if term and desc:
+                    result += f"{term.text}: {desc.text}\n"
+        
+        return result
+        
+    except Exception as e:
+        print(f"Ошибка парсинга сегодняшней погоды: {e}")
+        return "Не удалось получить данные на сегодня"
+
+async def parse_tomorrow_weather(soup: BeautifulSoup) -> str:
+    """Парсит погоду на завтра"""
+    try:
+        # Ищем блок с прогнозом на несколько дней
+        forecast = soup.find('div', {'class': 'forecast-briefly'})
+        if not forecast:
+            return "Не удалось найти прогноз на завтра"
+        
+        # Ищем завтрашний день
+        days = forecast.find_all('div', {'class': 'forecast-briefly__day'})
+        tomorrow = None
+        
+        for day in days:
+            date_elem = day.find('div', {'class': 'forecast-briefly__date'})
+            if date_elem and ('завтра' in date_elem.text.lower() or 'tomorrow' in date_elem.text.lower()):
+                tomorrow = day
+                break
+        
+        if not tomorrow:
+            # Если не нашли по тексту, берем второй день (после сегодняшнего)
+            tomorrow = days[1] if len(days) > 1 else None
+        
+        if not tomorrow:
+            return "Не удалось найти данные на завтра"
+        
+        result = "📅 Завтра:\n"
+        
+        # Температура днем и ночью
+        temp_day = tomorrow.find('span', {'class': 'temp__value'})
+        if temp_day:
+            result += f"🌡 Днем: {temp_day.text}°C\n"
+        
+        # Состояние погоды
+        condition = tomorrow.find('div', {'class': 'forecast-briefly__condition'})
+        if condition:
+            result += f"☁ {condition.text}\n"
+        
+        # Дополнительно: ночная температура
+        temp_night = tomorrow.find_all('span', {'class': 'temp__value'})
+        if len(temp_night) > 1:
+            result += f"🌙 Ночью: {temp_night[1].text}°C\n"
+        
+        # Вероятность осадков
+        precip = tomorrow.find('div', {'class': 'forecast-briefly__precip'})
+        if precip:
+            result += f"💧 {precip.text}\n"
+        
+        return result
+        
+    except Exception as e:
+        print(f"Ошибка парсинга завтрашней погоды: {e}")
+        return "Не удалось получить данные на завтра"
+
+async def parse_week_weather(soup: BeautifulSoup) -> str:
+    """Парсит погоду на неделю"""
+    try:
+        forecast = soup.find('div', {'class': 'forecast-briefly'})
+        if not forecast:
+            return "Не удалось найти прогноз на неделю"
+        
+        days = forecast.find_all('div', {'class': 'forecast-briefly__day'})
+        
+        result = "📅 Погода на неделю:\n\n"
+        
+        # Ограничиваем 7 днями
+        for i, day in enumerate(days[:7]):
+            # Дата
+            date_elem = day.find('div', {'class': 'forecast-briefly__date'})
+            date_text = date_elem.text if date_elem else f"День {i+1}"
+            
+            # Температура
+            temp_elems = day.find_all('span', {'class': 'temp__value'})
+            day_temp = temp_elems[0].text if temp_elems else "?"
+            night_temp = temp_elems[1].text if len(temp_elems) > 1 else "?"
+            
+            # Состояние
+            condition = day.find('div', {'class': 'forecast-briefly__condition'})
+            condition_text = condition.text if condition else ""
+            
+            result += f"📌 {date_text}:\n"
+            result += f"   🌅 Днем: {day_temp}°C\n"
+            result += f"   🌙 Ночью: {night_temp}°C\n"
+            result += f"   ☁ {condition_text}\n\n"
+        
+        return result
+        
+    except Exception as e:
+        print(f"Ошибка парсинга недельной погоды: {e}")
+        return "Не удалось получить данные на неделю"
 
 
 
