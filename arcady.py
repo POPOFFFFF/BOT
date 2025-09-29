@@ -1007,21 +1007,15 @@ def get_zvonki(is_saturday: bool):
 
 def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     buttons = []
-    """
-        [InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")],
-        [InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")],
-        [InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")],
-        [InlineKeyboardButton(text="🌤️ Узнать погоду", callback_data="menu_weather")],  # Новая кнопка погоды
-    ]
-    """
+    
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
+        buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),  # Новая кнопка
         buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
         buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
         buttons.append([InlineKeyboardButton(text="🌤️ Узнать погоду", callback_data="menu_weather")])
-
 
     
     if is_admin:
@@ -1053,6 +1047,55 @@ def admin_menu():
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+@dp.callback_query(F.data == "today_rasp")
+async def today_rasp_handler(callback: types.CallbackQuery):
+    now = datetime.datetime.now(TZ)
+    target_date = now.date()
+    day_to_show = now.isoweekday()
+    
+    # Если сегодня воскресенье, показываем понедельник
+    if day_to_show == 7:
+        target_date += datetime.timedelta(days=1)
+        day_to_show = 1
+        day_name = "завтра (Понедельник)"
+    else:
+        day_name = "сегодня"
+    
+    # Получаем тип недели
+    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
+    
+    # Получаем расписание
+    text = await get_rasp_formatted(day_to_show, week_type)
+    
+    # Формируем сообщение
+    day_names = {
+        1: "Понедельник",
+        2: "Вторник", 
+        3: "Среда",
+        4: "Четверг",
+        5: "Пятница",
+        6: "Суббота"
+    }
+    
+    week_name = "нечетная" if week_type == 1 else "четная"
+    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
+    
+    # Добавляем анекдот
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+            row = await cur.fetchone()
+            if row:
+                message += f"\n\n😂 Анекдот:\n{row[0]}"
+    
+    # Отправляем сообщение с кнопкой "Назад"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await greet_and_send(callback.from_user, message, callback=callback, markup=kb)
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "menu_weather")
