@@ -892,45 +892,6 @@ async def process_forward_message(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Ошибка при пересылке: {e}")
 
-async def migrate_teacher_messages(pool):
-    """Мигрирует существующие сообщения на новую структуру"""
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            # Проверяем есть ли столбец chat_id в таблице
-            await cur.execute("SHOW COLUMNS FROM teacher_messages LIKE 'chat_id'")
-            row = await cur.fetchone()
-            
-            if row:
-                # Если есть chat_id - мигрируем данные
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS teacher_messages_new (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        message_id BIGINT,
-                        from_user_id BIGINT,
-                        signature VARCHAR(255),
-                        message_text TEXT,
-                        message_type VARCHAR(50),
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # Копируем данные (берем первое сообщение для каждого уникального контента)
-                await cur.execute("""
-                    INSERT INTO teacher_messages_new (message_id, from_user_id, signature, message_text, message_type, created_at)
-                    SELECT MIN(message_id), from_user_id, signature, message_text, message_type, MIN(created_at)
-                    FROM teacher_messages 
-                    GROUP BY from_user_id, signature, message_text, message_type
-                """)
-                
-                # Переименовываем таблицы
-                await cur.execute("DROP TABLE teacher_messages")
-                await cur.execute("ALTER TABLE teacher_messages_new RENAME TO teacher_messages")
-                
-                print("Миграция сообщений преподавателей завершена")
-
-
-
-
 
 @dp.callback_query(F.data == "view_teacher_messages")
 async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
@@ -2399,8 +2360,8 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
-    # Получаем последние сообщения для выбора
-    messages = await get_teacher_messages(pool, DEFAULT_CHAT_ID, limit=20)
+    # Получаем последние сообщения для выбора (БЕЗ chat_id параметра)
+    messages = await get_teacher_messages(pool, limit=20)
     
     if not messages:
         await callback.message.edit_text(
@@ -2442,6 +2403,14 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
         reply_markup=kb
     )
     await callback.answer()
+
+@dp.callback_query(F.data == "menu_admin_from_delete")
+async def menu_admin_from_delete_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Возврат в админ-меню из процесса удаления сообщения"""
+    await state.clear()
+    await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
+    await callback.answer()
+
 # Обработчик выбора сообщения для удаления
 @dp.callback_query(F.data.startswith("delete_teacher_msg_"))
 async def process_delete_teacher_message(callback: types.CallbackQuery, state: FSMContext):
@@ -2476,11 +2445,12 @@ async def process_delete_teacher_message(callback: types.CallbackQuery, state: F
             date_str = str(created_at)
         
         # Показываем подтверждение удаления
+        # В функции process_delete_teacher_message замените клавиатуру на эту:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_msg_{message_db_id}")],
-            [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete_msg")]
+            [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin_from_delete")]
         ])
-        
+                
         message_info = f"🗑️ Подтвердите удаление сообщения:\n\n"
         message_info += f"👨‍🏫 От: {signature}\n"
         message_info += f"📅 Дата: {date_str}\n"
@@ -3169,7 +3139,6 @@ async def main():
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
-    await migrate_teacher_messages(pool)  # Добавьте эту строку
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
     
