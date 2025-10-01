@@ -182,6 +182,10 @@ async def load_special_users(pool):
 
 @dp.message(Command("акик", "акick"))
 async def cmd_admin_kick(message: types.Message):
+
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return
+
     # Проверяем ID пользователя
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
@@ -244,6 +248,10 @@ async def cmd_admin_kick(message: types.Message):
 @dp.message(Command("амут", "аmut"))
 async def cmd_admin_mute(message: types.Message):
     # Проверяем ID пользователя
+
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return
+
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
         return
@@ -369,6 +377,9 @@ async def cmd_admin_mute(message: types.Message):
 
 @dp.message(Command("аразмут", "аunmute"))
 async def cmd_admin_unmute(message: types.Message):
+
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return
     # Проверяем ID пользователя
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
@@ -421,6 +432,9 @@ async def cmd_admin_unmute(message: types.Message):
 
 @dp.message(Command("аспам", "аspam"))
 async def cmd_admin_spam_clean(message: types.Message):
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return
+
     # Проверяем ID пользователя
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
@@ -662,6 +676,9 @@ async def delete_teacher_message(pool, message_id: int) -> bool:
 
 @dp.callback_query(F.data == "send_message_chat")
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     if callback.from_user.id not in SPECIAL_USER_ID or callback.message.chat.type != "private":
         await callback.answer("⛔ Доступно только конкретному пользователю", show_alert=True)
         return
@@ -787,6 +804,11 @@ async def process_forward_message(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "view_teacher_messages")
 async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
+
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
     # Проверяем, что это группой чат
     if callback.message.chat.type not in ["group", "supergroup"]:
         await callback.answer("⛔ Эта функция доступна только в беседе", show_alert=True)
@@ -798,6 +820,9 @@ async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMC
 
 @dp.callback_query(F.data == "menu_back_from_messages")
 async def menu_back_from_messages_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return    
     await menu_back_handler(callback, state)
 
 
@@ -866,6 +891,9 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
 
 @dp.callback_query(F.data.startswith("messages_page_"))
 async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     try:
         page = int(callback.data.split("_")[2])
         await show_teacher_messages_page(callback, state, page)
@@ -876,6 +904,9 @@ async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMCo
 
 @dp.callback_query(F.data.startswith("view_message_"))
 async def view_specific_message(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     try:
         message_db_id = int(callback.data.split("_")[2])
         
@@ -929,6 +960,9 @@ async def view_specific_message(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_messages_list")
 async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     data = await state.get_data()
     current_page = data.get('current_page', 0)
     await show_teacher_messages_page(callback, state, current_page)
@@ -1050,6 +1084,9 @@ def admin_menu():
 
 @dp.callback_query(F.data == "today_rasp")
 async def today_rasp_handler(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return    
     now = datetime.datetime.now(TZ)
     target_date = now.date()
     day_to_show = now.isoweekday()
@@ -1118,6 +1155,9 @@ async def menu_weather_handler(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("weather_"))
 async def weather_period_handler(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     """Обработчик выбора периода погоды"""
     period = callback.data
     
@@ -1746,6 +1786,10 @@ async def confirm_delete_subject(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_back")
 async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
     try:
         await state.clear()
     except Exception:
@@ -2345,6 +2389,10 @@ TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/арка�
 
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
+    # Проверяем, что сообщение из нужного чата
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return  # Игнорируем сообщения из других чатов
+    
     is_private = message.chat.type == "private"
     is_group_chat = message.chat.type in ["group", "supergroup"]
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
@@ -2362,8 +2410,12 @@ async def trigger_handler(message: types.Message):
         markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat),
         include_week_info=True
     )
+
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     action = callback.data
     if action == "menu_rasp":
         kb = InlineKeyboardMarkup(
@@ -2415,6 +2467,10 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "tomorrow_rasp")
 async def tomorrow_rasp_handler(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
     now = datetime.datetime.now(TZ)
     hour = now.hour
     day = now.isoweekday()
@@ -2485,6 +2541,9 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     parts = callback.data.split("_")
     try:
         day = int(parts[-1])
@@ -2501,6 +2560,10 @@ async def on_rasp_day(callback: types.CallbackQuery):
 
 @dp.message(Command("никнейм"))
 async def cmd_set_nickname(message: types.Message):
+
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return
+
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await message.answer("⚠ Использование: /никнейм <ваш никнейм>")
@@ -2514,6 +2577,9 @@ async def cmd_set_nickname(message: types.Message):
         await message.answer(f"❌ Ошибка при установке никнейма: {e}")
 @dp.message(Command("анекдот"))
 async def cmd_anekdot(message: types.Message):
+
+    if message.chat.id != DEFAULT_CHAT_ID:
+        return
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
@@ -2524,6 +2590,9 @@ async def cmd_anekdot(message: types.Message):
                 await message.answer("❌ В базе пока нет анекдотов.")
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     parts = callback.data.split("_")
     day = int(parts[2])
     week_type = int(parts[3])
@@ -2538,6 +2607,9 @@ async def on_rasp_show(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
+    if callback.message.chat.id != DEFAULT_CHAT_ID:
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
     action = callback.data
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
