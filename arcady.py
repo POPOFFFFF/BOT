@@ -200,14 +200,26 @@ async def get_homework_by_id(pool, homework_id: int) -> Tuple:
 
 async def update_homework(pool, homework_id: int, subject_id: int, due_date: str, task_text: str):
     """Обновляет домашнее задание"""
+    # Получаем текущие данные
+    current_hw = await get_homework_by_id(pool, homework_id)
+    if not current_hw:
+        raise ValueError("Задание не найдено")
+    
+    # Если subject_id не указан (None), используем текущий
+    if subject_id is None:
+        subject_id = current_hw[5]  # current_subject_id
+    
+    # Если due_date не указан (None), используем текущий
+    if due_date is None:
+        due_date = current_hw[2]  # current_due_date
+        if isinstance(due_date, datetime.date):
+            due_date = due_date.strftime('%Y-%m-%d')
+    
     # Обрабатываем дату (может быть уже в формате YYYY-MM-DD или DD.MM.YYYY)
-    try:
-        if isinstance(due_date, str) and '.' in due_date:
-            due_date_mysql = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
-        else:
-            due_date_mysql = due_date
-    except ValueError:
-        raise ValueError("Неверный формат даты")
+    if isinstance(due_date, str) and '.' in due_date:
+        due_date_mysql = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
+    else:
+        due_date_mysql = due_date
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -1644,8 +1656,8 @@ async def process_edit_homework_due_date(message: types.Message, state: FSMConte
     else:
         due_date_str = message.text.strip()
         try:
-            # Просто сохраняем строку, конвертация будет при сохранении в БД
-            datetime.datetime.strptime(due_date_str, '%d.%m.%Y')  # Проверяем валидность
+            # Проверяем валидность даты
+            datetime.datetime.strptime(due_date_str, '%d.%m.%Y')
             await state.update_data(new_due_date=due_date_str)
         except ValueError:
             await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ или /skip:")
@@ -1670,13 +1682,19 @@ async def process_edit_homework_due_date(message: types.Message, state: FSMConte
     new_date_info = data.get('new_due_date', 'оставить текущую')
     await message.answer(
         f"📅 Новая дата: {new_date_info}\n\n"
-        "Выберите новый предмет или нажмите /skip чтобы оставить текущий:",
+        "Выберите новый предмет или введите /skip чтобы оставить текущий:",
         reply_markup=kb
     )
     await state.set_state(EditHomeworkState.subject)
 
 @dp.callback_query(F.data.startswith("edit_hw_subject_"))
 async def process_edit_homework_subject(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "menu_admin":
+        await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        await callback.answer()
+        return
+    
     subject_id = int(callback.data[len("edit_hw_subject_"):])
     
     async with pool.acquire() as conn:
@@ -1705,6 +1723,47 @@ async def process_edit_homework_subject(callback: types.CallbackQuery, state: FS
     await state.set_state(EditHomeworkState.task_text)
     await callback.answer()
 
+@dp.message(EditHomeworkState.subject)
+async def process_edit_homework_subject_skip(message: types.Message, state: FSMContext):
+    if message.text.strip().lower() == '/skip':
+        # Пропускаем изменение предмета
+        data = await state.get_data()
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        ])
+        
+        new_date_info = data.get('new_due_date', 'текущая')
+        
+        await message.answer(
+            f"✏️ Редактирование задания:\n\n"
+            f"📅 Дата: {new_date_info}\n"
+            f"📚 Предмет: текущий\n\n"
+            "Введите новый текст задания или /skip чтобы оставить текущий:",
+            reply_markup=kb
+        )
+        await state.set_state(EditHomeworkState.task_text)
+    else:
+        # Если введен не /skip, показываем список предметов снова
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, name FROM subjects ORDER BY name")
+                subjects = await cur.fetchall()
+        
+        keyboard = []
+        for subject_id, name in subjects:
+            keyboard.append([InlineKeyboardButton(text=name, callback_data=f"edit_hw_subject_{subject_id}")])
+        
+        keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        
+        await message.answer(
+            "Выберите новый предмет или введите /skip чтобы оставить текущий:",
+            reply_markup=kb
+        )
+        
+
 @dp.message(EditHomeworkState.task_text)
 async def process_edit_homework_task_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -1717,14 +1776,23 @@ async def process_edit_homework_task_text(message: types.Message, state: FSMCont
             await message.answer("❌ Текст задания не может быть пустым. Введите задание или /skip:")
             return
     
-    # Обновляем задание
+    # Подготавливаем данные для обновления
     subject_id = data.get('new_subject_id', data['current_subject_id'])
     due_date = data.get('new_due_date', data['current_due_date'])
+    
+    # Если дата в формате DD.MM.YYYY, конвертируем в YYYY-MM-DD
+    if isinstance(due_date, str) and '.' in due_date:
+        try:
+            due_date = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
+        except ValueError:
+            await message.answer("❌ Ошибка в формате даты. Исправьте дату и попробуйте снова.")
+            await state.clear()
+            return
     
     try:
         await update_homework(pool, data['homework_id'], subject_id, due_date, new_task_text)
         
-        # Получаем обновленную информацию
+        # Получаем обновленную информацию для отображения
         updated_hw = await get_homework_by_id(pool, data['homework_id'])
         if updated_hw:
             hw_id, subject_name, due_date, task_text, created_at, subject_id = updated_hw
@@ -1735,6 +1803,12 @@ async def process_edit_homework_task_text(message: types.Message, state: FSMCont
                 f"📅 Дата выполнения: {due_date_str}\n"
                 f"📚 Предмет: {subject_name}\n"
                 f"📝 Задание: {task_text}\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+        else:
+            await message.answer(
+                "✅ Домашнее задание обновлено!\n\n"
                 f"⚙ Админ-панель:",
                 reply_markup=admin_menu()
             )
