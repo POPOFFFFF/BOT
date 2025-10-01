@@ -110,7 +110,6 @@ async def init_db(pool):
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS teacher_messages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                chat_id BIGINT,
                 message_id BIGINT,
                 from_user_id BIGINT,
                 signature VARCHAR(255),
@@ -548,31 +547,33 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     else:
         return 1 if base_week_type == 2 else 2
 
-async def save_teacher_message(pool, chat_id: int, message_id: int, from_user_id: int, 
+async def save_teacher_message(pool, message_id: int, from_user_id: int, 
                               signature: str, message_text: str, message_type: str):
+    """Сохраняет сообщение преподавателя (без привязки к чату)"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
-                INSERT INTO teacher_messages (chat_id, message_id, from_user_id, signature, message_text, message_type)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (chat_id, message_id, from_user_id, signature, message_text, message_type))
+                INSERT INTO teacher_messages (message_id, from_user_id, signature, message_text, message_type)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (message_id, from_user_id, signature, message_text, message_type))
 
-async def get_teacher_messages(pool, chat_id: int, offset: int = 0, limit: int = 10) -> List[Tuple]:
+async def get_teacher_messages(pool, offset: int = 0, limit: int = 10) -> List[Tuple]:
+    """Получает сообщения преподавателей (все чаты)"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
                 SELECT id, message_id, signature, message_text, message_type, created_at
                 FROM teacher_messages 
-                WHERE chat_id = %s 
                 ORDER BY created_at DESC 
                 LIMIT %s OFFSET %s
-            """, (chat_id, limit, offset))
+            """, (limit, offset))
             return await cur.fetchall()
 
-async def get_teacher_messages_count(pool, chat_id: int) -> int:
+async def get_teacher_messages_count(pool) -> int:
+    """Получает общее количество сообщений преподавателей"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT COUNT(*) FROM teacher_messages WHERE chat_id = %s", (chat_id,))
+            await cur.execute("SELECT COUNT(*) FROM teacher_messages")
             result = await cur.fetchone()
             return result[0] if result else 0
 
@@ -671,13 +672,12 @@ async def set_special_user_signature(pool, user_id: int, signature: str):
             """, (user_id, signature, signature))
 
 async def delete_teacher_message(pool, message_id: int) -> bool:
-    """Удаляет сообщение преподавателя по ID"""
+    """Удаляет сообщение преподавателя по ID (из всех чатов)"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("DELETE FROM teacher_messages WHERE id = %s", (message_id,))
             await conn.commit()
             return cur.rowcount > 0
-
 
 @dp.callback_query(F.data == "send_message_chat")
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
@@ -777,10 +777,9 @@ async def process_forward_message(message: types.Message, state: FSMContext):
     prefix = f"Сообщение от {signature}: "
 
     try:
-        # Сохраняем информацию о сообщении перед отправкой
         message_text = ""
         message_type = "text"
-        sent_messages = {}  # Словарь для хранения ID сообщений по чатам
+        sent_message_ids = []  # Список для хранения ID отправленных сообщений
         
         if message.text:
             message_text = message.text
@@ -788,14 +787,13 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_message(chat_id, f"{prefix}{message.text}")
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки в чат {chat_id}: {e}")
                     
         elif message.photo:
             message_text = message.caption or ""
             message_type = "photo"
-            # Фильтрация подписи к фото
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к фото, начинающиеся с /, не отправляются.")
                 return
@@ -803,14 +801,13 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_photo(chat_id, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки фото в чат {chat_id}: {e}")
                     
         elif message.document:
             message_text = message.caption or ""
             message_type = "document"
-            # Фильтрация подписи к документу
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к документам, начинающиеся с /, не отправляются.")
                 return
@@ -818,14 +815,13 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_document(chat_id, message.document.file_id, caption=prefix + (message.caption or ""))
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки документа в чат {chat_id}: {e}")
                     
         elif message.video:
             message_text = message.caption or ""
             message_type = "video"
-            # Фильтрация подписи к видео
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к видео, начинающиеся с /, не отправляются.")
                 return
@@ -833,14 +829,13 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_video(chat_id, message.video.file_id, caption=prefix + (message.caption or ""))
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки видео в чат {chat_id}: {e}")
                     
         elif message.audio:
             message_text = message.caption or ""
             message_type = "audio"
-            # Фильтрация подписи к аудио
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к аудио, начинающиеся с /, не отправляются.")
                 return
@@ -848,7 +843,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_audio(chat_id, message.audio.file_id, caption=prefix + (message.caption or ""))
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки аудио в чат {chat_id}: {e}")
                     
@@ -859,7 +854,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_voice(chat_id, message.voice.file_id, caption=prefix)
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки голосового сообщения в чат {chat_id}: {e}")
                     
@@ -870,7 +865,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     sent_message = await bot.send_sticker(chat_id, message.sticker.file_id)
-                    sent_messages[chat_id] = sent_message.message_id
+                    sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки стикера в чат {chat_id}: {e}")
                     
@@ -878,21 +873,62 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             await message.answer("⚠ Не удалось распознать тип сообщения.")
             return
 
-        # Сохраняем сообщения в базу для всех чатов
-        await save_teacher_message_to_all_chats(
-            sent_messages,
-            message.from_user.id,
-            signature,
-            message_text,
-            message_type
-        )
+        # Сохраняем сообщение в базу ОДИН РАЗ (без привязки к чату)
+        # Используем первый успешный message_id для сохранения
+        if sent_message_ids:
+            await save_teacher_message(
+                pool, 
+                sent_message_ids[0],  # Используем первый ID
+                message.from_user.id,
+                signature,
+                message_text,
+                message_type
+            )
 
-        success_chats = len(sent_messages)
+        success_chats = len(sent_message_ids)
         total_chats = len(ALLOWED_CHAT_IDS)
         await message.answer(f"✅ Сообщение переслано в {success_chats} из {total_chats} бесед!")
         
     except Exception as e:
         await message.answer(f"❌ Ошибка при пересылке: {e}")
+
+async def migrate_teacher_messages(pool):
+    """Мигрирует существующие сообщения на новую структуру"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Проверяем есть ли столбец chat_id в таблице
+            await cur.execute("SHOW COLUMNS FROM teacher_messages LIKE 'chat_id'")
+            row = await cur.fetchone()
+            
+            if row:
+                # Если есть chat_id - мигрируем данные
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS teacher_messages_new (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        message_id BIGINT,
+                        from_user_id BIGINT,
+                        signature VARCHAR(255),
+                        message_text TEXT,
+                        message_type VARCHAR(50),
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Копируем данные (берем первое сообщение для каждого уникального контента)
+                await cur.execute("""
+                    INSERT INTO teacher_messages_new (message_id, from_user_id, signature, message_text, message_type, created_at)
+                    SELECT MIN(message_id), from_user_id, signature, message_text, message_type, MIN(created_at)
+                    FROM teacher_messages 
+                    GROUP BY from_user_id, signature, message_text, message_type
+                """)
+                
+                # Переименовываем таблицы
+                await cur.execute("DROP TABLE teacher_messages")
+                await cur.execute("ALTER TABLE teacher_messages_new RENAME TO teacher_messages")
+                
+                print("Миграция сообщений преподавателей завершена")
+
+
 
 
 
@@ -927,10 +963,9 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     limit = 10
     offset = page * limit
     
-    # Используем ID текущего чата для получения сообщений
-    current_chat_id = callback.message.chat.id
-    messages = await get_teacher_messages(pool, current_chat_id, offset, limit)
-    total_count = await get_teacher_messages_count(pool, current_chat_id)
+    # Получаем сообщения для всех чатов
+    messages = await get_teacher_messages(pool, offset, limit)
+    total_count = await get_teacher_messages_count(pool)
     
     if not messages:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -954,7 +989,6 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
         emoji = "📝" if msg_type == "text" else "🖼️" if msg_type == "photo" else "📎" if msg_type == "document" else "🎵"
         button_text = f"{emoji} {signature}: {display_text}"
         
-        # Создаем callback_data для перехода к сообщению
         keyboard.append([InlineKeyboardButton(
             text=button_text, 
             callback_data=f"view_message_{msg_id}"
@@ -984,16 +1018,10 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
         reply_markup=kb
     )
     
-    # Сохраняем текущую страницу в состоянии
     await state.update_data(current_page=page)
 
 @dp.callback_query(F.data.startswith("view_message_"))
 async def view_specific_message(callback: types.CallbackQuery):
-    # Разрешаем просмотр в разрешенных чатах
-    if callback.message.chat.id not in ALLOWED_CHAT_IDS:
-        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
-        return
-        
     try:
         message_db_id = int(callback.data.split("_")[2])
         current_chat_id = callback.message.chat.id
@@ -1004,8 +1032,8 @@ async def view_specific_message(callback: types.CallbackQuery):
                 await cur.execute("""
                     SELECT message_id, signature, message_text, message_type, created_at
                     FROM teacher_messages 
-                    WHERE id = %s AND chat_id = %s
-                """, (message_db_id, current_chat_id))
+                    WHERE id = %s
+                """, (message_db_id,))
                 
                 message_data = await cur.fetchone()
         
@@ -1021,7 +1049,121 @@ async def view_specific_message(callback: types.CallbackQuery):
         else:
             date_str = str(created_at)
         
-        # Создаем ссылку на сообщение в текущей беседе
+        # Создаем ссылку на сообщение в ТЕКУЩЕЙ беседе
+        message_link = f"https://t.me/c/{str(current_chat_id).replace('-100', '')}/{message_id}"
+        
+        # Создаем клавиатуру
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Перейти к сообщению", url=message_link)],
+            [InlineKeyboardButton(text="⬅ Назад к списку", callback_data="back_to_messages_list")]
+        ])
+        
+        # Формируем текст сообщения
+        message_info = f"👨‍🏫 От: {signature}\n"
+        message_info += f"📅 Дата: {date_str}\n"
+        message_info += f"📊 Тип: {msg_type}\n\n"
+        
+        if text and text != "голосовое сообщение" and text != "стикер":
+            message_info += f"📝 Текст: {text}\n\n"
+        
+        message_info += "Нажмите кнопку ниже чтобы перейти к сообщению в беседе."
+        
+        await callback.message.edit_text(message_info, reply_markup=kb)
+        
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+    await callback.answer()
+async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMContext, page: int = 0):
+    limit = 10
+    offset = page * limit
+    
+    # Получаем сообщения для всех чатов
+    messages = await get_teacher_messages(pool, offset, limit)
+    total_count = await get_teacher_messages_count(pool)
+    
+    if not messages:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        ])
+        await callback.message.edit_text(
+            "📝 Сообщения от преподавателей\n\n"
+            "Пока нет сохраненных сообщений от преподавателей.",
+            reply_markup=kb
+        )
+        return
+    
+    # Создаем клавиатуру с сообщениями
+    keyboard = []
+    for i, (msg_id, message_id, signature, text, msg_type, created_at) in enumerate(messages):
+        # Обрезаем длинный текст
+        display_text = text[:50] + "..." if len(text) > 50 else text
+        if not display_text:
+            display_text = f"{msg_type} сообщение"
+        
+        emoji = "📝" if msg_type == "text" else "🖼️" if msg_type == "photo" else "📎" if msg_type == "document" else "🎵"
+        button_text = f"{emoji} {signature}: {display_text}"
+        
+        keyboard.append([InlineKeyboardButton(
+            text=button_text, 
+            callback_data=f"view_message_{msg_id}"
+        )])
+    
+    # Добавляем кнопки навигации
+    nav_buttons = []
+    
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
+    
+    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
+    
+    if (page + 1) * limit < total_count:
+        nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    page_info = f" (страница {page + 1})" if total_count > limit else ""
+    await callback.message.edit_text(
+        f"📝 Сообщения от преподавателей{page_info}\n\n"
+        f"Всего сообщений: {total_count}\n"
+        f"Выберите сообщение для просмотра:",
+        reply_markup=kb
+    )
+    
+    await state.update_data(current_page=page)
+
+@dp.callback_query(F.data.startswith("view_message_"))
+async def view_specific_message(callback: types.CallbackQuery):
+    try:
+        message_db_id = int(callback.data.split("_")[2])
+        current_chat_id = callback.message.chat.id
+        
+        # Получаем информацию о сообщении
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT message_id, signature, message_text, message_type, created_at
+                    FROM teacher_messages 
+                    WHERE id = %s
+                """, (message_db_id,))
+                
+                message_data = await cur.fetchone()
+        
+        if not message_data:
+            await callback.answer("❌ Сообщение не найдено", show_alert=True)
+            return
+        
+        message_id, signature, text, msg_type, created_at = message_data
+        
+        # Форматируем дату
+        if isinstance(created_at, datetime.datetime):
+            date_str = created_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            date_str = str(created_at)
+        
+        # Создаем ссылку на сообщение в ТЕКУЩЕЙ беседе
         message_link = f"https://t.me/c/{str(current_chat_id).replace('-100', '')}/{message_id}"
         
         # Создаем клавиатуру
@@ -3027,7 +3169,7 @@ async def main():
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
-    
+    await migrate_teacher_messages(pool)  # Добавьте эту строку
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
     
