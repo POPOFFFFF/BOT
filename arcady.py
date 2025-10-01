@@ -20,7 +20,9 @@ import io
 from bs4 import BeautifulSoup
 
 TOKEN = os.getenv("BOT_TOKEN")
-DEFAULT_CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+CHAT_IDS_STR = os.getenv("CHAT_ID", "")
+ALLOWED_CHAT_IDS = [int(x.strip()) for x in CHAT_IDS_STR.split(",") if x.strip()]
+DEFAULT_CHAT_ID = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else 0
 ALLOWED_USERS = [5228681344, 7620086223]
 SPECIAL_USER_ID = []
 DB_HOST = os.getenv("DB_HOST")
@@ -36,6 +38,9 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
+
+def is_allowed_chat(chat_id: int) -> bool:
+    return chat_id in ALLOWED_CHAT_IDS
 
 async def get_pool():
     return await aiomysql.create_pool(
@@ -183,7 +188,7 @@ async def load_special_users(pool):
 @dp.message(Command("акик", "акick"))
 async def cmd_admin_kick(message: types.Message):
 
-    if message.chat.id != DEFAULT_CHAT_ID:
+    if not is_allowed_chat(message.chat.id):
         return
 
     # Проверяем ID пользователя
@@ -249,7 +254,7 @@ async def cmd_admin_kick(message: types.Message):
 async def cmd_admin_mute(message: types.Message):
     # Проверяем ID пользователя
 
-    if message.chat.id != DEFAULT_CHAT_ID:
+    if not is_allowed_chat(message.chat.id):
         return
 
     if message.from_user.id not in ALLOWED_USERS:
@@ -378,7 +383,7 @@ async def cmd_admin_mute(message: types.Message):
 @dp.message(Command("аразмут", "аunmute"))
 async def cmd_admin_unmute(message: types.Message):
 
-    if message.chat.id != DEFAULT_CHAT_ID:
+    if not is_allowed_chat(message.chat.id):
         return
     # Проверяем ID пользователя
     if message.from_user.id not in ALLOWED_USERS:
@@ -432,7 +437,7 @@ async def cmd_admin_unmute(message: types.Message):
 
 @dp.message(Command("аспам", "аspam"))
 async def cmd_admin_spam_clean(message: types.Message):
-    if message.chat.id != DEFAULT_CHAT_ID:
+    if not is_allowed_chat(message.chat.id):
         return
 
     # Проверяем ID пользователя
@@ -1084,9 +1089,14 @@ def admin_menu():
 
 @dp.callback_query(F.data == "today_rasp")
 async def today_rasp_handler(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    # Проверяем, что запрос из разрешенного чата
+    if not is_allowed_chat(callback.message.chat.id):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
-        return    
+        return
+    
+    # Используем chat_id из callback
+    chat_id = callback.message.chat.id
+    
     now = datetime.datetime.now(TZ)
     target_date = now.date()
     day_to_show = now.isoweekday()
@@ -1099,11 +1109,11 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     else:
         day_name = "сегодня"
     
-    # Получаем тип недели
-    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
+    # Получаем тип недели для конкретного чата
+    week_type = await get_current_week_type(pool, chat_id, target_date)
     
-    # Получаем расписание
-    text = await get_rasp_formatted(day_to_show, week_type)
+    # Получаем расписание для конкретного чата
+    text = await get_rasp_formatted(day_to_show, week_type, chat_id)
     
     # Формируем сообщение
     day_names = {
@@ -2274,6 +2284,7 @@ async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
     await greet_and_send(callback.from_user, "Введите день недели (1-6):", callback=callback)
     await state.set_state(EditRaspState.day)
     await callback.answer()
+
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False, include_week_info: bool = False):
     if include_joke:
         async with pool.acquire() as conn:
@@ -2286,7 +2297,9 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     # Добавляем информацию о неделе если нужно
     week_info = ""
     if include_week_info:
-        current_week = await get_current_week_type(pool, DEFAULT_CHAT_ID)
+        # Используем chat_id из параметра или из сообщения
+        target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
+        current_week = await get_current_week_type(pool, target_chat_id)
         week_name = "Нечетная" if current_week == 1 else "Четная"
         week_info = f"\n\n📅 Сейчас неделя: {week_name}"
     
@@ -2309,7 +2322,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     else:
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
 
-async def get_rasp_formatted(day, week_type):
+async def get_rasp_formatted(day, week_type, chat_id: int = DEFAULT_CHAT_ID):
     msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -2319,7 +2332,7 @@ async def get_rasp_formatted(day, week_type):
                    LEFT JOIN subjects s ON r.subject_id = s.id
                    WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
                    ORDER BY r.pair_number""",
-                (DEFAULT_CHAT_ID, day, week_type)
+                (chat_id, day, week_type)  # Используем переданный chat_id
             )
             rows = await cur.fetchall()
     
@@ -2390,8 +2403,9 @@ TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/арка�
 @dp.message(F.text.lower().in_(TRIGGERS))
 async def trigger_handler(message: types.Message):
     # Проверяем, что сообщение из нужного чата
-    if message.chat.id != DEFAULT_CHAT_ID:
-        return  # Игнорируем сообщения из других чатов
+    if not is_allowed_chat(message.chat.id):
+        await message.answer("⛔ Бот не работает в этом чате")
+        return
     
     is_private = message.chat.type == "private"
     is_group_chat = message.chat.type in ["group", "supergroup"]
@@ -2561,7 +2575,7 @@ async def on_rasp_day(callback: types.CallbackQuery):
 @dp.message(Command("никнейм"))
 async def cmd_set_nickname(message: types.Message):
 
-    if message.chat.id != DEFAULT_CHAT_ID:
+    if not is_allowed_chat(message.chat.id):
         return
 
     parts = message.text.split(maxsplit=1)
@@ -2578,7 +2592,7 @@ async def cmd_set_nickname(message: types.Message):
 @dp.message(Command("анекдот"))
 async def cmd_anekdot(message: types.Message):
 
-    if message.chat.id != DEFAULT_CHAT_ID:
+    if not is_allowed_chat(message.chat.id):
         return
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -2765,73 +2779,83 @@ async def setchet_handler(message: types.Message, state: FSMContext):
         await greet_and_send(message.from_user, "⚠ Введите 1 или 2.", message=message)
 
 async def send_today_rasp():
-    now = datetime.datetime.now(TZ)
-    hour = now.hour
-    day = now.isoweekday()
+    for chat_id in ALLOWED_CHAT_IDS:
+        try:
+            now = datetime.datetime.now(TZ)
+            hour = now.hour
+            day = now.isoweekday()
+            
+            # Определяем день для публикации
+            if hour >= 18:
+                target_date = now.date() + datetime.timedelta(days=1)
+                day_to_post = target_date.isoweekday()
+                day_name = "завтра"
+                
+                if day_to_post == 7:
+                    target_date += datetime.timedelta(days=1)
+                    day_to_post = 1
+                    day_name = "послезавтра (Понедельник)"
+            else:
+                target_date = now.date()
+                day_to_post = day
+                day_name = "сегодня"
+                
+                if day_to_post == 7:
+                    target_date += datetime.timedelta(days=1)
+                    day_to_post = 1
+                    day_name = "завтра (Понедельник)"
+            
+            # Получаем тип недели для целевой даты и конкретного чата
+            week_type = await get_current_week_type(pool, chat_id, target_date)
+            
+            # Получаем расписание для конкретного чата
+            text = await get_rasp_formatted(day_to_post, week_type, chat_id)
+            
+            # Формируем сообщение
+            day_names = {
+                1: "Понедельник",
+                2: "Вторник", 
+                3: "Среда",
+                4: "Четверг",
+                5: "Пятница",
+                6: "Суббота"
+            }
+            
+            week_name = "нечетная" if week_type == 1 else "четная"
+            msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
+            
+            # Добавляем анекдот
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+                    row = await cur.fetchone()
+                    if row:
+                        msg += f"\n\n😂 Анекдот:\n{row[0]}"
+            
+            await bot.send_message(chat_id, msg)
+            
+        except Exception as e:
+            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")   
+            
+@dp.message(Command("chats"))
+async def cmd_chats(message: types.Message):
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
     
-    # Определяем день для публикации
-    if hour >= 18:
-        # После 18:00 показываем на завтра
-        target_date = now.date() + datetime.timedelta(days=1)
-        day_to_post = target_date.isoweekday()
-        day_name = "завтра"
-        
-        # Если завтра воскресенье - показываем на понедельник
-        if day_to_post == 7:
-            target_date += datetime.timedelta(days=1)
-            day_to_post = 1
-            day_name = "послезавтра (Понедельник)"
-    else:
-        # До 18:00 показываем на сегодня
-        target_date = now.date()
-        day_to_post = day
-        day_name = "сегодня"
-        
-        # Если сегодня воскресенье - показываем на понедельник
-        if day_to_post == 7:
-            target_date += datetime.timedelta(days=1)
-            day_to_post = 1
-            day_name = "завтра (Понедельник)"
-    
-    # Получаем тип недели для целевой даты
-    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
-    
-    # Получаем расписание
-    text = await get_rasp_formatted(day_to_post, week_type)
-    
-    # Формируем сообщение
-    day_names = {
-        1: "Понедельник",
-        2: "Вторник", 
-        3: "Среда",
-        4: "Четверг",
-        5: "Пятница",
-        6: "Суббота"
-    }
-    
-    week_name = "нечетная" if week_type == 1 else "четная"
-    msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
-    
-    # Добавляем анекдот
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-            row = await cur.fetchone()
-            if row:
-                msg += f"\n\n😂 Анекдот:\n{row[0]}"
-    
-    await bot.send_message(DEFAULT_CHAT_ID, msg)   
-
-
-@dp.message(Command("chatid"))
-async def cmd_chatid(message: types.Message):
-    chat_id = message.chat.id
-    chat_type = message.chat.type
-    chat_title = getattr(message.chat, 'title', 'ЛС')
+    chats_info = []
+    for i, chat_id in enumerate(ALLOWED_CHAT_IDS, 1):
+        try:
+            chat = await bot.get_chat(chat_id)
+            chats_info.append(f"{i}. {chat.title} (`{chat_id}`)")
+        except Exception as e:
+            chats_info.append(f"{i}. Ошибка: {e} (`{chat_id}`)")
     
     await message.answer(
-        f"🆔 Chat ID: `{chat_id}`\n"
+        "📊 Разрешенные чаты:\n" + "\n".join(chats_info) +
+        f"\n\nВсего: {len(ALLOWED_CHAT_IDS)} чатов"
     )
+
 
 async def main():
     global pool
