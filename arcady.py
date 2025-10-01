@@ -2567,7 +2567,12 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
         # Если не указан chat_id, отправляем пользователю в ЛС
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
 
-async def get_rasp_formatted(day, week_type, chat_id: int = DEFAULT_CHAT_ID):
+async def get_rasp_formatted(day, week_type, chat_id: int = None):
+    """Получаем расписание для конкретного чата"""
+    # Если chat_id не указан, используем первый из разрешенных
+    if chat_id is None:
+        chat_id = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else DEFAULT_CHAT_ID
+    
     msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -2577,11 +2582,11 @@ async def get_rasp_formatted(day, week_type, chat_id: int = DEFAULT_CHAT_ID):
                    LEFT JOIN subjects s ON r.subject_id = s.id
                    WHERE r.chat_id=%s AND r.day=%s AND r.week_type=%s
                    ORDER BY r.pair_number""",
-                (chat_id, day, week_type)  # Используем переданный chat_id
+                (chat_id, day, week_type)
             )
             rows = await cur.fetchall()
     
-    # Находим максимальный номер пары, которая есть в расписании
+    # Остальной код функции без изменений...
     max_pair = 0
     pairs_dict = {}
     for row in rows:
@@ -2602,16 +2607,12 @@ async def get_rasp_formatted(day, week_type, chat_id: int = DEFAULT_CHAT_ID):
             if subject_name == "Свободно":
                 msg_lines.append(f"{i}. Свободно")
             else:
-                # Для предметов с кабинетом в названии - извлекаем чистое название
                 import re
-                # Обновленное регулярное выражение с учетом точек
                 clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
                 
                 if cabinet and cabinet != "Не указан":
-                    # Если кабинет указан отдельно - используем его
                     msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
                 else:
-                    # Если кабинета нет - пытаемся извлечь из названия
                     cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
                     if cabinet_match:
                         extracted_cabinet = cabinet_match.group(2)
@@ -3016,14 +3017,16 @@ async def set_week_type_handler(callback: types.CallbackQuery):
         return
     
     week_type = int(callback.data.split("_")[2])
-    chat_id = callback.message.chat.id
     
     try:
-        await set_current_week_type(pool, chat_id, week_type)
+        # ИСПРАВЛЕНИЕ: устанавливаем четность для ВСЕХ разрешенных чатов
+        for chat_id in ALLOWED_CHAT_IDS:
+            await set_current_week_type(pool, chat_id, week_type)
+        
         week_name = "нечетная" if week_type == 1 else "четная"
         
         await callback.message.edit_text(
-            f"✅ Четность установлена: {week_name} неделя\n\n"
+            f"✅ Четность установлена: {week_name} неделя для всех чатов\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
@@ -3036,6 +3039,21 @@ async def set_week_type_handler(callback: types.CallbackQuery):
         )
     
     await callback.answer()
+
+@dp.message(Command("check_week"))
+async def check_week_status(message: types.Message):
+    """Проверка текущей четности во всех чатах"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    status_text = "📊 Статус четности по чатам:\n\n"
+    
+    for chat_id in ALLOWED_CHAT_IDS:
+        week_type = await get_current_week_type(pool, chat_id)
+        week_name = "нечетная" if week_type == 1 else "четная"
+        status_text += f"Чат {chat_id}: {week_name} ({week_type})\n"
+    
+    await message.answer(status_text)
 
 @dp.message(SetChetState.week_type)
 async def setchet_handler(message: types.Message, state: FSMContext):
@@ -3079,10 +3097,10 @@ async def send_today_rasp():
                     day_to_post = 1
                     day_name = "завтра (Понедельник)"
             
-            # Просто получаем текущую четность из базы
+            # Получаем четность для КОНКРЕТНОГО чата
             week_type = await get_current_week_type(pool, chat_id)
             
-            # Получаем расписание
+            # Получаем расписание для КОНКРЕТНОГО чата
             text = await get_rasp_formatted(day_to_post, week_type, chat_id)
             
             # Формируем сообщение
@@ -3105,7 +3123,29 @@ async def send_today_rasp():
             await bot.send_message(chat_id, msg)
             
         except Exception as e:
-            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")  
+            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
+
+@dp.message(Command("sync_week"))
+async def sync_week_all_chats(message: types.Message):
+    """Синхронизирует четность во всех чатах"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        # Берем четность из первого чата как основную
+        main_chat_id = ALLOWED_CHAT_IDS[0]
+        main_week_type = await get_current_week_type(pool, main_chat_id)
+        
+        # Устанавливаем такую же четность для всех чатов
+        for chat_id in ALLOWED_CHAT_IDS:
+            await set_current_week_type(pool, chat_id, main_week_type)
+        
+        week_name = "нечетная" if main_week_type == 1 else "четная"
+        await message.answer(f"✅ Четность синхронизирована: {week_name} неделя для всех чатов")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка синхронизации: {e}")
+
 
 async def main():
     global pool
