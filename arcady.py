@@ -140,12 +140,18 @@ async def ensure_columns(pool):
 # Функции для работы с домашними заданиями
 async def add_homework(pool, subject_id: int, due_date: str, task_text: str):
     """Добавляет домашнее задание в базу (общее для всех чатов)"""
+    # Конвертируем дату из DD.MM.YYYY в YYYY-MM-DD для MySQL
+    try:
+        due_date_mysql = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
+    except ValueError:
+        raise ValueError("Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
                 INSERT INTO homework (subject_id, due_date, task_text)
                 VALUES (%s, %s, %s)
-            """, (subject_id, due_date, task_text))
+            """, (subject_id, due_date_mysql, task_text))
 
 async def get_all_homework(pool, limit: int = 50) -> List[Tuple]:
     """Получает все домашние задания (общие для всех чатов)"""
@@ -162,6 +168,13 @@ async def get_all_homework(pool, limit: int = 50) -> List[Tuple]:
 
 async def get_homework_by_date(pool, date: str) -> List[Tuple]:
     """Получает домашние задания на конкретную дату (общие для всех чатов)"""
+    # Конвертируем дату если нужно
+    if '.' in date:
+        try:
+            date = datetime.datetime.strptime(date, '%d.%m.%Y').strftime('%Y-%m-%d')
+        except ValueError:
+            return []
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -187,13 +200,22 @@ async def get_homework_by_id(pool, homework_id: int) -> Tuple:
 
 async def update_homework(pool, homework_id: int, subject_id: int, due_date: str, task_text: str):
     """Обновляет домашнее задание"""
+    # Обрабатываем дату (может быть уже в формате YYYY-MM-DD или DD.MM.YYYY)
+    try:
+        if isinstance(due_date, str) and '.' in due_date:
+            due_date_mysql = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
+        else:
+            due_date_mysql = due_date
+    except ValueError:
+        raise ValueError("Неверный формат даты")
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
                 UPDATE homework 
                 SET subject_id=%s, due_date=%s, task_text=%s
                 WHERE id=%s
-            """, (subject_id, due_date, task_text, homework_id))
+            """, (subject_id, due_date_mysql, task_text, homework_id))
 
 async def delete_homework(pool, homework_id: int):
     """Удаляет домашнее задание"""
@@ -203,6 +225,13 @@ async def delete_homework(pool, homework_id: int):
 
 async def has_homework_for_date(pool, date: str) -> bool:
     """Проверяет, есть ли домашние задания на указанную дату"""
+    # Конвертируем дату если нужно
+    if '.' in date:
+        try:
+            date = datetime.datetime.strptime(date, '%d.%m.%Y').strftime('%Y-%m-%d')
+        except ValueError:
+            return False
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT COUNT(*) FROM homework WHERE due_date=%s", (date,))
@@ -1436,9 +1465,10 @@ async def process_homework_due_date(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Проверяем формат даты
+    # Проверяем формат даты и конвертируем для хранения
     try:
         due_date = datetime.datetime.strptime(due_date_str, '%d.%m.%Y').date()
+        # Сохраняем в формате DD.MM.YYYY для отображения, но будем конвертировать при сохранении в БД
         await state.update_data(due_date=due_date_str)
         
         # Получаем список предметов
@@ -1614,7 +1644,8 @@ async def process_edit_homework_due_date(message: types.Message, state: FSMConte
     else:
         due_date_str = message.text.strip()
         try:
-            due_date = datetime.datetime.strptime(due_date_str, '%d.%m.%Y').date()
+            # Просто сохраняем строку, конвертация будет при сохранении в БД
+            datetime.datetime.strptime(due_date_str, '%d.%m.%Y')  # Проверяем валидность
             await state.update_data(new_due_date=due_date_str)
         except ValueError:
             await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ или /skip:")
