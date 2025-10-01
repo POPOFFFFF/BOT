@@ -681,7 +681,10 @@ async def delete_teacher_message(pool, message_id: int) -> bool:
 
 @dp.callback_query(F.data == "send_message_chat")
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     if callback.from_user.id not in SPECIAL_USER_ID or callback.message.chat.type != "private":
@@ -815,7 +818,10 @@ async def process_forward_message(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "view_teacher_messages")
 async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
 
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
 
@@ -830,9 +836,12 @@ async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMC
 
 @dp.callback_query(F.data == "menu_back_from_messages")
 async def menu_back_from_messages_handler(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
-        return    
+        return
     await menu_back_handler(callback, state)
 
 
@@ -901,7 +910,10 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
 
 @dp.callback_query(F.data.startswith("messages_page_"))
 async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     try:
@@ -914,7 +926,10 @@ async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMCo
 
 @dp.callback_query(F.data.startswith("view_message_"))
 async def view_specific_message(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     try:
@@ -970,7 +985,10 @@ async def view_specific_message(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_messages_list")
 async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     data = await state.get_data()
@@ -1175,7 +1193,10 @@ async def menu_weather_handler(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("weather_"))
 async def weather_period_handler(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     """Обработчик выбора периода погоды"""
@@ -1631,20 +1652,27 @@ async def admin_add_subject_start(callback: types.CallbackQuery, state: FSMConte
     await state.set_state(AddSubjectState.name)
     await callback.answer()
 
-
 @dp.message(AddSubjectState.name)
 async def process_subject_name(message: types.Message, state: FSMContext):
     subject_name = message.text.strip()
+    
+    # Добавляем проверку на команду отмены
+    if subject_name.lower() in ['отмена', 'cancel', '❌ отмена']:
+        await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        return
+        
     if not subject_name:
         await message.answer("❌ Название предмета не может быть пустым. Введите название:")
         return
     
     await state.update_data(name=subject_name)
     
-    # Предлагаем выбрать тип предмета
+    # Предлагаем выбрать тип предмета с кнопкой отмены
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏫 С фиксированным кабинетом", callback_data="subject_type_fixed")],
-        [InlineKeyboardButton(text="🔢 С запросом кабинета (rK)", callback_data="subject_type_rk")]
+        [InlineKeyboardButton(text="🔢 С запросом кабинета (rK)", callback_data="subject_type_rk")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
     
     await message.answer(
@@ -1654,36 +1682,41 @@ async def process_subject_name(message: types.Message, state: FSMContext):
     )
     await state.set_state(AddSubjectState.type_choice)
 
-@dp.callback_query(F.data.startswith("subject_type_"))
-async def process_subject_type(callback: types.CallbackQuery, state: FSMContext):
-    subject_type = callback.data.split("_")[2]  # fixed или rk
+@dp.message(AddSubjectState.cabinet)
+async def process_subject_cabinet(message: types.Message, state: FSMContext):
+    cabinet = message.text.strip()
+    
+    # Добавляем проверку на команду отмены
+    if cabinet.lower() in ['отмена', 'cancel', '❌ отмена']:
+        await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        return
+        
     data = await state.get_data()
     subject_name = data["name"]
     
-    if subject_type == "fixed":
-        # Запрашиваем кабинет для фиксированного предмета
-        await callback.message.edit_text(
-            f"📝 Предмет: {subject_name}\n"
-            "🏫 Введите номер кабинета:"
-        )
-        await state.set_state(AddSubjectState.cabinet)
-    else:
-        # Для rK предмета сразу сохраняем
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (subject_name, True))
-        
-        await callback.message.edit_text(
-            f"✅ Предмет добавлен!\n\n"
-            f"📚 Название: {subject_name}\n"
-            f"🔢 Тип: с запросом кабинета (rK)\n\n"
-            f"Теперь при добавлении этого предмета в расписание "
-            f"система будет каждый раз запрашивать кабинет."
-        )
-        
-        # Показываем админ-меню
-        await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
-        await state.clear()
+    if not cabinet:
+        await message.answer("❌ Номер кабинета не может быть пустым. Введите кабинет:")
+        return
+    
+    # Формируем полное название предмета с кабинетом
+    full_subject_name = f"{subject_name} {cabinet}"
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (full_subject_name, False))
+    
+    await message.answer(
+        f"✅ Предмет добавлен!\n\n"
+        f"📚 Название: {full_subject_name}\n"
+        f"🏫 Тип: с фиксированным кабинетом\n\n"
+        f"Теперь при добавлении этого предмета в расписание "
+        f"кабинет будет подставляться автоматически."
+    )
+    
+    # Показываем админ-меню
+    await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
+    await state.clear()
     
     await callback.answer()
 
@@ -1740,6 +1773,7 @@ async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMCo
         button_text = f"{type_icon} {name}"
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_subject_{subject_id}")])
     
+    # Добавляем кнопку отмены
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -2001,6 +2035,7 @@ async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
     else:
         await greet_and_send(callback.from_user, f"Урок '{lesson}' добавлен с кабинетом по умолчанию.", callback=callback)
         await state.clear()
+        
 @dp.callback_query(F.data == "admin_set_cabinet")
 async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -2008,11 +2043,13 @@ async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMConte
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="cab_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")]
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
     await greet_and_send(callback.from_user, "Выберите четность недели:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.week_type)
     await callback.answer()
+
 @dp.callback_query(F.data.startswith("cab_week_"))
 async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
     week_type = int(callback.data[-1])
@@ -2021,17 +2058,12 @@ async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=day, callback_data=f"cab_day_{i+1}")] 
         for i, day in enumerate(DAYS)
-    ])
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+    )
     await greet_and_send(callback.from_user, "Выберите день недели:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.day)
     await callback.answer()
-@dp.callback_query(F.data.startswith("cab_pair_"))
-async def set_cab_pair(callback: types.CallbackQuery, state: FSMContext):
-    pair_number = int(callback.data[len("cab_pair_"):])
-    await state.update_data(pair_number=pair_number)
-    await greet_and_send(callback.from_user, "Введите номер кабинета для этой пары (например: 301):", callback=callback)
-    await state.set_state(SetCabinetState.cabinet)
-    await callback.answer()
+
 @dp.callback_query(F.data.startswith("cab_day_"))
 async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
     day = int(callback.data[len("cab_day_"):])
@@ -2039,14 +2071,23 @@ async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=str(i), callback_data=f"cab_pair_{i}")] for i in range(1, 7)
-    ])
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+    )
     await greet_and_send(callback.from_user, "Выберите номер пары:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.pair_number)
     await callback.answer()
+
 @dp.message(SetCabinetState.cabinet)
 async def set_cabinet_final(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
+    
+    # Добавляем проверку на команду отмены
+    if cabinet.lower() in ['отмена', 'cancel', '❌ отмена']:
+        await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        return
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -2070,6 +2111,7 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
                          message=message)
     await greet_and_send(message.from_user, "⚙ Админ-панель:", message=message, markup=admin_menu())
     await state.clear()
+
 @dp.callback_query(F.data == "admin_clear_pair")
 async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -2078,12 +2120,12 @@ async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContex
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="clr_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="clr_week_2")]
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="clr_week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
     await greet_and_send(callback.from_user, "Выберите четность недели:", callback=callback, markup=kb)
     await state.set_state(ClearPairState.week_type)
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("clr_week_"))
 async def clear_pair_week(callback: types.CallbackQuery, state: FSMContext):
@@ -2093,11 +2135,11 @@ async def clear_pair_week(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=day, callback_data=f"clr_day_{i+1}")]
         for i, day in enumerate(DAYS)
-    ])
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+    )
     await greet_and_send(callback.from_user, "Выберите день недели:", callback=callback, markup=kb)
     await state.set_state(ClearPairState.day)
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("clr_day_"))
 async def clear_pair_day(callback: types.CallbackQuery, state: FSMContext):
@@ -2106,11 +2148,11 @@ async def clear_pair_day(callback: types.CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=str(i), callback_data=f"clr_pair_{i}")] for i in range(1, 7)
-    ])
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+    )
     await greet_and_send(callback.from_user, "Выберите номер пары:", callback=callback, markup=kb)
     await state.set_state(ClearPairState.pair_number)
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("clr_pair_"))
 async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
@@ -2184,6 +2226,7 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
             callback_data=f"delete_teacher_msg_{msg_id}"
         )])
     
+    # Добавляем кнопку отмены
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -2194,7 +2237,6 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
         reply_markup=kb
     )
     await callback.answer()
-
 # Обработчик выбора сообщения для удаления
 @dp.callback_query(F.data.startswith("delete_teacher_msg_"))
 async def process_delete_teacher_message(callback: types.CallbackQuery, state: FSMContext):
@@ -2634,7 +2676,7 @@ async def cmd_anekdot(message: types.Message):
                 await message.answer("❌ В базе пока нет анекдотов.")
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
-    
+
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
     
@@ -2656,7 +2698,10 @@ async def on_rasp_show(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("zvonki_"))
 async def zvonki_handler(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     action = callback.data
