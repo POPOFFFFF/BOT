@@ -2553,10 +2553,14 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     week_info = ""
     if include_week_info:
         # Используем chat_id из параметра или из сообщения
-        target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
-        current_week = await get_current_week_type(pool, target_chat_id)
-        week_name = "Нечетная" if current_week == 1 else "Четная"
-        week_info = f"\n\n📅 Сейчас неделя: {week_name}"
+        # Добавляем информацию о неделе если нужно
+        week_info = ""
+        if include_week_info:
+            # Используем chat_id из параметра или из сообщения
+            target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
+            current_week = await get_current_week_type(pool, target_chat_id)
+            week_name = "Нечетная" if current_week == 1 else "Четная"
+            week_info = f"\n\n📅 Сейчас неделя: {week_name}"
     
     nickname = await get_nickname(pool, user.id)
     greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
@@ -2672,12 +2676,16 @@ async def trigger_handler(message: types.Message):
         signature = await get_special_user_signature(pool, message.from_user.id)
         is_special_user = signature is not None
 
+    # ИСПРАВЛЕНИЕ: используем chat_id текущего чата, а не DEFAULT_CHAT_ID
+    current_chat_id = message.chat.id
+
     await greet_and_send(
         message.from_user,
         "Выберите действие:",
         message=message,
         markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private),
-        include_week_info=True
+        include_week_info=True,
+        chat_id=current_chat_id  # Добавляем правильный chat_id
     )
 
 @dp.callback_query(F.data.startswith("menu_"))
@@ -2904,16 +2912,18 @@ async def zvonki_handler(callback: types.CallbackQuery):
             include_joke=True  
         )
     await callback.answer()
-
+    
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
     
-    current = await get_current_week_type(pool, DEFAULT_CHAT_ID)
+    # ИСПРАВЛЕНИЕ: используем chat_id из callback, а не DEFAULT_CHAT_ID
+    current_chat_id = callback.message.chat.id
+    current = await get_current_week_type(pool, current_chat_id)
     current_str = "нечетная (1)" if current == 1 else "четная (2)"
-    setting = await get_week_setting(pool, DEFAULT_CHAT_ID)
+    setting = await get_week_setting(pool, current_chat_id)
     if not setting:
         base_str = "не установлена (бот использует календарь)"
         set_at_str = "—"
