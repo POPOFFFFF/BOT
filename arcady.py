@@ -722,6 +722,37 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
     
     await callback.answer()
 
+async def send_message_to_all_chats(message_text: str, photo=None, document=None, video=None, audio=None, voice=None, sticker=None, caption: str = ""):
+    """Отправляет сообщение во все разрешенные чаты"""
+    for chat_id in ALLOWED_CHAT_IDS:
+        try:
+            if photo:
+                await bot.send_photo(chat_id, photo, caption=message_text + caption)
+            elif document:
+                await bot.send_document(chat_id, document, caption=message_text + caption)
+            elif video:
+                await bot.send_video(chat_id, video, caption=message_text + caption)
+            elif audio:
+                await bot.send_audio(chat_id, audio, caption=message_text + caption)
+            elif voice:
+                await bot.send_voice(chat_id, voice, caption=message_text + caption)
+            elif sticker:
+                await bot.send_sticker(chat_id, sticker)
+            else:
+                await bot.send_message(chat_id, message_text + caption)
+        except Exception as e:
+            print(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
+
+async def save_teacher_message_to_all_chats(message_ids: dict, from_user_id: int, signature: str, message_text: str, message_type: str):
+    """Сохраняет сообщение преподавателя для всех чатов"""
+    for chat_id, message_id in message_ids.items():
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    INSERT INTO teacher_messages (chat_id, message_id, from_user_id, signature, message_text, message_type)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (chat_id, message_id, from_user_id, signature, message_text, message_type))
+
 # Обработчик кнопки остановки пересылки
 @dp.callback_query(F.data == "stop_forward_mode")
 async def stop_forward_mode_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -749,10 +780,18 @@ async def process_forward_message(message: types.Message, state: FSMContext):
         # Сохраняем информацию о сообщении перед отправкой
         message_text = ""
         message_type = "text"
+        sent_messages = {}  # Словарь для хранения ID сообщений по чатам
         
         if message.text:
             message_text = message.text
-            sent_message = await bot.send_message(DEFAULT_CHAT_ID, f"{prefix}{message.text}")
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_message(chat_id, f"{prefix}{message.text}")
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки в чат {chat_id}: {e}")
+                    
         elif message.photo:
             message_text = message.caption or ""
             message_type = "photo"
@@ -760,7 +799,14 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к фото, начинающиеся с /, не отправляются.")
                 return
-            sent_message = await bot.send_photo(DEFAULT_CHAT_ID, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_photo(chat_id, message.photo[-1].file_id, caption=prefix + (message.caption or ""))
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки фото в чат {chat_id}: {e}")
+                    
         elif message.document:
             message_text = message.caption or ""
             message_type = "document"
@@ -768,7 +814,14 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к документам, начинающиеся с /, не отправляются.")
                 return
-            sent_message = await bot.send_document(DEFAULT_CHAT_ID, message.document.file_id, caption=prefix + (message.caption or ""))
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_document(chat_id, message.document.file_id, caption=prefix + (message.caption or ""))
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки документа в чат {chat_id}: {e}")
+                    
         elif message.video:
             message_text = message.caption or ""
             message_type = "video"
@@ -776,7 +829,14 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к видео, начинающиеся с /, не отправляются.")
                 return
-            sent_message = await bot.send_video(DEFAULT_CHAT_ID, message.video.file_id, caption=prefix + (message.caption or ""))
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_video(chat_id, message.video.file_id, caption=prefix + (message.caption or ""))
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки видео в чат {chat_id}: {e}")
+                    
         elif message.audio:
             message_text = message.caption or ""
             message_type = "audio"
@@ -784,31 +844,52 @@ async def process_forward_message(message: types.Message, state: FSMContext):
             if message.caption and message.caption.startswith('/'):
                 await message.answer("❌ Подписи к аудио, начинающиеся с /, не отправляются.")
                 return
-            sent_message = await bot.send_audio(DEFAULT_CHAT_ID, message.audio.file_id, caption=prefix + (message.caption or ""))
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_audio(chat_id, message.audio.file_id, caption=prefix + (message.caption or ""))
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки аудио в чат {chat_id}: {e}")
+                    
         elif message.voice:
             message_text = "голосовое сообщение"
             message_type = "voice"
-            sent_message = await bot.send_voice(DEFAULT_CHAT_ID, message.voice.file_id, caption=prefix)
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_voice(chat_id, message.voice.file_id, caption=prefix)
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки голосового сообщения в чат {chat_id}: {e}")
+                    
         elif message.sticker:
             message_text = "стикер"
             message_type = "sticker"
-            sent_message = await bot.send_sticker(DEFAULT_CHAT_ID, message.sticker.file_id)
+            # Отправляем во все чаты
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    sent_message = await bot.send_sticker(chat_id, message.sticker.file_id)
+                    sent_messages[chat_id] = sent_message.message_id
+                except Exception as e:
+                    print(f"Ошибка отправки стикера в чат {chat_id}: {e}")
+                    
         else:
             await message.answer("⚠ Не удалось распознать тип сообщения.")
             return
 
-        # Сохраняем сообщение в базу
-        await save_teacher_message(
-            pool, 
-            DEFAULT_CHAT_ID, 
-            sent_message.message_id,
+        # Сохраняем сообщения в базу для всех чатов
+        await save_teacher_message_to_all_chats(
+            sent_messages,
             message.from_user.id,
             signature,
             message_text,
             message_type
         )
 
-        await message.answer("✅ Сообщение переслано в беседу!")
+        success_chats = len(sent_messages)
+        total_chats = len(ALLOWED_CHAT_IDS)
+        await message.answer(f"✅ Сообщение переслано в {success_chats} из {total_chats} бесед!")
         
     except Exception as e:
         await message.answer(f"❌ Ошибка при пересылке: {e}")
@@ -817,15 +898,12 @@ async def process_forward_message(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "view_teacher_messages")
 async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
-
-    is_private = callback.message.chat.type == "private"
-    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-    
-    if not (is_private or is_allowed_chat):
+    # Разрешаем просмотр в разрешенных чатах
+    if callback.message.chat.id not in ALLOWED_CHAT_IDS:
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
 
-    # Проверяем, что это группой чат
+    # Проверяем, что это групповой чат
     if callback.message.chat.type not in ["group", "supergroup"]:
         await callback.answer("⛔ Эта функция доступна только в беседе", show_alert=True)
         return
@@ -849,8 +927,10 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     limit = 10
     offset = page * limit
     
-    messages = await get_teacher_messages(pool, DEFAULT_CHAT_ID, offset, limit)
-    total_count = await get_teacher_messages_count(pool, DEFAULT_CHAT_ID)
+    # Используем ID текущего чата для получения сообщений
+    current_chat_id = callback.message.chat.id
+    messages = await get_teacher_messages(pool, current_chat_id, offset, limit)
+    total_count = await get_teacher_messages_count(pool, current_chat_id)
     
     if not messages:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -886,7 +966,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
     
-    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))  # Используем menu_back
+    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
     
     if (page + 1) * limit < total_count:
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
@@ -907,33 +987,16 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     # Сохраняем текущую страницу в состоянии
     await state.update_data(current_page=page)
 
-
-@dp.callback_query(F.data.startswith("messages_page_"))
-async def handle_messages_pagination(callback: types.CallbackQuery, state: FSMContext):
-    is_private = callback.message.chat.type == "private"
-    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-    
-    if not (is_private or is_allowed_chat):
-        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
-        return
-    try:
-        page = int(callback.data.split("_")[2])
-        await show_teacher_messages_page(callback, state, page)
-    except ValueError:
-        await callback.answer("❌ Ошибка пагинации")
-    await callback.answer()
-
-
 @dp.callback_query(F.data.startswith("view_message_"))
 async def view_specific_message(callback: types.CallbackQuery):
-    is_private = callback.message.chat.type == "private"
-    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-    
-    if not (is_private or is_allowed_chat):
+    # Разрешаем просмотр в разрешенных чатах
+    if callback.message.chat.id not in ALLOWED_CHAT_IDS:
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
+        
     try:
         message_db_id = int(callback.data.split("_")[2])
+        current_chat_id = callback.message.chat.id
         
         # Получаем информацию о сообщении
         async with pool.acquire() as conn:
@@ -942,7 +1005,7 @@ async def view_specific_message(callback: types.CallbackQuery):
                     SELECT message_id, signature, message_text, message_type, created_at
                     FROM teacher_messages 
                     WHERE id = %s AND chat_id = %s
-                """, (message_db_id, DEFAULT_CHAT_ID))
+                """, (message_db_id, current_chat_id))
                 
                 message_data = await cur.fetchone()
         
@@ -958,8 +1021,8 @@ async def view_specific_message(callback: types.CallbackQuery):
         else:
             date_str = str(created_at)
         
-        # Создаем ссылку на сообщение в беседе
-        message_link = f"https://t.me/c/{str(DEFAULT_CHAT_ID).replace('-100', '')}/{message_id}"
+        # Создаем ссылку на сообщение в текущей беседе
+        message_link = f"https://t.me/c/{str(current_chat_id).replace('-100', '')}/{message_id}"
         
         # Создаем клавиатуру
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2035,7 +2098,7 @@ async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
     else:
         await greet_and_send(callback.from_user, f"Урок '{lesson}' добавлен с кабинетом по умолчанию.", callback=callback)
         await state.clear()
-        
+
 @dp.callback_query(F.data == "admin_set_cabinet")
 async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
