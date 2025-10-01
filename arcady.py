@@ -117,7 +117,18 @@ async def init_db(pool):
                 message_type VARCHAR(50),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""")
+            # Новая таблица для домашних заданий (без chat_id - общие для всех)
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS homework (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                subject_id INT,
+                due_date DATE,
+                task_text TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (subject_id) REFERENCES subjects(id)
+            )""")
             await conn.commit()
+
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -125,6 +136,79 @@ async def ensure_columns(pool):
             row = await cur.fetchone()
             if not row:
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
+
+# Функции для работы с домашними заданиями
+async def add_homework(pool, subject_id: int, due_date: str, task_text: str):
+    """Добавляет домашнее задание в базу (общее для всех чатов)"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO homework (subject_id, due_date, task_text)
+                VALUES (%s, %s, %s)
+            """, (subject_id, due_date, task_text))
+
+async def get_all_homework(pool, limit: int = 50) -> List[Tuple]:
+    """Получает все домашние задания (общие для всех чатов)"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT h.id, s.name, h.due_date, h.task_text, h.created_at
+                FROM homework h
+                JOIN subjects s ON h.subject_id = s.id
+                ORDER BY h.due_date ASC, h.created_at DESC
+                LIMIT %s
+            """, (limit,))
+            return await cur.fetchall()
+
+async def get_homework_by_date(pool, date: str) -> List[Tuple]:
+    """Получает домашние задания на конкретную дату (общие для всех чатов)"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT h.id, s.name, h.due_date, h.task_text, h.created_at
+                FROM homework h
+                JOIN subjects s ON h.subject_id = s.id
+                WHERE h.due_date = %s
+                ORDER BY h.created_at DESC
+            """, (date,))
+            return await cur.fetchall()
+
+async def get_homework_by_id(pool, homework_id: int) -> Tuple:
+    """Получает домашнее задание по ID"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT h.id, s.name, h.due_date, h.task_text, h.created_at, h.subject_id
+                FROM homework h
+                JOIN subjects s ON h.subject_id = s.id
+                WHERE h.id = %s
+            """, (homework_id,))
+            return await cur.fetchone()
+
+async def update_homework(pool, homework_id: int, subject_id: int, due_date: str, task_text: str):
+    """Обновляет домашнее задание"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                UPDATE homework 
+                SET subject_id=%s, due_date=%s, task_text=%s
+                WHERE id=%s
+            """, (subject_id, due_date, task_text, homework_id))
+
+async def delete_homework(pool, homework_id: int):
+    """Удаляет домашнее задание"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM homework WHERE id=%s", (homework_id,))
+
+async def has_homework_for_date(pool, date: str) -> bool:
+    """Проверяет, есть ли домашние задания на указанную дату"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT COUNT(*) FROM homework WHERE due_date=%s", (date,))
+            result = await cur.fetchone()
+            return result[0] > 0 if result else False
+
 async def set_nickname(pool, user_id: int, nickname: str):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -608,28 +692,23 @@ class DeleteTeacherMessageState(StatesGroup):
     message_id = State()
 class DeleteSubjectState(StatesGroup):
     subject_choice = State()
-
 class AddSpecialUserState(StatesGroup):
     user_id = State()
     signature = State()
-
 class SetPublishTimeState(StatesGroup):
     time = State()  
-
 class AddLessonState(StatesGroup):
     subject = State()
     week_type = State()
     day = State()
     pair_number = State()
     cabinet = State()
-
 class SetCabinetState(StatesGroup):
     week_type = State()
     day = State()
     lesson = State()
     cabinet = State()
     pair_num = State()
-
 class SetCabinetState(StatesGroup):
     week_type = State()
     day = State()
@@ -642,7 +721,17 @@ class ClearPairState(StatesGroup):
     pair_number = State()
 class ForwardModeState(StatesGroup):
     active = State()
-
+class AddHomeworkState(StatesGroup):
+    due_date = State()
+    subject = State()
+    task_text = State()
+class EditHomeworkState(StatesGroup):
+    homework_id = State()
+    due_date = State()
+    subject = State()
+    task_text = State()
+class DeleteHomeworkState(StatesGroup):
+    homework_id = State()
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
     async with pool.acquire() as conn:
@@ -1233,8 +1322,9 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
+        buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data="menu_homework")]),  # Новая кнопка
         buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
-        buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),  # Новая кнопка
+        buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
         buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
         buttons.append([InlineKeyboardButton(text="🌤️ Узнать погоду", callback_data="menu_weather")])
@@ -1264,11 +1354,472 @@ def admin_menu():
         [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],
         [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data="admin_delete_subject")],
 
+        # Новые кнопки для домашних заданий
+        [InlineKeyboardButton(text="📝 Добавить домашнее задание", callback_data="admin_add_homework")],
+        [InlineKeyboardButton(text="✏️ Редактировать домашнее задание", callback_data="admin_edit_homework")],
+        [InlineKeyboardButton(text="🗑️ Удалить домашнее задание", callback_data="admin_delete_homework")],
+
         [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],
-        [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data="admin_delete_teacher_message")],  # Новая кнопка
+        [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data="admin_delete_teacher_message")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+# Обработчики для домашних заданий в беседах
+@dp.callback_query(F.data == "menu_homework")
+async def menu_homework_handler(callback: types.CallbackQuery):
+    """Показывает список домашних заданий"""
+    if not is_allowed_chat(callback.message.chat.id):
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
+    homework_list = await get_all_homework(pool)
+    
+    if not homework_list:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        ])
+        await callback.message.edit_text(
+            "📚 Домашнее задание\n\n"
+            "Пока нет заданных домашних заданий.",
+            reply_markup=kb
+        )
+        return
+    
+    # Форматируем список домашних заданий
+    homework_text = "📚 Домашнее задание:\n\n"
+    for hw_id, subject_name, due_date, task_text, created_at in homework_list:
+        # Форматируем дату
+        due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
+        due_date_str = due_date_obj.strftime("%d.%m.%Y")
+        
+        # Обрезаем длинный текст задания
+        short_task = task_text[:100] + "..." if len(task_text) > 100 else task_text
+        
+        homework_text += f"📅 {due_date_str} | {subject_name}\n"
+        homework_text += f"📝 {short_task}\n"
+        homework_text += "─" * 30 + "\n"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await callback.message.edit_text(homework_text, reply_markup=kb)
+    await callback.answer()
+
+# Админские обработчики для домашних заданий
+@dp.callback_query(F.data == "admin_add_homework")
+async def admin_add_homework_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+
+    await callback.message.edit_text(
+        "📝 Добавление домашнего задания\n\n"
+        "Введите дату выполнения в формате ДД.ММ.ГГГГ (например: 15.12.2024):",
+        reply_markup=kb
+    )
+    await state.set_state(AddHomeworkState.due_date)
+    await callback.answer()
+
+@dp.message(AddHomeworkState.due_date)
+async def process_homework_due_date(message: types.Message, state: FSMContext):
+    due_date_str = message.text.strip()
+    
+    # Проверка на отмену
+    if due_date_str.lower() in ['отмена', 'cancel', '❌ отмена']:
+        await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        return
+    
+    # Проверяем формат даты
+    try:
+        due_date = datetime.datetime.strptime(due_date_str, '%d.%m.%Y').date()
+        await state.update_data(due_date=due_date_str)
+        
+        # Получаем список предметов
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, name FROM subjects ORDER BY name")
+                subjects = await cur.fetchall()
+        
+        if not subjects:
+            await message.answer("❌ В базе нет предметов. Сначала добавьте предметы.")
+            await state.clear()
+            return
+        
+        # Создаем кнопки выбора предмета
+        keyboard = []
+        for subject_id, name in subjects:
+            keyboard.append([InlineKeyboardButton(text=name, callback_data=f"hw_subject_{subject_id}")])
+        
+        keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        
+        await message.answer(
+            f"📅 Дата выполнения: {due_date_str}\n\n"
+            "Выберите предмет:",
+            reply_markup=kb
+        )
+        await state.set_state(AddHomeworkState.subject)
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ (например: 15.12.2024):")
+
+@dp.callback_query(F.data.startswith("hw_subject_"))
+async def process_homework_subject(callback: types.CallbackQuery, state: FSMContext):
+    subject_id = int(callback.data[len("hw_subject_"):])
+    
+    # Получаем название предмета
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+            subject_name = (await cur.fetchone())[0]
+    
+    await state.update_data(subject_id=subject_id, subject_name=subject_name)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    await callback.message.edit_text(
+        f"📅 Дата выполнения: {(await state.get_data())['due_date']}\n"
+        f"📚 Предмет: {subject_name}\n\n"
+        "Теперь введите текст задания:",
+        reply_markup=kb
+    )
+    await state.set_state(AddHomeworkState.task_text)
+    await callback.answer()
+
+@dp.message(AddHomeworkState.task_text)
+async def process_homework_task_text(message: types.Message, state: FSMContext):
+    task_text = message.text.strip()
+    
+    # Проверка на отмену
+    if task_text.lower() in ['отмена', 'cancel', '❌ отмена']:
+        await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
+        await state.clear()
+        return
+    
+    if not task_text:
+        await message.answer("❌ Текст задания не может быть пустым. Введите задание:")
+        return
+    
+    data = await state.get_data()
+    
+    try:
+        # Добавляем домашнее задание (без chat_id - общее для всех)
+        await add_homework(pool, data['subject_id'], data['due_date'], task_text)
+        
+        await message.answer(
+            f"✅ Домашнее задание добавлено!\n\n"
+            f"📅 Дата выполнения: {data['due_date']}\n"
+            f"📚 Предмет: {data['subject_name']}\n"
+            f"📝 Задание: {task_text}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении задания: {e}")
+    
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_edit_homework")
+async def admin_edit_homework_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    homework_list = await get_all_homework(pool)
+    
+    if not homework_list:
+        await callback.message.edit_text(
+            "✏️ Редактирование домашнего задания\n\n"
+            "❌ В базе нет домашних заданий для редактирования."
+        )
+        await callback.answer()
+        return
+    
+    # Создаем кнопки выбора задания
+    keyboard = []
+    for hw_id, subject_name, due_date, task_text, created_at in homework_list:
+        due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
+        due_date_str = due_date_obj.strftime("%d.%m.%Y")
+        
+        short_task = task_text[:30] + "..." if len(task_text) > 30 else task_text
+        button_text = f"{due_date_str} | {subject_name}: {short_task}"
+        
+        keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"edit_hw_{hw_id}")])
+    
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback.message.edit_text(
+        "✏️ Редактирование домашнего задания\n\n"
+        "Выберите задание для редактирования:",
+        reply_markup=kb
+    )
+    await state.set_state(EditHomeworkState.homework_id)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("edit_hw_"))
+async def process_edit_homework_select(callback: types.CallbackQuery, state: FSMContext):
+    homework_id = int(callback.data[len("edit_hw_"):])
+    
+    # Получаем информацию о задании
+    homework = await get_homework_by_id(pool, homework_id)
+    if not homework:
+        await callback.answer("❌ Задание не найдено", show_alert=True)
+        return
+    
+    hw_id, subject_name, due_date, task_text, created_at, subject_id = homework
+    
+    await state.update_data(
+        homework_id=hw_id,
+        current_subject_id=subject_id,
+        current_subject_name=subject_name,
+        current_due_date=due_date,
+        current_task_text=task_text
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
+    
+    await callback.message.edit_text(
+        f"✏️ Редактирование задания:\n\n"
+        f"📅 Текущая дата: {due_date_str}\n"
+        f"📚 Текущий предмет: {subject_name}\n"
+        f"📝 Текущее задание: {task_text}\n\n"
+        "Введите новую дату выполнения (ДД.ММ.ГГГГ) или нажмите /skip чтобы оставить текущую:",
+        reply_markup=kb
+    )
+    await state.set_state(EditHomeworkState.due_date)
+    await callback.answer()
+
+@dp.message(EditHomeworkState.due_date)
+async def process_edit_homework_due_date(message: types.Message, state: FSMContext):
+    if message.text.strip().lower() == '/skip':
+        # Пропускаем изменение даты
+        await state.update_data(new_due_date=None)
+    else:
+        due_date_str = message.text.strip()
+        try:
+            due_date = datetime.datetime.strptime(due_date_str, '%d.%m.%Y').date()
+            await state.update_data(new_due_date=due_date_str)
+        except ValueError:
+            await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ или /skip:")
+            return
+    
+    data = await state.get_data()
+    
+    # Получаем список предметов для выбора
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id, name FROM subjects ORDER BY name")
+            subjects = await cur.fetchall()
+    
+    keyboard = []
+    for subject_id, name in subjects:
+        keyboard.append([InlineKeyboardButton(text=name, callback_data=f"edit_hw_subject_{subject_id}")])
+    
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    new_date_info = data.get('new_due_date', 'оставить текущую')
+    await message.answer(
+        f"📅 Новая дата: {new_date_info}\n\n"
+        "Выберите новый предмет или нажмите /skip чтобы оставить текущий:",
+        reply_markup=kb
+    )
+    await state.set_state(EditHomeworkState.subject)
+
+@dp.callback_query(F.data.startswith("edit_hw_subject_"))
+async def process_edit_homework_subject(callback: types.CallbackQuery, state: FSMContext):
+    subject_id = int(callback.data[len("edit_hw_subject_"):])
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+            subject_name = (await cur.fetchone())[0]
+    
+    await state.update_data(new_subject_id=subject_id, new_subject_name=subject_name)
+    
+    data = await state.get_data()
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    new_date_info = data.get('new_due_date', 'текущая')
+    new_subject_info = data.get('new_subject_name', 'текущий')
+    
+    await callback.message.edit_text(
+        f"✏️ Редактирование задания:\n\n"
+        f"📅 Дата: {new_date_info}\n"
+        f"📚 Предмет: {new_subject_info}\n\n"
+        "Введите новый текст задания или /skip чтобы оставить текущий:",
+        reply_markup=kb
+    )
+    await state.set_state(EditHomeworkState.task_text)
+    await callback.answer()
+
+@dp.message(EditHomeworkState.task_text)
+async def process_edit_homework_task_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    
+    if message.text.strip().lower() == '/skip':
+        new_task_text = data['current_task_text']
+    else:
+        new_task_text = message.text.strip()
+        if not new_task_text:
+            await message.answer("❌ Текст задания не может быть пустым. Введите задание или /skip:")
+            return
+    
+    # Обновляем задание
+    subject_id = data.get('new_subject_id', data['current_subject_id'])
+    due_date = data.get('new_due_date', data['current_due_date'])
+    
+    try:
+        await update_homework(pool, data['homework_id'], subject_id, due_date, new_task_text)
+        
+        # Получаем обновленную информацию
+        updated_hw = await get_homework_by_id(pool, data['homework_id'])
+        if updated_hw:
+            hw_id, subject_name, due_date, task_text, created_at, subject_id = updated_hw
+            due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
+            
+            await message.answer(
+                f"✅ Домашнее задание обновлено!\n\n"
+                f"📅 Дата выполнения: {due_date_str}\n"
+                f"📚 Предмет: {subject_name}\n"
+                f"📝 Задание: {task_text}\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при обновлении задания: {e}")
+    
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_delete_homework")
+async def admin_delete_homework_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    homework_list = await get_all_homework(pool)
+    
+    if not homework_list:
+        await callback.message.edit_text(
+            "🗑️ Удаление домашнего задания\n\n"
+            "❌ В базе нет домашних заданий для удаления."
+        )
+        await callback.answer()
+        return
+    
+    # Создаем кнопки выбора задания
+    keyboard = []
+    for hw_id, subject_name, due_date, task_text, created_at in homework_list:
+        due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
+        due_date_str = due_date_obj.strftime("%d.%m.%Y")
+        
+        short_task = task_text[:30] + "..." if len(task_text) > 30 else task_text
+        button_text = f"{due_date_str} | {subject_name}: {short_task}"
+        
+        keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_hw_{hw_id}")])
+    
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback.message.edit_text(
+        "🗑️ Удаление домашнего задания\n\n"
+        "Выберите задание для удаления:",
+        reply_markup=kb
+    )
+    await state.set_state(DeleteHomeworkState.homework_id)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("delete_hw_"))
+async def process_delete_homework_select(callback: types.CallbackQuery, state: FSMContext):
+    homework_id = int(callback.data[len("delete_hw_"):])
+    
+    # Получаем информацию о задании
+    homework = await get_homework_by_id(pool, homework_id)
+    if not homework:
+        await callback.answer("❌ Задание не найдено", show_alert=True)
+        return
+    
+    hw_id, subject_name, due_date, task_text, created_at, subject_id = homework
+    
+    due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_hw_{hw_id}")],
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin")]
+    ])
+    
+    await callback.message.edit_text(
+        f"🗑️ Подтвердите удаление задания:\n\n"
+        f"📅 Дата: {due_date_str}\n"
+        f"📚 Предмет: {subject_name}\n"
+        f"📝 Задание: {task_text}\n\n"
+        "Вы уверены, что хотите удалить это задание?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_delete_hw_"))
+async def process_confirm_delete_homework(callback: types.CallbackQuery):
+    homework_id = int(callback.data[len("confirm_delete_hw_"):])
+    
+    try:
+        # Получаем информацию перед удалением для сообщения
+        homework = await get_homework_by_id(pool, homework_id)
+        if homework:
+            hw_id, subject_name, due_date, task_text, created_at, subject_id = homework
+            due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
+            
+            await delete_homework(pool, homework_id)
+            
+            await callback.message.edit_text(
+                f"✅ Домашнее задание удалено!\n\n"
+                f"📅 Дата: {due_date_str}\n"
+                f"📚 Предмет: {subject_name}\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+        else:
+            await callback.message.edit_text(
+                "❌ Задание не найдено.\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+            
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при удалении задания: {e}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    
+    await callback.answer()
+
+
+
+    
 
 @dp.callback_query(F.data == "today_rasp")
 async def today_rasp_handler(callback: types.CallbackQuery):
@@ -2605,7 +3156,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
 
 async def get_rasp_formatted(day, week_type, chat_id: int = None):
-    """Получаем расписание для конкретного чата"""
+    """Получаем расписание для конкретного чата с информацией о домашних заданиях"""
     # Если chat_id не указан, используем первый из разрешенных
     if chat_id is None:
         chat_id = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else DEFAULT_CHAT_ID
@@ -2623,7 +3174,6 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None):
             )
             rows = await cur.fetchall()
     
-    # Остальной код функции без изменений...
     max_pair = 0
     pairs_dict = {}
     for row in rows:
@@ -2659,7 +3209,17 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None):
         else:
             msg_lines.append(f"{i}. Свободно")
     
-    return "\n".join(msg_lines)
+    result = "\n".join(msg_lines)
+    
+    # Добавляем информацию о домашних заданиях на сегодня
+    today = datetime.datetime.now(TZ).date()
+    today_str = today.strftime("%Y-%m-%d")
+    has_hw_today = await has_homework_for_date(pool, today_str)
+    
+    if has_hw_today:
+        result += "\n\n📚 Есть заданное домашнее задание"
+    
+    return result
 
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
