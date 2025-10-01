@@ -996,7 +996,7 @@ async def admin_add_special_user_start(callback: types.CallbackQuery, state: FSM
     )
     await state.set_state(AddSpecialUserState.user_id)
     await callback.answer()
-    
+
 @dp.message(AddSpecialUserState.user_id)
 async def process_special_user_id(message: types.Message, state: FSMContext):
     try:
@@ -2914,26 +2914,6 @@ async def send_today_rasp():
             
         except Exception as e:
             print(f"Ошибка отправки расписания в чат {chat_id}: {e}")   
-
-@dp.message(Command("chats"))
-async def cmd_chats(message: types.Message):
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    chats_info = []
-    for i, chat_id in enumerate(ALLOWED_CHAT_IDS, 1):
-        try:
-            chat = await bot.get_chat(chat_id)
-            chats_info.append(f"{i}. {chat.title} (`{chat_id}`)")
-        except Exception as e:
-            chats_info.append(f"{i}. Ошибка: {e} (`{chat_id}`)")
-    
-    await message.answer(
-        "📊 Разрешенные чаты:\n" + "\n".join(chats_info) +
-        f"\n\nВсего: {len(ALLOWED_CHAT_IDS)} чатов"
-    )
-
 
 async def main():
     global pool
