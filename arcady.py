@@ -64,12 +64,6 @@ async def init_db(pool):
                 text TEXT
             )""")
             await cur.execute("""
-            CREATE TABLE IF NOT EXISTS week_setting (
-                chat_id BIGINT PRIMARY KEY,
-                week_type INT,
-                set_at DATE
-            )""")
-            await cur.execute("""
             CREATE TABLE IF NOT EXISTS nicknames (
                 user_id BIGINT PRIMARY KEY,
                 nickname VARCHAR(255)
@@ -106,6 +100,12 @@ async def init_db(pool):
                 subject_id INT,
                 cabinet VARCHAR(50),
                 FOREIGN KEY (subject_id) REFERENCES subjects(id)
+            )""")
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS current_week_type (
+                chat_id BIGINT PRIMARY KEY,
+                week_type INT NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""")
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS teacher_messages (
@@ -512,42 +512,29 @@ def format_duration(seconds: int) -> str:
             return f"{days} дней"
 
 
-async def get_week_setting(pool, chat_id):
+async def get_current_week_type(pool, chat_id: int) -> int:
+    """Просто получаем текущую четность из базы"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT week_type, set_at FROM week_setting WHERE chat_id=%s", (chat_id,))
+            await cur.execute("SELECT week_type FROM current_week_type WHERE chat_id=%s", (chat_id,))
             row = await cur.fetchone()
-            if not row:
-                return None
-            wt, set_at = row
-            if isinstance(set_at, datetime.datetime):
-                set_at = set_at.date()
-            return (wt, set_at)
+            if row:
+                return row[0]
+            else:
+                # Если запись не существует, создаем по умолчанию нечетную неделю
+                await cur.execute("INSERT INTO current_week_type (chat_id, week_type) VALUES (%s, %s)", (chat_id, 1))
+                return 1
 
+async def set_current_week_type(pool, chat_id: int, week_type: int):
+    """Устанавливаем четность недели"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO current_week_type (chat_id, week_type) 
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE week_type=%s, updated_at=CURRENT_TIMESTAMP
+            """, (chat_id, week_type, week_type))
 
-async def get_current_week_type(pool, chat_id: int, target_date: datetime.date | None = None):
-    setting = await get_week_setting(pool, chat_id)
-    if target_date is None:
-        target_date = datetime.datetime.now(TZ).date()
-
-    print(f"DEBUG: chat_id={chat_id}, target_date={target_date}, setting={setting}")  # Отладочная информация
-
-    if not setting:
-        week_number = target_date.isocalendar()[1]
-        return 1 if week_number % 2 != 0 else 2
-
-    base_week_type, set_at = setting
-    if isinstance(set_at, datetime.datetime):
-        set_at = set_at.date()
-
-    base_week_number = set_at.isocalendar()[1]
-    target_week_number = target_date.isocalendar()[1]
-
-    weeks_passed = target_week_number - base_week_number
-    result = base_week_type if weeks_passed % 2 == 0 else (1 if base_week_type == 2 else 2)
-    
-    print(f"DEBUG: base_week_type={base_week_type}, weeks_passed={weeks_passed}, result={result}")  # Отладочная информация
-    return result
 
 async def save_teacher_message(pool, message_id: int, from_user_id: int, 
                               signature: str, message_text: str, message_type: str):
@@ -2921,20 +2908,11 @@ async def admin_show_chet(callback: types.CallbackQuery):
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
     
-    # ИСПРАВЛЕНИЕ: используем chat_id из callback, а не DEFAULT_CHAT_ID
-    current_chat_id = callback.message.chat.id
-    current = await get_current_week_type(pool, current_chat_id)
+    chat_id = callback.message.chat.id
+    current = await get_current_week_type(pool, chat_id)
     current_str = "нечетная (1)" if current == 1 else "четная (2)"
-    setting = await get_week_setting(pool, current_chat_id)
-    if not setting:
-        base_str = "не установлена (бот использует календарь)"
-        set_at_str = "—"
-    else:
-        base_week_type, set_at = setting
-        base_str = "нечетная (1)" if base_week_type == 1 else "четная (2)"
-        set_at_str = set_at.isoformat()
-
-    msg = f"Текущая четность (отталкиваясь от установки): {current_str}\n\nБазовая (сохранённая в week_setting): {base_str}\nДата установки (Омск): {set_at_str}"
+    
+    msg = f"Текущая четность недели: {current_str}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
@@ -3044,16 +3022,16 @@ async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("set_week_"))
-async def set_week_type_handler(callback: types.CallbackQuery, state: FSMContext):
+async def set_week_type_handler(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
     
     week_type = int(callback.data.split("_")[2])
+    chat_id = callback.message.chat.id
     
     try:
-        current_chat_id = callback.message.chat.id
-        await set_week_type(pool, current_chat_id, week_type)
+        await set_current_week_type(pool, chat_id, week_type)
         week_name = "нечетная" if week_type == 1 else "четная"
         
         await callback.message.edit_text(
@@ -3069,7 +3047,6 @@ async def set_week_type_handler(callback: types.CallbackQuery, state: FSMContext
             reply_markup=admin_menu()
         )
     
-    await state.clear()
     await callback.answer()
 
 @dp.message(SetChetState.week_type)
@@ -3093,7 +3070,6 @@ async def send_today_rasp():
         try:
             now = datetime.datetime.now(TZ)
             hour = now.hour
-            day = now.isoweekday()
             
             # Определяем день для публикации
             if hour >= 18:
@@ -3101,34 +3077,30 @@ async def send_today_rasp():
                 day_to_post = target_date.isoweekday()
                 day_name = "завтра"
                 
-                if day_to_post == 7:
+                if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
                     day_to_post = 1
                     day_name = "послезавтра (Понедельник)"
             else:
                 target_date = now.date()
-                day_to_post = day
+                day_to_post = now.isoweekday()
                 day_name = "сегодня"
                 
-                if day_to_post == 7:
+                if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
                     day_to_post = 1
                     day_name = "завтра (Понедельник)"
             
-                # Получаем тип недели для целевой даты и конкретного чата
-                week_type = await get_current_week_type(pool, chat_id, target_date)
+            # Просто получаем текущую четность из базы
+            week_type = await get_current_week_type(pool, chat_id)
             
-            # Получаем расписание для конкретного чата
+            # Получаем расписание
             text = await get_rasp_formatted(day_to_post, week_type, chat_id)
             
             # Формируем сообщение
             day_names = {
-                1: "Понедельник",
-                2: "Вторник", 
-                3: "Среда",
-                4: "Четверг",
-                5: "Пятница",
-                6: "Суббота"
+                1: "Понедельник", 2: "Вторник", 3: "Среда",
+                4: "Четверг", 5: "Пятница", 6: "Суббота"
             }
             
             week_name = "нечетная" if week_type == 1 else "четная"
@@ -3145,7 +3117,7 @@ async def send_today_rasp():
             await bot.send_message(chat_id, msg)
             
         except Exception as e:
-            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")   
+            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")  
 
 async def main():
     global pool
