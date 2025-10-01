@@ -530,6 +530,8 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     if target_date is None:
         target_date = datetime.datetime.now(TZ).date()
 
+    print(f"DEBUG: chat_id={chat_id}, target_date={target_date}, setting={setting}")  # Отладочная информация
+
     if not setting:
         week_number = target_date.isocalendar()[1]
         return 1 if week_number % 2 != 0 else 2
@@ -542,10 +544,10 @@ async def get_current_week_type(pool, chat_id: int, target_date: datetime.date |
     target_week_number = target_date.isocalendar()[1]
 
     weeks_passed = target_week_number - base_week_number
-    if weeks_passed % 2 == 0:
-        return base_week_type
-    else:
-        return 1 if base_week_type == 2 else 2
+    result = base_week_type if weeks_passed % 2 == 0 else (1 if base_week_type == 2 else 2)
+    
+    print(f"DEBUG: base_week_type={base_week_type}, weeks_passed={weeks_passed}, result={result}")  # Отладочная информация
+    return result
 
 async def save_teacher_message(pool, message_id: int, from_user_id: int, 
                               signature: str, message_text: str, message_type: str):
