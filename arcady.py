@@ -1848,10 +1848,6 @@ async def process_confirm_delete_homework(callback: types.CallbackQuery):
     
     await callback.answer()
 
-
-
-    
-
 @dp.callback_query(F.data == "today_rasp")
 async def today_rasp_handler(callback: types.CallbackQuery):
     # Проверяем, что запрос из разрешенного чата
@@ -1873,11 +1869,11 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     else:
         day_name = "сегодня"
     
-    # ИСПРАВЛЕНИЕ: используем новую функцию get_current_week_type
+    # Получаем четность недели
     week_type = await get_current_week_type(pool, chat_id)
     
-    # Получаем расписание для конкретного чата
-    text = await get_rasp_formatted(day_to_show, week_type, chat_id)
+    # Получаем расписание с информацией о домашних заданиях на target_date
+    text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
     
     # Формируем сообщение
     day_names = {
@@ -3161,10 +3157,12 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     if include_week_info:
         # Используем chat_id из параметра или из сообщения
         target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
-        # ИСПРАВЛЕНИЕ: используем новую функцию get_current_week_type
-        current_week = await get_current_week_type(pool, target_chat_id)
-        week_name = "Нечетная" if current_week == 1 else "Четная"
-        week_info = f"\n\n📅 Сейчас неделя: {week_name}"
+        try:
+            current_week = await get_current_week_type(pool, target_chat_id)
+            week_name = "Нечетная" if current_week == 1 else "Четная"
+            week_info = f"\n\n📅 Сейчас неделя: {week_name}"
+        except Exception as e:
+            week_info = f"\n\n📅 Информация о неделе временно недоступна"
     
     nickname = await get_nickname(pool, user.id)
     greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
@@ -3186,7 +3184,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
         # Если не указан chat_id, отправляем пользователю в ЛС
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
 
-async def get_rasp_formatted(day, week_type, chat_id: int = None):
+async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: datetime.date = None):
     """Получаем расписание для конкретного чата с информацией о домашних заданиях"""
     # Если chat_id не указан, используем первый из разрешенных
     if chat_id is None:
@@ -3214,43 +3212,46 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None):
             max_pair = pair_num
     
     if max_pair == 0:
-        return "Расписание пустое."
-    
-    for i in range(1, max_pair + 1):
-        if i in pairs_dict:
-            row = pairs_dict[i]
-            cabinet = row[1]
-            subject_name = row[2]
-            
-            if subject_name == "Свободно":
-                msg_lines.append(f"{i}. Свободно")
-            else:
-                import re
-                clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+        result = "Расписание пустое."
+    else:
+        for i in range(1, max_pair + 1):
+            if i in pairs_dict:
+                row = pairs_dict[i]
+                cabinet = row[1]
+                subject_name = row[2]
                 
-                if cabinet and cabinet != "Не указан":
-                    msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
+                if subject_name == "Свободно":
+                    msg_lines.append(f"{i}. Свободно")
                 else:
-                    cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
-                    if cabinet_match:
-                        extracted_cabinet = cabinet_match.group(2)
-                        msg_lines.append(f"{i}. {extracted_cabinet} {clean_subject_name}")
+                    import re
+                    clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                    
+                    if cabinet and cabinet != "Не указан":
+                        msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
                     else:
-                        msg_lines.append(f"{i}. {clean_subject_name}")
-        else:
-            msg_lines.append(f"{i}. Свободно")
+                        cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+                        if cabinet_match:
+                            extracted_cabinet = cabinet_match.group(2)
+                            msg_lines.append(f"{i}. {extracted_cabinet} {clean_subject_name}")
+                        else:
+                            msg_lines.append(f"{i}. {clean_subject_name}")
+            else:
+                msg_lines.append(f"{i}. Свободно")
+        
+        result = "\n".join(msg_lines)
     
-    result = "\n".join(msg_lines)
+    # Добавляем информацию о домашних заданиях на целевую дату
+    if target_date is None:
+        target_date = datetime.datetime.now(TZ).date()
     
-    # Добавляем информацию о домашних заданиях на сегодня
-    today = datetime.datetime.now(TZ).date()
-    today_str = today.strftime("%Y-%m-%d")
-    has_hw_today = await has_homework_for_date(pool, today_str)
+    target_date_str = target_date.strftime("%Y-%m-%d")
+    has_hw = await has_homework_for_date(pool, target_date_str)
     
-    if has_hw_today:
+    if has_hw:
         result += "\n\n📚 Есть заданное домашнее задание"
     
     return result
+
 
 def _job_id_for_time(hour: int, minute: int) -> str:
     return f"publish_{hour:02d}_{minute:02d}"
@@ -3372,11 +3373,11 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
         else:
             day_name = "завтра"
     
-    # ИСПРАВЛЕНИЕ: используем новую функцию get_current_week_type
+    # Получаем четность недели
     week_type = await get_current_week_type(pool, chat_id)
     
-    # Получаем расписание
-    text = await get_rasp_formatted(day_to_show, week_type, chat_id)
+    # Получаем расписание с информацией о домашних заданиях на target_date
+    text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
     
     # Формируем сообщение
     day_names = {
@@ -3474,15 +3475,37 @@ async def on_rasp_show(callback: types.CallbackQuery):
     day = int(parts[2])
     week_type = int(parts[3])
     
-    # ИСПРАВЛЕНИЕ: используем chat_id из callback
+    # Определяем дату для проверки домашних заданий
+    # Для обычного расписания показываем домашние задания на ближайшую дату с этим днем недели
+    today = datetime.datetime.now(TZ).date()
+    days_ahead = day - today.isoweekday()
+    if days_ahead <= 0:
+        days_ahead += 7
+    target_date = today + datetime.timedelta(days=days_ahead)
+    
+    # Получаем расписание с информацией о домашних заданиях
     chat_id = callback.message.chat.id
-    text = await get_rasp_formatted(day, week_type, chat_id)
+    text = await get_rasp_formatted(day, week_type, chat_id, target_date)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data=f"rasp_day_{day}")]
     ])
     
-    await callback.message.edit_text(f"📌 Расписание:\n{text}", reply_markup=kb)
+    day_names = {
+        1: "Понедельник",
+        2: "Вторник", 
+        3: "Среда",
+        4: "Четверг",
+        5: "Пятница",
+        6: "Суббота"
+    }
+    
+    week_name = "нечетная" if week_type == 1 else "четная"
+    
+    await callback.message.edit_text(
+        f"📅 {day_names[day]} | Неделя: {week_name}\n\n{text}", 
+        reply_markup=kb
+    )
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("zvonki_"))
@@ -3525,18 +3548,58 @@ async def admin_show_chet(callback: types.CallbackQuery):
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
     
-    chat_id = callback.message.chat.id
-    current = await get_current_week_type(pool, chat_id)
-    current_str = "нечетная (1)" if current == 1 else "четная (2)"
+    # Показываем четность для всех чатов
+    status_text = "📊 Текущая четность недели по чатам:\n\n"
     
-    msg = f"Текущая четность недели: {current_str}"
+    for chat_id in ALLOWED_CHAT_IDS:
+        try:
+            current = await get_current_week_type(pool, chat_id)
+            current_str = "нечетная (1)" if current == 1 else "четная (2)"
+            status_text += f"• Чат {chat_id}: {current_str}\n"
+        except Exception as e:
+            status_text += f"• Чат {chat_id}: ошибка получения\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Синхронизировать четность", callback_data="admin_sync_week")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
     ])
     
-    await greet_and_send(callback.from_user, msg, callback=callback, markup=kb)
+    await callback.message.edit_text(status_text, reply_markup=kb)
     await callback.answer()
+
+@dp.callback_query(F.data == "admin_sync_week")
+async def admin_sync_week_handler(callback: types.CallbackQuery):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+    
+    try:
+        # Берем четность из первого чата как основную
+        main_chat_id = ALLOWED_CHAT_IDS[0]
+        main_week_type = await get_current_week_type(pool, main_chat_id)
+        
+        # Устанавливаем такую же четность для всех чатов
+        for chat_id in ALLOWED_CHAT_IDS:
+            await set_current_week_type(pool, chat_id, main_week_type)
+        
+        week_name = "нечетная" if main_week_type == 1 else "четная"
+        
+        await callback.message.edit_text(
+            f"✅ Четность синхронизирована!\n\n"
+            f"Все чаты установлены на: {week_name} неделя\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка синхронизации: {e}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    
+    await callback.answer()
+
 
 @dp.callback_query(F.data == "admin_list_publish_times")
 async def admin_list_publish_times(callback: types.CallbackQuery):
