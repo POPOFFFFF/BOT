@@ -2823,6 +2823,16 @@ async def send_today_rasp():
     await bot.send_message(DEFAULT_CHAT_ID, msg)   
 
 
+@dp.message(Command("chatid"))
+async def cmd_chatid(message: types.Message):
+    chat_id = message.chat.id
+    chat_type = message.chat.type
+    chat_title = getattr(message.chat, 'title', 'ЛС')
+    
+    await message.answer(
+        f"🆔 Chat ID: `{chat_id}`\n"
+    )
+
 async def main():
     global pool
     pool = await get_pool()
