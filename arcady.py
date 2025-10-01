@@ -701,12 +701,17 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
     # Активируем режим пересылки на 180 секунд
     await state.set_state(SendMessageState.active)
     
-    # Сообщаем о начале режима
+    # Сообщаем о начале режима с кнопкой отмены
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏹️ Закончить пересылку", callback_data="stop_forward_mode")]
+    ])
+    
     await callback.message.edit_text(
         f"✅ Режим пересылки активирован на 180 секунд!\n"
         f"📝 Подпись: {signature}\n"
         f"⏰ Время до: {(datetime.datetime.now(TZ) + datetime.timedelta(seconds=180)).strftime('%H:%M:%S')}\n\n"
-        f"Все ваши сообщения будут пересылаться в беседу. Режим автоматически отключится через 3 минуты."
+        f"Все ваши сообщения будут пересылаться в беседу. Режим автоматически отключится через 3 минуты.",
+        reply_markup=kb
     )
     
     # Запускаем таймер отключения
@@ -714,17 +719,17 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
     
     await callback.answer()
 
-async def disable_forward_mode_after_timeout(user_id: int, state: FSMContext):
-    await asyncio.sleep(180)  # 3 минуты
-    
-    # Проверяем, все еще ли пользователь в этом состоянии
+# Обработчик кнопки остановки пересылки
+@dp.callback_query(F.data == "stop_forward_mode")
+async def stop_forward_mode_handler(callback: types.CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
     if current_state == SendMessageState.active.state:
         await state.clear()
-        try:
-            await bot.send_message(user_id, "⏰ Режим пересылки автоматически отключен (прошло 180 секунд)")
-        except:
-            pass  # Пользователь заблокировал бота или чат закрыт
+        await callback.message.edit_text("⏹️ Режим пересылки досрочно завершен.")
+    else:
+        await callback.answer("❌ Режим пересылки не активен", show_alert=True)
+    await callback.answer()
+
 @dp.message(SendMessageState.active)
 async def process_forward_message(message: types.Message, state: FSMContext):
     # Фильтрация сообщений, начинающихся с /
@@ -980,13 +985,18 @@ async def admin_add_special_user_start(callback: types.CallbackQuery, state: FSM
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+
     await callback.message.edit_text(
         "👤 Добавление спец-пользователя\n\n"
-        "Введите Telegram ID пользователя (только цифры):"
+        "Введите Telegram ID пользователя (только цифры):",
+        reply_markup=kb
     )
     await state.set_state(AddSpecialUserState.user_id)
     await callback.answer()
-
+    
 @dp.message(AddSpecialUserState.user_id)
 async def process_special_user_id(message: types.Message, state: FSMContext):
     try:
@@ -1542,22 +1552,28 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
         async with conn.cursor() as cur:
             await cur.execute("SELECT name FROM subjects")
             subjects = await cur.fetchall()
-    buttons = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")] 
-            for subj in subjects
-        ]
-    )
-    await callback.message.edit_text("Выберите предмет:", reply_markup=buttons)
+    
+    buttons = []
+    for subj in subjects:
+        buttons.append([InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")])
+    
+    # Добавляем кнопку отмены
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await callback.message.edit_text("Выберите предмет:", reply_markup=kb)
     await state.set_state(AddLessonState.subject)
 
+# Добавляем кнопки отмены на каждом шаге
 @dp.callback_query(F.data.startswith("choose_subject_"))
 async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
     subject = callback.data[len("choose_subject_"):]
     await state.update_data(subject=subject)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")]
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
     await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
     await state.set_state(AddLessonState.week_type)
@@ -1566,9 +1582,16 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
 async def choose_week(callback: types.CallbackQuery, state: FSMContext):
     week_type = int(callback.data[-1])
     await state.update_data(week_type=week_type)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")] for i, day in enumerate(DAYS)]
-    )
+    
+    buttons = []
+    for i, day in enumerate(DAYS):
+        buttons.append([InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")])
+    
+    # Добавляем кнопку отмены
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
     await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
     await state.set_state(AddLessonState.day)
 
@@ -1576,9 +1599,16 @@ async def choose_week(callback: types.CallbackQuery, state: FSMContext):
 async def choose_day(callback: types.CallbackQuery, state: FSMContext):
     day = int(callback.data[len("day_"):])
     await state.update_data(day=day)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")] for i in range(1, 7)]
-    )
+    
+    buttons = []
+    for i in range(1, 7):
+        buttons.append([InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")])
+    
+    # Добавляем кнопку отмены
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
     await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
     await state.set_state(AddLessonState.pair_number)
 
@@ -1589,12 +1619,18 @@ async def admin_add_subject_start(callback: types.CallbackQuery, state: FSMConte
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+
     await callback.message.edit_text(
         "📚 Добавление нового предмета\n\n"
-        "Введите название предмета:"
+        "Введите название предмета:",
+        reply_markup=kb
     )
     await state.set_state(AddSubjectState.name)
     await callback.answer()
+
 
 @dp.message(AddSubjectState.name)
 async def process_subject_name(message: types.Message, state: FSMContext):
@@ -2696,6 +2732,7 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
     
     await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
     await callback.answer()
+# В состояние добавления времени публикации
 @dp.callback_query(F.data == "admin_set_publish_time")
 async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -2703,7 +2740,7 @@ async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContex
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
     
     await greet_and_send(
@@ -2754,14 +2791,55 @@ async def set_publish_time_handler(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при сохранении: {e}")
     finally:
         await state.clear()
+
 @dp.callback_query(F.data == "admin_setchet")
 async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
-        await callback.answer("⛔ Только в личных сообщениях админам", show_alert=True)
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-    await greet_and_send(callback.from_user, "Введите четность (1 - нечетная, 2 - четная):", callback=callback)
-    await state.set_state(SetChetState.week_type)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔴 Нечетная неделя", callback_data="set_week_1")],
+        [InlineKeyboardButton(text="🔵 Четная неделя", callback_data="set_week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    await greet_and_send(
+        callback.from_user, 
+        "Выберите тип недели для установки:", 
+        callback=callback, 
+        markup=kb
+    )
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("set_week_"))
+async def set_week_type_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+    
+    week_type = int(callback.data.split("_")[2])
+    
+    try:
+        await set_week_type(pool, DEFAULT_CHAT_ID, week_type)
+        week_name = "нечетная" if week_type == 1 else "четная"
+        
+        await callback.message.edit_text(
+            f"✅ Четность установлена: {week_name} неделя\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при установке четности: {e}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    
+    await state.clear()
+    await callback.answer()
+
 @dp.message(SetChetState.week_type)
 async def setchet_handler(message: types.Message, state: FSMContext):
     try:
@@ -2836,7 +2914,7 @@ async def send_today_rasp():
             
         except Exception as e:
             print(f"Ошибка отправки расписания в чат {chat_id}: {e}")   
-            
+
 @dp.message(Command("chats"))
 async def cmd_chats(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
