@@ -2098,23 +2098,18 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         else:
             # Если предмет без rK - пытаемся извлечь кабинет из названия
             import re
-            # Ищем кабинет в конце названия (учитываем точки, слеши, буквы)
             cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
             
             if cabinet_match:
-                # Если нашли кабинет в названии - извлекаем его
                 cabinet = cabinet_match.group(2)
-                # Очищаем название предмета от кабинета только для отображения
                 clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
             else:
-                # Если кабинета в названии нет
                 cabinet = "Не указан"
                 clean_subject_name = subject_name
             
-            # Сохраняем кабинет
             await state.update_data(cabinet=cabinet)
             
-            # Добавляем урок (НЕ обновляем название в базе!)
+            # ИСПРАВЛЕНИЕ: добавляем урок во ВСЕ разрешенные чаты
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     # Получаем ID предмета
@@ -2127,17 +2122,17 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                     
                     subject_id = subject_result[0]
                     
-                    # Добавляем урок в расписание
-                    await cur.execute("""
-                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number, subject_id, cabinet))
+                    # Добавляем урок в расписание для ВСЕХ чатов
+                    for chat_id in ALLOWED_CHAT_IDS:
+                        await cur.execute("""
+                            INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet))
             
-            # Для отображения используем очищенное название
             display_name = clean_subject_name
             
             await callback.message.edit_text(
-                f"✅ Урок '{display_name}' добавлен!\n"
+                f"✅ Урок '{display_name}' добавлен во все чаты!\n"
                 f"📅 День: {DAYS[data['day']-1]}\n"
                 f"🔢 Пара: {pair_number}\n"
                 f"🏫 Кабинет: {cabinet}\n\n"
@@ -2236,34 +2231,40 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
     
-    # Добавляем проверку на команду отмены
     if cabinet.lower() in ['отмена', 'cancel', '❌ отмена']:
         await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         return
     
+    # ИСПРАВЛЕНИЕ: устанавливаем кабинет для ВСЕХ чатов
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("""
-                SELECT id FROM rasp_detailed
-                WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
-            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"]))
-            row = await cur.fetchone()
-            if row:
+            for chat_id in ALLOWED_CHAT_IDS:
                 await cur.execute("""
-                    UPDATE rasp_detailed
-                    SET cabinet=%s
-                    WHERE id=%s
-                """, (cabinet, row[0]))
-            else:
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, cabinet)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], cabinet))
-    await greet_and_send(message.from_user,
-                         f"✅ Кабинет установлен: день {DAYS[data['day']-1]}, пара {data['pair_number']}, кабинет {cabinet}",
-                         message=message)
-    await greet_and_send(message.from_user, "⚙ Админ-панель:", message=message, markup=admin_menu())
+                    SELECT id FROM rasp_detailed
+                    WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
+                """, (chat_id, data["day"], data["week_type"], data["pair_number"]))
+                row = await cur.fetchone()
+                if row:
+                    await cur.execute("""
+                        UPDATE rasp_detailed
+                        SET cabinet=%s
+                        WHERE id=%s
+                    """, (cabinet, row[0]))
+                else:
+                    await cur.execute("""
+                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, cabinet)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (chat_id, data["day"], data["week_type"], data["pair_number"], cabinet))
+    
+    await message.answer(
+        f"✅ Кабинет установлен для всех чатов!\n"
+        f"📅 День: {DAYS[data['day']-1]}\n"
+        f"🔢 Пара: {data['pair_number']}\n"
+        f"🏫 Кабинет: {cabinet}\n\n"
+        f"⚙ Админ-панель:",
+        reply_markup=admin_menu()
+    )
     await state.clear()
 
 @dp.callback_query(F.data == "admin_clear_pair")
@@ -2313,34 +2314,70 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("clr_pair_"):])
     data = await state.get_data()
 
+    # ИСПРАВЛЕНИЕ: очищаем пару для ВСЕХ чатов
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # проверяем, есть ли запись для этой пары
-            await cur.execute("""
-                SELECT id FROM rasp_detailed
-                WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
-            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number))
-            row = await cur.fetchone()
-
-            if row:
-                # обновляем предмет на NULL и кабинет на NULL → в выводе будет "Свободно"
+            for chat_id in ALLOWED_CHAT_IDS:
+                # проверяем, есть ли запись для этой пары
                 await cur.execute("""
-                    UPDATE rasp_detailed
-                    SET subject_id=NULL, cabinet=NULL
-                    WHERE id=%s
-                """, (row[0],))
-            else:
-                # создаём пустую запись, чтобы считалось "Свободно"
-                await cur.execute("""
-                    INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                    VALUES (%s, %s, %s, %s, NULL, NULL)
-                """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], pair_number))
+                    SELECT id FROM rasp_detailed
+                    WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
+                """, (chat_id, data["day"], data["week_type"], pair_number))
+                row = await cur.fetchone()
 
-    await greet_and_send(callback.from_user,
-                         f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена. Теперь там 'Свободно'.",
-                         callback=callback)
+                if row:
+                    # обновляем предмет на NULL и кабинет на NULL
+                    await cur.execute("""
+                        UPDATE rasp_detailed
+                        SET subject_id=NULL, cabinet=NULL
+                        WHERE id=%s
+                    """, (row[0],))
+                else:
+                    # создаём пустую запись
+                    await cur.execute("""
+                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                        VALUES (%s, %s, %s, %s, NULL, NULL)
+                    """, (chat_id, data["day"], data["week_type"], pair_number))
+
+    await callback.message.edit_text(
+        f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
+        reply_markup=admin_menu()
+    )
     await state.clear()
     await callback.answer()
+
+@dp.message(Command("sync_rasp"))
+async def sync_rasp_all_chats(message: types.Message):
+    """Синхронизирует расписание между всеми чатами"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        main_chat_id = ALLOWED_CHAT_IDS[0]
+        synced_count = 0
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Копируем расписание из основного чата во все остальные
+                for chat_id in ALLOWED_CHAT_IDS[1:]:  # Все кроме первого
+                    # Очищаем расписание в целевом чате
+                    await cur.execute("DELETE FROM rasp_detailed WHERE chat_id=%s", (chat_id,))
+                    
+                    # Копируем из основного чата
+                    await cur.execute("""
+                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                        SELECT %s, day, week_type, pair_number, subject_id, cabinet 
+                        FROM rasp_detailed 
+                        WHERE chat_id=%s
+                    """, (chat_id, main_chat_id))
+                    
+                    synced_count += 1
+        
+        await message.answer(f"✅ Расписание синхронизировано! Обновлено {synced_count} чатов.")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка синхронизации расписания: {e}")
+
 
 @dp.callback_query(F.data == "admin_delete_teacher_message")
 async def admin_delete_teacher_message_start(callback: types.CallbackQuery, state: FSMContext):
