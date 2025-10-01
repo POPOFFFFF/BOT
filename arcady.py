@@ -1277,7 +1277,6 @@ async def today_rasp_handler(callback: types.CallbackQuery):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
     
-    # Используем chat_id из callback
     chat_id = callback.message.chat.id
     
     now = datetime.datetime.now(TZ)
@@ -1292,8 +1291,8 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     else:
         day_name = "сегодня"
     
-    # Получаем тип недели для конкретного чата
-    week_type = await get_current_week_type(pool, chat_id, target_date)
+    # ИСПРАВЛЕНИЕ: используем новую функцию get_current_week_type
+    week_type = await get_current_week_type(pool, chat_id)
     
     # Получаем расписание для конкретного чата
     text = await get_rasp_formatted(day_to_show, week_type, chat_id)
@@ -1324,7 +1323,7 @@ async def today_rasp_handler(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     
-    await greet_and_send(callback.from_user, message, callback=callback, markup=kb)
+    await callback.message.edit_text(message, reply_markup=kb)
     await callback.answer()
 
 
@@ -2542,14 +2541,11 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     week_info = ""
     if include_week_info:
         # Используем chat_id из параметра или из сообщения
-        # Добавляем информацию о неделе если нужно
-        week_info = ""
-        if include_week_info:
-            # Используем chat_id из параметра или из сообщения
-            target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
-            current_week = await get_current_week_type(pool, target_chat_id)
-            week_name = "Нечетная" if current_week == 1 else "Четная"
-            week_info = f"\n\n📅 Сейчас неделя: {week_name}"
+        target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
+        # ИСПРАВЛЕНИЕ: используем новую функцию get_current_week_type
+        current_week = await get_current_week_type(pool, target_chat_id)
+        week_name = "Нечетная" if current_week == 1 else "Четная"
+        week_info = f"\n\n📅 Сейчас неделя: {week_name}"
     
     nickname = await get_nickname(pool, user.id)
     greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
@@ -2716,7 +2712,6 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "tomorrow_rasp")
 async def tomorrow_rasp_handler(callback: types.CallbackQuery):
-
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
     
@@ -2724,11 +2719,11 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
 
+    chat_id = callback.message.chat.id
     now = datetime.datetime.now(TZ)
     hour = now.hour
-    day = now.isoweekday()
     
-    # Определяем день для показа (логика как в автопостинге)
+    # Определяем день для показа
     if hour >= 18:
         target_date = now.date() + datetime.timedelta(days=1)
         day_to_show = target_date.isoweekday()
@@ -2739,29 +2734,20 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
         else:
             day_name = "завтра"
     else:
-        target_date = now.date()
-        day_to_show = day
-        day_name = "сегодня"
-        if day_to_show == 7:  # Воскресенье
+        target_date = now.date() + datetime.timedelta(days=1)
+        day_to_show = target_date.isoweekday()
+        if day_to_show == 7:  # Если завтра воскресенье
             day_to_show = 1
             target_date += datetime.timedelta(days=1)
-            day_name = "завтра (Понедельник)"
+            day_name = "послезавтра (Понедельник)"
         else:
-            # Если сегодня не воскресенье и время до 18:00, показываем завтра
-            target_date += datetime.timedelta(days=1)
-            day_to_show = target_date.isoweekday()
-            if day_to_show == 7:  # Если завтра воскресенье
-                day_to_show = 1
-                target_date += datetime.timedelta(days=1)
-                day_name = "послезавтра (Понедельник)"
-            else:
-                day_name = "завтра"
+            day_name = "завтра"
     
-    # Получаем тип недели
-    week_type = await get_current_week_type(pool, DEFAULT_CHAT_ID, target_date)
+    # ИСПРАВЛЕНИЕ: используем новую функцию get_current_week_type
+    week_type = await get_current_week_type(pool, chat_id)
     
     # Получаем расписание
-    text = await get_rasp_formatted(day_to_show, week_type)
+    text = await get_rasp_formatted(day_to_show, week_type, chat_id)
     
     # Формируем сообщение
     day_names = {
@@ -2789,7 +2775,7 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     
-    await greet_and_send(callback.from_user, message, callback=callback, markup=kb)
+    await callback.message.edit_text(message, reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("rasp_day_"))
@@ -2848,7 +2834,6 @@ async def cmd_anekdot(message: types.Message):
                 await message.answer("❌ В базе пока нет анекдотов.")
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
-
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
     
@@ -2859,13 +2844,16 @@ async def on_rasp_show(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     day = int(parts[2])
     week_type = int(parts[3])
-    text = await get_rasp_formatted(day, week_type)
+    
+    # ИСПРАВЛЕНИЕ: используем chat_id из callback
+    chat_id = callback.message.chat.id
+    text = await get_rasp_formatted(day, week_type, chat_id)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data=f"rasp_day_{day}")]
     ])
     
-    await greet_and_send(callback.from_user, f"📌 Расписание:\n{text}", callback=callback, markup=kb, include_joke=True)
+    await callback.message.edit_text(f"📌 Расписание:\n{text}", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("zvonki_"))
