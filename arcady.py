@@ -637,29 +637,34 @@ def format_duration(seconds: int) -> str:
             return f"{days} дней"
 
 
-async def get_current_week_type(pool, chat_id: int) -> int:
-    """Просто получаем текущую четность из базы"""
+async def get_current_week_type(pool, chat_id: int = None) -> int:
+    """Получаем текущую четность (общую для всех чатов)"""
+    # Используем фиксированный chat_id для хранения общей четности
+    COMMON_CHAT_ID = 0  # Специальный ID для общей четности
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT week_type FROM current_week_type WHERE chat_id=%s", (chat_id,))
+            await cur.execute("SELECT week_type FROM current_week_type WHERE chat_id=%s", (COMMON_CHAT_ID,))
             row = await cur.fetchone()
             if row:
                 return row[0]
             else:
                 # Если запись не существует, создаем по умолчанию нечетную неделю
-                await cur.execute("INSERT INTO current_week_type (chat_id, week_type) VALUES (%s, %s)", (chat_id, 1))
+                await cur.execute("INSERT INTO current_week_type (chat_id, week_type) VALUES (%s, %s)", (COMMON_CHAT_ID, 1))
                 return 1
 
-async def set_current_week_type(pool, chat_id: int, week_type: int):
-    """Устанавливаем четность недели"""
+async def set_current_week_type(pool, chat_id: int = None, week_type: int = None):
+    """Устанавливаем четность недели (общую для всех чатов)"""
+    # Используем фиксированный chat_id для хранения общей четности
+    COMMON_CHAT_ID = 0  # Специальный ID для общей четности
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
                 INSERT INTO current_week_type (chat_id, week_type) 
                 VALUES (%s, %s)
                 ON DUPLICATE KEY UPDATE week_type=%s, updated_at=CURRENT_TIMESTAMP
-            """, (chat_id, week_type, week_type))
-
+            """, (COMMON_CHAT_ID, week_type, week_type))
 
 async def save_teacher_message(pool, message_id: int, from_user_id: int, 
                               signature: str, message_text: str, message_type: str):
@@ -1762,7 +1767,7 @@ async def process_edit_homework_subject_skip(message: types.Message, state: FSMC
             "Выберите новый предмет или введите /skip чтобы оставить текущий:",
             reply_markup=kb
         )
-        
+
 
 @dp.message(EditHomeworkState.task_text)
 async def process_edit_homework_task_text(message: types.Message, state: FSMContext):
@@ -3229,13 +3234,13 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     # Добавляем информацию о неделе если нужно
     week_info = ""
     if include_week_info:
-        # Используем chat_id из параметра или из сообщения
-        target_chat_id = chat_id or (message.chat.id if message else (callback.message.chat.id if callback else DEFAULT_CHAT_ID))
         try:
-            current_week = await get_current_week_type(pool, target_chat_id)
+            # Используем общую четность для всех
+            current_week = await get_current_week_type(pool)
             week_name = "Нечетная" if current_week == 1 else "Четная"
             week_info = f"\n\n📅 Сейчас неделя: {week_name}"
         except Exception as e:
+            print(f"Ошибка получения четности: {e}")
             week_info = f"\n\n📅 Информация о неделе временно недоступна"
     
     nickname = await get_nickname(pool, user.id)
@@ -3257,6 +3262,8 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     else:
         # Если не указан chat_id, отправляем пользователю в ЛС
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
+
+
 
 async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: datetime.date = None):
     """Получаем расписание для конкретного чата с информацией о домашних заданиях"""
@@ -3347,6 +3354,7 @@ async def reschedule_publish_jobs(pool):
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
         except Exception:
             pass
+            
 @dp.message(Command("аркадий", "акрадый", "акрадий", "аркаша", "котов", "arkadiy", "arkadiy@arcadiyis07_bot"))
 async def trigger_handler(message: types.Message):
     # Разрешаем команду в ЛС и разрешенных чатах
@@ -3365,7 +3373,7 @@ async def trigger_handler(message: types.Message):
         signature = await get_special_user_signature(pool, message.from_user.id)
         is_special_user = signature is not None
 
-    # ИСПРАВЛЕНИЕ: используем chat_id текущего чата, а не DEFAULT_CHAT_ID
+    # В ЛС используем ID ЛС чата для получения четности, в беседах - ID беседы
     current_chat_id = message.chat.id
 
     await greet_and_send(
@@ -3374,7 +3382,7 @@ async def trigger_handler(message: types.Message):
         message=message,
         markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private),
         include_week_info=True,
-        chat_id=current_chat_id  # Добавляем правильный chat_id
+        chat_id=current_chat_id  # Передаем правильный chat_id для получения четности
     )
 
 @dp.callback_query(F.data.startswith("menu_"))
@@ -3622,19 +3630,13 @@ async def admin_show_chet(callback: types.CallbackQuery):
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
     
-    # Показываем четность для всех чатов
-    status_text = "📊 Текущая четность недели по чатам:\n\n"
+    # Показываем общую четность
+    current = await get_current_week_type(pool)
+    current_str = "нечетная (1)" if current == 1 else "четная (2)"
     
-    for chat_id in ALLOWED_CHAT_IDS:
-        try:
-            current = await get_current_week_type(pool, chat_id)
-            current_str = "нечетная (1)" if current == 1 else "четная (2)"
-            status_text += f"• Чат {chat_id}: {current_str}\n"
-        except Exception as e:
-            status_text += f"• Чат {chat_id}: ошибка получения\n"
+    status_text = f"📊 Текущая четность недели (общая для всех чатов):\n\n{current_str}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Синхронизировать четность", callback_data="admin_sync_week")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
     ])
     
@@ -3648,19 +3650,27 @@ async def admin_sync_week_handler(callback: types.CallbackQuery):
         return
     
     try:
-        # Берем четность из первого чата как основную
+        # Берем четность из первого группового чата как основную
         main_chat_id = ALLOWED_CHAT_IDS[0]
         main_week_type = await get_current_week_type(pool, main_chat_id)
         
-        # Устанавливаем такую же четность для всех чатов
+        # Устанавливаем такую же четность для всех групповых чатов
+        synced_chats = []
         for chat_id in ALLOWED_CHAT_IDS:
             await set_current_week_type(pool, chat_id, main_week_type)
+            synced_chats.append(chat_id)
+        
+        # Также устанавливаем для ЛС чата админа
+        admin_ls_chat_id = callback.message.chat.id
+        await set_current_week_type(pool, admin_ls_chat_id, main_week_type)
+        synced_chats.append(f"ЛС ({admin_ls_chat_id})")
         
         week_name = "нечетная" if main_week_type == 1 else "четная"
         
         await callback.message.edit_text(
             f"✅ Четность синхронизирована!\n\n"
-            f"Все чаты установлены на: {week_name} неделя\n\n"
+            f"Все чаты установлены на: {week_name} неделя\n"
+            f"Синхронизировано чатов: {len(synced_chats)}\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
@@ -3784,9 +3794,8 @@ async def set_week_type_handler(callback: types.CallbackQuery):
     week_type = int(callback.data.split("_")[2])
     
     try:
-        # ИСПРАВЛЕНИЕ: устанавливаем четность для ВСЕХ разрешенных чатов
-        for chat_id in ALLOWED_CHAT_IDS:
-            await set_current_week_type(pool, chat_id, week_type)
+        # Устанавливаем общую четность для всех
+        await set_current_week_type(pool, week_type=week_type)
         
         week_name = "нечетная" if week_type == 1 else "четная"
         
@@ -3862,11 +3871,11 @@ async def send_today_rasp():
                     day_to_post = 1
                     day_name = "завтра (Понедельник)"
             
-            # Получаем четность для КОНКРЕТНОГО чата
-            week_type = await get_current_week_type(pool, chat_id)
+            # Получаем общую четность
+            week_type = await get_current_week_type(pool)
             
-            # Получаем расписание для КОНКРЕТНОГО чата
-            text = await get_rasp_formatted(day_to_post, week_type, chat_id)
+            # Получаем расписание для конкретного чата
+            text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
             
             # Формируем сообщение
             day_names = {
