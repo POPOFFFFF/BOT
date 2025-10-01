@@ -2912,7 +2912,7 @@ async def zvonki_handler(callback: types.CallbackQuery):
             include_joke=True  
         )
     await callback.answer()
-    
+
 @dp.callback_query(F.data == "admin_show_chet")
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -3050,7 +3050,8 @@ async def set_week_type_handler(callback: types.CallbackQuery, state: FSMContext
     week_type = int(callback.data.split("_")[2])
     
     try:
-        await set_week_type(pool, DEFAULT_CHAT_ID, week_type)
+        current_chat_id = callback.message.chat.id
+        await set_week_type(pool, current_chat_id, week_type)
         week_name = "нечетная" if week_type == 1 else "четная"
         
         await callback.message.edit_text(
@@ -3112,8 +3113,8 @@ async def send_today_rasp():
                     day_to_post = 1
                     day_name = "завтра (Понедельник)"
             
-            # Получаем тип недели для целевой даты и конкретного чата
-            week_type = await get_current_week_type(pool, chat_id, target_date)
+                # Получаем тип недели для целевой даты и конкретного чата
+                week_type = await get_current_week_type(pool, chat_id, target_date)
             
             # Получаем расписание для конкретного чата
             text = await get_rasp_formatted(day_to_post, week_type, chat_id)
