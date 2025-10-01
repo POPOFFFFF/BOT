@@ -1832,7 +1832,11 @@ async def confirm_delete_subject(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_back")
 async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    # Разрешаем в ЛС и разрешенных чатах
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
 
@@ -1841,8 +1845,6 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     except Exception:
         pass
     
-    is_private = callback.message.chat.type == "private"
-    is_group_chat = callback.message.chat.type in ["group", "supergroup"]  # Добавляем проверку группового чата
     is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
     
     # Проверяем спец-пользователей через базу данных
@@ -1857,7 +1859,7 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
             callback.from_user, 
             "Выберите действие:", 
             chat_id=callback.message.chat.id, 
-            markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat)
+            markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private)
         )
     except Exception:
         try:
@@ -1865,14 +1867,14 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
                 callback.from_user, 
                 "Выберите действие:", 
                 callback=callback, 
-                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat)
+                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private)
             )
         except Exception:
             await greet_and_send(
                 callback.from_user, 
                 "Выберите действие:", 
                 chat_id=callback.message.chat.id, 
-                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat)
+                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private)
             )
 
     await callback.answer()
@@ -2356,6 +2358,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
     elif chat_id is not None:
         await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
     else:
+        # Если не указан chat_id, отправляем пользователю в ЛС
         await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
 
 async def get_rasp_formatted(day, week_type, chat_id: int = DEFAULT_CHAT_ID):
@@ -2434,17 +2437,16 @@ async def reschedule_publish_jobs(pool):
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
         except Exception:
             pass
-TRIGGERS = ["/аркадий", "/акрадый", "/акрадий", "/аркаша", "/котов", "/arkadiy@arcadiyis07_bot", "/arkadiy"]
-
-@dp.message(F.text.lower().in_(TRIGGERS))
+@dp.message(Command("аркадий", "акрадый", "акрадий", "аркаша", "котов", "arkadiy", "arkadiy@arcadiyis07_bot"))
 async def trigger_handler(message: types.Message):
-    # Проверяем, что сообщение из нужного чата
-    if not is_allowed_chat(message.chat.id):
+    # Разрешаем команду в ЛС и разрешенных чатах
+    is_private = message.chat.type == "private"
+    is_allowed_chat = message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await message.answer("⛔ Бот не работает в этом чате")
         return
     
-    is_private = message.chat.type == "private"
-    is_group_chat = message.chat.type in ["group", "supergroup"]
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
     
     # Проверяем спец-пользователей через базу данных
@@ -2457,15 +2459,20 @@ async def trigger_handler(message: types.Message):
         message.from_user,
         "Выберите действие:",
         message=message,
-        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=is_group_chat),
+        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private),
         include_week_info=True
     )
 
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    # Разрешаем в ЛС и разрешенных чатах
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
+        
     action = callback.data
     if action == "menu_rasp":
         kb = InlineKeyboardMarkup(
@@ -2491,33 +2498,15 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await greet_and_send(callback.from_user, "⚙ Админ-панель:", callback=callback, markup=admin_menu())
         await callback.answer()
     elif action == "menu_back":
-        try:
-            await state.clear()
-        except Exception:
-            pass
-        is_private = callback.message.chat.type == "private"
-        is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
-        
-        # Проверяем спец-пользователей через базу данных
-        is_special_user = False
-        if is_private:
-            signature = await get_special_user_signature(pool, callback.from_user.id)
-            is_special_user = signature is not None
-        
-        try:
-            await callback.message.delete()
-            await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin=is_admin, is_special_user=is_special_user))
-        except Exception:
-            try:
-                await greet_and_send(callback.from_user, "Выберите действие:", callback=callback, markup=main_menu(is_admin=is_admin, is_special_user=is_special_user))
-            except Exception:
-                await greet_and_send(callback.from_user, "Выберите действие:", chat_id=callback.message.chat.id, markup=main_menu(is_admin=is_admin, is_special_user=is_special_user))
-
-        await callback.answer()
+        await menu_back_handler(callback, state)
 
 @dp.callback_query(F.data == "tomorrow_rasp")
 async def tomorrow_rasp_handler(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
 
@@ -2591,9 +2580,14 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
+
     parts = callback.data.split("_")
     try:
         day = int(parts[-1])
@@ -2640,9 +2634,14 @@ async def cmd_anekdot(message: types.Message):
                 await message.answer("❌ В базе пока нет анекдотов.")
 @dp.callback_query(F.data.startswith("rasp_show_"))
 async def on_rasp_show(callback: types.CallbackQuery):
-    if callback.message.chat.id != DEFAULT_CHAT_ID:
+    
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
+
     parts = callback.data.split("_")
     day = int(parts[2])
     week_type = int(parts[3])
