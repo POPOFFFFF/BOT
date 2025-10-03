@@ -137,6 +137,42 @@ async def ensure_columns(pool):
             if not row:
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
 
+# Добавьте эту функцию после других функций работы с базой данных, например после ensure_columns:
+
+async def sync_rasp_to_all_chats(source_chat_id: int):
+    """Синхронизирует расписание из исходного чата во все остальные"""
+    try:
+        synced_count = 0
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Копируем расписание из исходного чата во все остальные
+                for chat_id in ALLOWED_CHAT_IDS:
+                    if chat_id == source_chat_id:
+                        continue  # Пропускаем исходный чат
+                    
+                    # Очищаем расписание в целевом чате
+                    await cur.execute("DELETE FROM rasp_detailed WHERE chat_id=%s", (chat_id,))
+                    
+                    # Копируем из исходного чата
+                    await cur.execute("""
+                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                        SELECT %s, day, week_type, pair_number, subject_id, cabinet 
+                        FROM rasp_detailed 
+                        WHERE chat_id=%s
+                    """, (chat_id, source_chat_id))
+                    
+                    synced_count += 1
+        
+        print(f"✅ Расписание синхронизировано! Обновлено {synced_count} чатов.")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка синхронизации расписания: {e}")
+        return False
+
+# Остальной код продолжается...
+
 # Функции для работы с домашними заданиями
 async def add_homework(pool, subject_id: int, due_date: str, task_text: str):
     """Добавляет домашнее задание в базу (общее для всех чатов)"""
@@ -2776,7 +2812,7 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
         await callback.message.edit_text(f"❌ Ошибка при добавлении предмета: {e}")
         await state.clear()
         await callback.answer()
-        
+
 
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
