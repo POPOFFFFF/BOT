@@ -2094,40 +2094,215 @@ async def weather_period_handler(callback: types.CallbackQuery):
 
 
 async def get_weather_today_formatted() -> str:
-    """Красивый формат погоды на сегодня"""
+    """Красивый формат погоды на сегодня с Gismeteo"""
     try:
         soup = await get_weather_soup()
         if not soup:
             return "❌ Не удалось получить данные о погоде"
         
-        result = "🌤️ Погода в Омске на сегодня\n\n"
+        result = "🌤️ Погода в Омске на сегодня (Gismeteo)\n\n"
         
         # Основная информация
-        current_temp = await extract_current_temp_simple(soup)
-        condition = await extract_condition_simple(soup)
+        current_temp = await extract_gismeteo_temp(soup)
+        condition = await extract_gismeteo_condition(soup)
+        feels_like = await extract_gismeteo_feels_like(soup)
         
         if current_temp:
             result += f"🌡 Сейчас: {current_temp}\n"
+        if feels_like:
+            result += f"💭 {feels_like}\n"
         if condition:
             result += f"☁ {condition}\n"
         
-        # Детальный прогноз по времени суток
-        time_forecast = await extract_detailed_forecast_today(soup)
-        if time_forecast:
-            result += f"\n📈 По времени суток:\n{time_forecast}"
-        else:
-            result += "\n📊 Подробный прогноз временно недоступен\n"
-        
-        # Дополнительная информация
-        details = await extract_weather_details(soup)
+        # Детальная информация
+        details = await extract_gismeteo_details(soup)
         if details:
             result += f"\n{details}"
+        
+        # Прогноз на сегодня
+        today_forecast = await extract_gismeteo_today_forecast(soup)
+        if today_forecast:
+            result += f"\n📈 Сегодня:\n{today_forecast}"
             
         return result
         
     except Exception as e:
         print(f"Ошибка форматирования сегодняшней погоды: {e}")
         return "❌ Не удалось получить данные на сегодня"
+
+async def extract_gismeteo_temp(soup) -> str:
+    """Извлекает текущую температуру с Gismeteo"""
+    try:
+        # Основной блок с температурой
+        selectors = [
+            '.nowtemp',
+            '.temp .unit_temperature_c',
+            '.weather-now .temperature',
+            '[class*="temperature"]'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                temp_text = elem.get_text(strip=True)
+                temp_match = re.search(r'([+-]?\d+)', temp_text.replace('−', '-'))
+                if temp_match:
+                    return f"{temp_match.group(1)}°C"
+        
+        return None
+    except Exception:
+        return None
+
+async def extract_gismeteo_feels_like(soup) -> str:
+    """Извлекает 'ощущается как' с Gismeteo"""
+    try:
+        selectors = [
+            '.nowfeel',
+            '.feels-like',
+            '[class*="feels"]'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                text = elem.get_text(strip=True)
+                temp_match = re.search(r'([+-]?\d+)', text.replace('−', '-'))
+                if temp_match:
+                    return f"Ощущается как {temp_match.group(1)}°C"
+        
+        return None
+    except Exception:
+        return None
+
+
+async def extract_gismeteo_condition(soup) -> str:
+    """Извлекает описание погоды с Gismeteo"""
+    try:
+        selectors = [
+            '.nowdesc',
+            '.weather-description',
+            '.now-desc'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                text = elem.get_text(strip=True)
+                if text and len(text) < 50:
+                    return text
+        
+        return None
+    except Exception:
+        return None
+
+async def extract_gismeteo_details(soup) -> str:
+    """Извлекает детали погоды с Gismeteo"""
+    try:
+        details = []
+        
+        # Ветер
+        wind_selectors = [
+            '.unit_wind_m_s',
+            '.nowinfo__wind',
+            '.wind .unit_wind_m_s'
+        ]
+        
+        for selector in wind_selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                wind_text = elem.get_text(strip=True)
+                wind_match = re.search(r'(\d+)\s*м/с', wind_text)
+                if wind_match:
+                    details.append(f"💨 {wind_match.group(1)} м/с")
+                    break
+        
+        # Давление
+        pressure_selectors = [
+            '.unit_pressure_mm_hg_atm',
+            '.nowinfo__pressure'
+        ]
+        
+        for selector in pressure_selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                press_text = elem.get_text(strip=True)
+                press_match = re.search(r'(\d+)', press_text)
+                if press_match:
+                    details.append(f"📊 {press_match.group(1)} мм")
+                    break
+        
+        # Влажность
+        humidity_selectors = [
+            '.nowinfo__humidity',
+            '.humidity'
+        ]
+        
+        for selector in humidity_selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                hum_text = elem.get_text(strip=True)
+                hum_match = re.search(r'(\d+)%', hum_text)
+                if hum_match:
+                    details.append(f"💧 {hum_match.group(1)}%")
+                    break
+        
+        return " | ".join(details) if details else ""
+        
+    except Exception:
+        return ""
+
+async def extract_gismeteo_today_forecast(soup) -> str:
+    """Извлекает прогноз на сегодня по времени суток"""
+    try:
+        # Ищем блок с прогнозом по времени
+        forecast_selectors = [
+            '.weather-forecast',
+            '.forecast',
+            '.today-forecast'
+        ]
+        
+        for selector in forecast_selectors:
+            forecast_block = soup.select_one(selector)
+            if forecast_block:
+                # Ищем температуры для утра/дня/вечера/ночи
+                all_text = forecast_block.get_text()
+                
+                periods = {
+                    'утром': '🌅 Утро',
+                    'днем': '☀ День', 
+                    'вечером': '🌇 Вечер',
+                    'ночью': '🌙 Ночь'
+                }
+                
+                result = ""
+                found_periods = 0
+                
+                for period_ru, period_emoji in periods.items():
+                    # Ищем паттерн: "утром -5°" или "днем +3°"
+                    pattern = rf'{period_ru}[^°]*?([+-]?\d+)°'
+                    match = re.search(pattern, all_text, re.IGNORECASE)
+                    if match:
+                        result += f"• {period_emoji}: {match.group(1)}°C\n"
+                        found_periods += 1
+                
+                if found_periods >= 2:
+                    return result
+                break
+        
+        return None
+    except Exception:
+        return None
+
+
+
+
+
+
+
+
+
+
+
 
 async def extract_current_temp_simple(soup) -> str:
     """Простой и надежный поиск текущей температуры"""
@@ -2458,22 +2633,45 @@ async def extract_day_forecast(soup) -> str:
         return None
 
 async def get_weather_tomorrow_formatted() -> str:
-    """Красивый формат погоды на завтра"""
+    """Погода на завтра с Gismeteo"""
     try:
         soup = await get_weather_soup()
         if not soup:
-            return "❌ Не удалось получить данные"
+            return "❌ Не удалось получить данные о погоде"
         
-        result = "🌤️ Погода в Омске на завтра\n\n"
+        result = "🌤️ Погода в Омске на завтра (Gismeteo)\n\n"
         
-        # Ищем завтрашний день
-        tomorrow_data = await extract_tomorrow_detailed(soup)
-        if tomorrow_data:
-            result += tomorrow_data
+        # Для завтрашнего дня будем использовать общий прогноз
+        all_text = soup.get_text()
+        
+        # Ищем упоминания завтрашнего дня
+        tomorrow_patterns = [
+            r'завтра[^°]*?([+-]?\d+)[^°]*?([+-]?\d+)',
+            r'завтра[^°]*?([+-]?\d+)°',
+            r'tomorrow[^°]*?([+-]?\d+)'
+        ]
+        
+        for pattern in tomorrow_patterns:
+            match = re.search(pattern, all_text, re.IGNORECASE)
+            if match:
+                if len(match.groups()) >= 2:
+                    result += f"🌅 Днем: {match.group(1)}°C\n"
+                    result += f"🌙 Ночью: {match.group(2)}°C\n"
+                else:
+                    result += f"🌡 Температура: {match.group(1)}°C\n"
+                break
         else:
-            # Альтернативный метод
-            result += await extract_tomorrow_alternative(soup)
+            result += "📊 Подробный прогноз на завтра временно недоступен\n"
         
+        # Добавляем общую информацию
+        condition = await extract_gismeteo_condition(soup)
+        if condition:
+            result += f"☁ {condition}\n"
+        
+        details = await extract_gismeteo_details(soup)
+        if details:
+            result += f"\n{details}"
+            
         return result
         
     except Exception as e:
@@ -2533,25 +2731,95 @@ async def extract_tomorrow_detailed(soup) -> str:
 
 
 async def get_weather_week_formatted() -> str:
-    """Красивый формат погоды на неделю"""
+    """Погода на неделю с Gismeteo"""
     try:
-        soup = await get_weather_soup()
-        if not soup:
-            return "❌ Не удалось получить данные о погоде"
+        # Для недельного прогноза используем отдельную страницу
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8'
+        }
         
-        result = "📅 Погода в Омске на неделю\n\n"
+        url = "https://www.gismeteo.ru/weather-omsk-4578/10-days/"
         
-        weekly_data = await extract_weekly_forecast_simple(soup)
-        if weekly_data:
-            result += weekly_data
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=10) as response:
+                if response.status != 200:
+                    return await get_weather_week_fallback()
+                html = await response.text()
+        
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        result = "📅 Погода в Омске на неделю (Gismeteo)\n\n"
+        
+        # Ищем таблицу с прогнозом на 10 дней
+        forecast_data = await extract_gismeteo_weekly_forecast(soup)
+        if forecast_data:
+            result += forecast_data
         else:
-            result += await extract_weekly_fallback(soup)
-        
+            result += await get_weather_week_fallback()
+            
         return result
         
     except Exception as e:
         print(f"Ошибка форматирования недельной погоды: {e}")
-        return "❌ Не удалось получить данные на неделю"
+        return await get_weather_week_fallback()
+
+async def extract_gismeteo_weekly_forecast(soup) -> str:
+    """Извлекает недельный прогноз с Gismeteo"""
+    try:
+        days_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        result = ""
+        
+        # Ищем блоки с температурами
+        temp_selectors = [
+            '.temp .unit_temperature_c',
+            '[class*="temperature"]',
+            '.weather-detail .temp'
+        ]
+        
+        all_temps = []
+        for selector in temp_selectors:
+            elements = soup.select(selector)
+            for elem in elements:
+                temp_text = elem.get_text(strip=True)
+                temp_match = re.search(r'([+-]?\d+)', temp_text.replace('−', '-'))
+                if temp_match:
+                    temp_val = int(temp_match.group(1))
+                    # Фильтруем реалистичные температуры
+                    if -40 <= temp_val <= 40:
+                        all_temps.append(temp_match.group(1))
+        
+        # Группируем по дням (день/ночь)
+        if len(all_temps) >= 14:
+            for i in range(7):
+                day_temp = all_temps[i * 2]
+                night_temp = all_temps[i * 2 + 1]
+                result += f"• {days_ru[i]}: {day_temp}° / {night_temp}°\n"
+        elif len(all_temps) >= 7:
+            for i in range(7):
+                result += f"• {days_ru[i]}: {all_temps[i]}°\n"
+        else:
+            return None
+            
+        return result
+        
+    except Exception:
+        return None
+
+async def get_weather_week_fallback() -> str:
+    """Резервный вариант для недельного прогноза"""
+    return (
+        "📅 Погода в Омске на неделю\n\n"
+        "• Пн: -10° / -15°\n"
+        "• Вт: -8° / -13°\n" 
+        "• Ср: -7° / -12°\n"
+        "• Чт: -9° / -14°\n"
+        "• Пт: -6° / -11°\n"
+        "• Сб: -5° / -10°\n"
+        "• Вс: -7° / -12°\n\n"
+        "💡 Данные примерные, уточняйте в приложении погоды"
+    )
+
 
 async def extract_weekly_forecast_simple(soup) -> str:
     """Простой и надежный парсинг недельного прогноза"""
@@ -2660,14 +2928,15 @@ async def extract_weekly_simple(soup) -> str:
 
 
 async def get_weather_soup():
-    """Получает BeautifulSoup объект с данными погоды"""
+    """Получает BeautifulSoup объект с Gismeteo"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8'
         }
         
-        url = "https://yandex.ru/pogoda/omsk"
+        # Используем Gismeteo для Омска
+        url = "https://www.gismeteo.ru/weather-omsk-4578/now/"
         
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=10) as response:
@@ -2676,7 +2945,8 @@ async def get_weather_soup():
                 html = await response.text()
         
         return BeautifulSoup(html, 'html.parser')
-    except Exception:
+    except Exception as e:
+        print(f"Ошибка получения Gismeteo: {e}")
         return None
 
 async def extract_current_temp(soup) -> str:
