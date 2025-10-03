@@ -2046,6 +2046,7 @@ async def weather_period_handler(callback: types.CallbackQuery):
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
+    
     """Обработчик выбора периода погоды"""
     period = callback.data
     
@@ -2055,18 +2056,18 @@ async def weather_period_handler(callback: types.CallbackQuery):
     try:
         if period == "weather_today":
             weather_data = await get_weather_today_formatted()
-            title = "🌤️ Погода в Омске на сегодня"
+            title = ""
         elif period == "weather_tomorrow":
             weather_data = await get_weather_tomorrow_formatted()
-            title = "🌤️ Погода в Омске на завтра"
+            title = ""
         elif period == "weather_week":
             weather_data = await get_weather_week_formatted()
-            title = "📅 Погода в Омске на 7 дней"
+            title = ""
         else:
             await callback.answer("❌ Неизвестный период", show_alert=True)
             return
         
-        message = f"{title}\n\n{weather_data}"
+        message = f"{title}{weather_data}"
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🌤️ Выбрать другой период", callback_data="menu_weather")],
@@ -2078,6 +2079,7 @@ async def weather_period_handler(callback: types.CallbackQuery):
     except Exception as e:
         error_message = f"❌ Ошибка при получении погоды: {str(e)}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=period)],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_weather")]
         ])
         await callback.message.edit_text(error_message, reply_markup=kb)
@@ -2092,44 +2094,126 @@ async def get_weather_today_formatted() -> str:
         if not soup:
             return "❌ Не удалось получить данные"
         
-        result = "📊 Сейчас:\n"
+        result = "🌤️ Погода в Омске на сегодня\n\n"
         
-        # Текущая температура
-        temp = await extract_current_temp(soup)
-        if temp:
-            result += f"🌡 {temp}\n"
-        
-        # Ощущается как
+        # Основная информация - текущая погода
+        current_temp = await extract_current_temp(soup)
+        condition = await extract_condition(soup)
         feels_like = await extract_feels_like(soup)
+        
+        if current_temp:
+            result += f"🌡 Сейчас: {current_temp}\n"
+        if condition:
+            result += f"☁ {condition}\n"
         if feels_like:
             result += f"💭 {feels_like}\n"
         
-        # Ветер
+        # Дополнительные параметры
         wind = await extract_wind(soup)
-        if wind:
-            result += f"💨 {wind}\n"
-        
-        # Давление и влажность
         pressure = await extract_pressure(soup)
         humidity = await extract_humidity(soup)
         
+        if wind:
+            result += f"💨 {wind}\n"
         if pressure and humidity:
             result += f"📊 {pressure}, {humidity}\n"
         
         result += "\n📈 По времени суток:\n"
         
-        # Прогноз по времени
-        time_forecast = await extract_time_forecast(soup)
+        # Детальный прогноз по времени
+        time_forecast = await extract_detailed_time_forecast(soup)
         if time_forecast:
             result += time_forecast
         else:
-            result += "• Данные временно недоступны\n"
+            # Резервный вариант
+            day_forecast = await extract_day_forecast(soup)
+            if day_forecast:
+                result += day_forecast
+            else:
+                result += "• Данные временно недоступны\n"
         
         return result
         
     except Exception as e:
         print(f"Ошибка форматирования сегодняшней погоды: {e}")
         return "❌ Не удалось получить данные на сегодня"
+
+async def extract_detailed_time_forecast(soup) -> str:
+    """Извлекает детальный прогноз по времени суток"""
+    try:
+        result = ""
+        
+        # Ищем блоки с прогнозом по времени
+        time_selectors = [
+            '.weather-table__body',
+            '[class*="forecast"]',
+            '[class*="time"]'
+        ]
+        
+        for selector in time_selectors:
+            time_block = soup.select_one(selector)
+            if time_block:
+                # Ищем все временные интервалы
+                time_items = time_block.find_all(['div', 'span'], class_=re.compile(r'time|hour'))
+                temp_items = time_block.find_all(['div', 'span'], class_=re.compile(r'temp'))
+                
+                if time_items and temp_items:
+                    for i, (time_elem, temp_elem) in enumerate(zip(time_items[:4], temp_items[:4])):
+                        time_text = time_elem.get_text(strip=True)
+                        temp_text = temp_elem.get_text(strip=True)
+                        
+                        if time_text and temp_text:
+                            # Определяем время суток по индексу
+                            periods = ['🌅 Утро', '☀ День', '🌇 Вечер', '🌙 Ночь']
+                            if i < len(periods):
+                                period = periods[i]
+                                result += f"• {period}: {temp_text}\n"
+                    break
+        
+        if not result:
+            # Альтернативный метод - поиск по тексту
+            time_periods = {
+                'утром': '🌅 Утро',
+                'днем': '☀ День', 
+                'вечером': '🌇 Вечер',
+                'ночью': '🌙 Ночь'
+            }
+            
+            all_text = soup.get_text()
+            for period_ru, period_emoji in time_periods.items():
+                # Ищем температуру рядом с указанием времени
+                pattern = rf'{period_ru}[^\.]*?([+-]?\d+)°'
+                match = re.search(pattern, all_text, re.IGNORECASE)
+                if match:
+                    result += f"• {period_emoji}: {match.group(1)}°C\n"
+        
+        return result if result else None
+        
+    except Exception:
+        return None
+
+async def extract_day_forecast(soup) -> str:
+    """Извлекает общий прогноз на день"""
+    try:
+        # Ищем основной прогноз
+        selectors = [
+            '[class*="day__temp"]',
+            '[class*="forecast-brief"]',
+            '[class*="current-weather"]'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem:
+                text = elem.get_text(strip=True)
+                # Ищем температуры в тексте
+                temp_matches = re.findall(r'([+-]?\d+)°', text)
+                if len(temp_matches) >= 2:
+                    return f"• Утро: {temp_matches[0]}°C\n• День: {temp_matches[1]}°C\n"
+        
+        return None
+    except Exception:
+        return None
 
 async def get_weather_tomorrow_formatted() -> str:
     """Красивый формат погоды на завтра"""
@@ -2138,10 +2222,10 @@ async def get_weather_tomorrow_formatted() -> str:
         if not soup:
             return "❌ Не удалось получить данные"
         
-        result = "📅 Завтра:\n\n"
+        result = "🌤️ Погода в Омске на завтра\n\n"
         
-        # Ищем данные на завтра
-        tomorrow_data = await extract_tomorrow_data(soup)
+        # Ищем завтрашний день
+        tomorrow_data = await extract_tomorrow_detailed(soup)
         if tomorrow_data:
             result += tomorrow_data
         else:
@@ -2154,6 +2238,58 @@ async def get_weather_tomorrow_formatted() -> str:
         print(f"Ошибка форматирования завтрашней погоды: {e}")
         return "❌ Не удалось получить данные на завтра"
 
+async def extract_tomorrow_detailed(soup) -> str:
+    """Детальный парсинг завтрашней погоды"""
+    try:
+        # Ищем блок с завтрашним днем
+        tomorrow_selectors = [
+            '[data-day*="1"]',
+            '[class*="tomorrow"]',
+            '[class*="day_1"]'
+        ]
+        
+        for selector in tomorrow_selectors:
+            tomorrow_block = soup.select_one(selector)
+            if tomorrow_block:
+                # Ищем температуру
+                temp_elems = tomorrow_block.find_all(string=re.compile(r'[+-]?\d+°'))
+                condition_elems = tomorrow_block.find_all(string=re.compile(r'[а-яё]+', re.IGNORECASE))
+                
+                if temp_elems:
+                    temps = []
+                    for elem in temp_elems[:2]:  # Берем первые две температуры
+                        temp_text = elem.strip()
+                        if '°' in temp_text:
+                            temps.append(temp_text)
+                    
+                    if len(temps) >= 2:
+                        condition = "Облачно"  # значение по умолчанию
+                        if condition_elems:
+                            for cond_elem in condition_elems:
+                                cond_text = cond_elem.strip().lower()
+                                if cond_text and len(cond_text) < 20 and cond_text not in ['завтра', 'утром', 'днем']:
+                                    condition = cond_text.capitalize()
+                                    break
+                        
+                        result = f"☁ {condition}\n"
+                        result += f"🌅 Утром: {temps[0]}\n"
+                        result += f"☀ Днем: {temps[1]}\n"
+                        
+                        # Ищем ветер
+                        wind_elem = tomorrow_block.find(string=re.compile(r'ветер', re.IGNORECASE))
+                        if wind_elem:
+                            wind_text = wind_elem.parent.get_text() if wind_elem.parent else ""
+                            wind_match = re.search(r'(\d+)[^\d]*м/с', wind_text)
+                            if wind_match:
+                                result += f"💨 Ветер: {wind_match.group(1)} м/с\n"
+                        
+                        return result
+        
+        return None
+    except Exception:
+        return None
+
+
 async def get_weather_week_formatted() -> str:
     """Красивый формат погоды на неделю"""
     try:
@@ -2161,20 +2297,85 @@ async def get_weather_week_formatted() -> str:
         if not soup:
             return "❌ Не удалось получить данные"
         
-        result = "📅 На неделю:\n\n"
+        result = "📅 Погода в Омске на неделю\n\n"
         
-        weekly_data = await extract_weekly_data(soup)
+        weekly_data = await extract_weekly_detailed(soup)
         if weekly_data:
             result += weekly_data
         else:
-            result += "📊 Данные на неделю временно недоступны\n\n"
-            result += "💡 Используйте приложение погоды для подробного прогноза"
+            result += await extract_weekly_simple(soup)
         
         return result
         
     except Exception as e:
         print(f"Ошибка форматирования недельной погоды: {e}")
         return "❌ Не удалось получить данные на неделю"
+
+async def extract_weekly_detailed(soup) -> str:
+    """Детальный парсинг недельной погоды"""
+    try:
+        result = ""
+        days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        
+        # Ищем блоки с днями недели
+        day_selectors = [
+            '[class*="day__name"]',
+            '[class*="day-name"]',
+            '[class*="forecast"]'
+        ]
+        
+        for selector in day_selectors:
+            day_blocks = soup.select(selector)
+            if len(day_blocks) >= 7:
+                for i, day_block in enumerate(day_blocks[:7]):
+                    # Ищем температуру в блоке дня
+                    temp_elems = day_block.find_next_siblings(limit=3)
+                    day_temp = "?"
+                    night_temp = "?"
+                    
+                    for elem in temp_elems:
+                        text = elem.get_text()
+                        temp_matches = re.findall(r'([+-]?\d+)°', text)
+                        if len(temp_matches) >= 2:
+                            day_temp = temp_matches[0]
+                            night_temp = temp_matches[1]
+                            break
+                        elif len(temp_matches) == 1:
+                            if day_temp == "?":
+                                day_temp = temp_matches[0]
+                            else:
+                                night_temp = temp_matches[0]
+                    
+                    result += f"• {days[i]}: {day_temp}° / {night_temp}°\n"
+                
+                return result
+        
+        return None
+    except Exception:
+        return None
+
+async def extract_weekly_simple(soup) -> str:
+    """Простой парсинг недельной погоды"""
+    try:
+        # Ищем все температурные данные на странице
+        all_text = soup.get_text()
+        temp_matches = re.findall(r'([+-]?\d+)°', all_text)
+        
+        if len(temp_matches) >= 14:
+            result = ""
+            days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+            
+            for i in range(7):
+                if i * 2 + 1 < len(temp_matches):
+                    day_temp = temp_matches[i * 2]
+                    night_temp = temp_matches[i * 2 + 1]
+                    result += f"• {days[i]}: {day_temp}° / {night_temp}°\n"
+            
+            return result
+        else:
+            return "📊 Подробный прогноз на неделю временно недоступен\n\n💡 Используйте приложение погоды для точного прогноза"
+    except Exception:
+        return "📊 Данные на неделю временно недоступны"
 
 
 async def get_weather_soup():
@@ -2200,19 +2401,30 @@ async def get_weather_soup():
 async def extract_current_temp(soup) -> str:
     """Извлекает текущую температуру"""
     try:
-        # Попробуем разные селекторы
+        # Больше селекторов для поиска температуры
         selectors = [
             '.temp__value',
             '[class*="temp__value"]',
             '[class*="current-weather__temp"]',
-            '.weather__temp'
+            '.weather__temp',
+            '[class*="nowtemp"]',
+            '.temp.fact__temp'
         ]
         
         for selector in selectors:
             elem = soup.select_one(selector)
             if elem and elem.text.strip():
-                temp = elem.text.strip().replace('−', '-')
-                return f"{temp}°C"
+                temp = elem.text.strip().replace('−', '-').replace('+', '')
+                # Убираем лишние символы
+                temp = re.sub(r'[^\d\-]', '', temp)
+                if temp:
+                    return f"{temp}°C"
+        
+        # Альтернативный поиск по тексту
+        all_text = soup.get_text()
+        temp_match = re.search(r'([+-]?\d+)\s*°', all_text)
+        if temp_match:
+            return f"{temp_match.group(1)}°C"
         
         return None
     except Exception:
@@ -2243,15 +2455,18 @@ async def extract_condition(soup) -> str:
         selectors = [
             '[class*="condition"]',
             '[class*="weather__condition"]',
-            '[class*="description"]'
+            '[class*="description"]',
+            '[class*="fact__condition"]',
+            '.link__condition'
         ]
         
         for selector in selectors:
             elem = soup.select_one(selector)
             if elem and elem.text.strip():
                 text = elem.text.strip()
-                if len(text) < 50:  # Не слишком длинный текст
+                if len(text) < 50 and len(text) > 2:  # Не слишком длинный и не слишком короткий
                     return text.capitalize()
+        
         return None
     except Exception:
         return None
