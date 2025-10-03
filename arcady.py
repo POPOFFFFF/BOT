@@ -2103,10 +2103,10 @@ async def get_weather_today_formatted() -> str:
         
         if current_temp:
             result += f"🌡 Сейчас: {current_temp}\n"
-        if condition:
-            result += f"☁ {condition}\n"
         if feels_like:
             result += f"💭 {feels_like}\n"
+        if condition:
+            result += f"☁ {condition}\n"
         
         # Дополнительные параметры
         wind = await extract_wind(soup)
@@ -2115,8 +2115,13 @@ async def get_weather_today_formatted() -> str:
         
         if wind:
             result += f"💨 {wind}\n"
-        if pressure and humidity:
-            result += f"📊 {pressure}, {humidity}\n"
+        if pressure:
+            result += f"📊 {pressure}"
+            if humidity:
+                result += f", {humidity}"
+            result += "\n"
+        elif humidity:
+            result += f"📊 {humidity}\n"
         
         result += "\n📈 По времени суток:\n"
         
@@ -2433,18 +2438,48 @@ async def extract_current_temp(soup) -> str:
 async def extract_feels_like(soup) -> str:
     """Извлекает 'ощущается как'"""
     try:
-        # Ищем текст с "ощущается"
-        elements = soup.find_all(string=re.compile(r'ощущается', re.IGNORECASE))
-        for elem in elements:
-            parent = elem.parent
+        # Ищем по разным селекторам, которые используются на Яндекс.Погоде
+        selectors = [
+            '.term__value[class*="feels-like"]',
+            '[class*="feels-like"]',
+            '[class*="feels"]',
+            '.fact__feels-like',
+            '.temp__value[class*="feels"]'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem and elem.text.strip():
+                temp_text = elem.text.strip().replace('−', '-').replace('+', '')
+                # Извлекаем только число
+                temp_match = re.search(r'([+-]?\d+)', temp_text)
+                if temp_match:
+                    return f"Ощущается как {temp_match.group(1)}°C"
+        
+        # Альтернативный метод: ищем в тексте "ощущается"
+        all_text = soup.get_text()
+        feels_patterns = [
+            r'ощущается[^\d]*([+-]?\d+)',
+            r'feels like[^\d]*([+-]?\d+)',
+            r'ощущ[^\d]*([+-]?\d+)'
+        ]
+        
+        for pattern in feels_patterns:
+            match = re.search(pattern, all_text, re.IGNORECASE)
+            if match:
+                return f"Ощущается как {match.group(1)}°C"
+        
+        # Еще один метод: ищем рядом с текущей температурой
+        temp_elem = soup.select_one('.temp__value, [class*="temp__value"], [class*="current-weather__temp"]')
+        if temp_elem:
+            # Ищем в соседних элементах
+            parent = temp_elem.parent
             if parent:
-                text = parent.get_text(strip=True)
-                # Упрощаем текст
-                if 'ощущается' in text.lower():
-                    # Извлекаем только числовое значение
-                    temp_match = re.search(r'[+-]?\d+°', text)
-                    if temp_match:
-                        return f"Ощущается как {temp_match.group()}"
+                parent_text = parent.get_text()
+                feels_match = re.search(r'ощущается[^\d]*([+-]?\d+)', parent_text, re.IGNORECASE)
+                if feels_match:
+                    return f"Ощущается как {feels_match.group(1)}°C"
+        
         return None
     except Exception:
         return None
@@ -2474,17 +2509,35 @@ async def extract_condition(soup) -> str:
 async def extract_wind(soup) -> str:
     """Извлекает данные о ветре"""
     try:
-        elements = soup.find_all(string=re.compile(r'ветер|wind', re.IGNORECASE))
-        for elem in elements:
-            parent = elem.parent
-            if parent:
-                text = parent.get_text(strip=True)
-                # Упрощаем текст
-                if 'ветер' in text.lower():
-                    # Ищем скорость ветра
-                    wind_match = re.search(r'(\d+[,.]?\d*)\s*м/с', text)
-                    if wind_match:
-                        return f"Ветер {wind_match.group(1)} м/с"
+        # Ищем по селекторам Яндекс.Погоды
+        selectors = [
+            '.wind-speed',
+            '[class*="wind"]',
+            '[class*="ветер"]',
+            '.fact__wind-speed'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem and elem.text.strip():
+                wind_text = elem.text.strip()
+                # Ищем скорость ветра
+                wind_match = re.search(r'(\d+[,.]?\d*)\s*м/с', wind_text)
+                if wind_match:
+                    return f"Ветер {wind_match.group(1)} м/с"
+        
+        # Альтернативный поиск по тексту
+        all_text = soup.get_text()
+        wind_patterns = [
+            r'ветер[^\d]*(\d+[,.]?\d*)\s*м/с',
+            r'wind[^\d]*(\d+[,.]?\d*)\s*m/s'
+        ]
+        
+        for pattern in wind_patterns:
+            match = re.search(pattern, all_text, re.IGNORECASE)
+            if match:
+                return f"Ветер {match.group(1)} м/с"
+        
         return None
     except Exception:
         return None
@@ -2492,16 +2545,28 @@ async def extract_wind(soup) -> str:
 async def extract_pressure(soup) -> str:
     """Извлекает давление"""
     try:
-        elements = soup.find_all(string=re.compile(r'давление|pressure', re.IGNORECASE))
-        for elem in elements:
-            parent = elem.parent
-            if parent:
-                text = parent.get_text(strip=True)
-                if 'давление' in text.lower():
-                    # Ищем значение давления
-                    press_match = re.search(r'(\d+)\s*мм', text)
-                    if press_match:
-                        return f"Давление {press_match.group(1)} мм"
+        selectors = [
+            '.pressure',
+            '[class*="pressure"]',
+            '[class*="давление"]',
+            '.fact__pressure'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem and elem.text.strip():
+                press_text = elem.text.strip()
+                # Ищем значение давления
+                press_match = re.search(r'(\d+)\s*мм', press_text)
+                if press_match:
+                    return f"Давление {press_match.group(1)} мм"
+        
+        # Альтернативный поиск
+        all_text = soup.get_text()
+        press_match = re.search(r'давление[^\d]*(\d+)\s*мм', all_text, re.IGNORECASE)
+        if press_match:
+            return f"Давление {press_match.group(1)} мм"
+        
         return None
     except Exception:
         return None
@@ -2509,16 +2574,28 @@ async def extract_pressure(soup) -> str:
 async def extract_humidity(soup) -> str:
     """Извлекает влажность"""
     try:
-        elements = soup.find_all(string=re.compile(r'влажность|humidity', re.IGNORECASE))
-        for elem in elements:
-            parent = elem.parent
-            if parent:
-                text = parent.get_text(strip=True)
-                if 'влажность' in text.lower():
-                    # Ищем значение влажности
-                    hum_match = re.search(r'(\d+)%', text)
-                    if hum_match:
-                        return f"Влажность {hum_match.group(1)}%"
+        selectors = [
+            '.humidity',
+            '[class*="humidity"]',
+            '[class*="влажность"]',
+            '.fact__humidity'
+        ]
+        
+        for selector in selectors:
+            elem = soup.select_one(selector)
+            if elem and elem.text.strip():
+                hum_text = elem.text.strip()
+                # Ищем значение влажности
+                hum_match = re.search(r'(\d+)%', hum_text)
+                if hum_match:
+                    return f"Влажность {hum_match.group(1)}%"
+        
+        # Альтернативный поиск
+        all_text = soup.get_text()
+        hum_match = re.search(r'влажность[^\d]*(\d+)%', all_text, re.IGNORECASE)
+        if hum_match:
+            return f"Влажность {hum_match.group(1)}%"
+        
         return None
     except Exception:
         return None
