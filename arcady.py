@@ -2148,51 +2148,77 @@ async def extract_detailed_time_forecast(soup) -> str:
     try:
         result = ""
         
-        # Ищем блоки с прогнозом по времени
-        time_selectors = [
-            '.weather-table__body',
-            '[class*="forecast"]',
-            '[class*="time"]'
+        # Метод 1: Поиск по таблице погоды по часам
+        table_selectors = [
+            '.weather-table',
+            '[class*="weather-table"]',
+            '.forecast-details'
         ]
         
-        for selector in time_selectors:
-            time_block = soup.select_one(selector)
-            if time_block:
-                # Ищем все временные интервалы
-                time_items = time_block.find_all(['div', 'span'], class_=re.compile(r'time|hour'))
-                temp_items = time_block.find_all(['div', 'span'], class_=re.compile(r'temp'))
+        for selector in table_selectors:
+            table = soup.select_one(selector)
+            if table:
+                # Ищем строки с временем и температурой
+                time_cells = table.find_all(['td', 'div'], class_=re.compile(r'time|hour'))
+                temp_cells = table.find_all(['td', 'div'], class_=re.compile(r'temp'))
                 
-                if time_items and temp_items:
-                    for i, (time_elem, temp_elem) in enumerate(zip(time_items[:4], temp_items[:4])):
-                        time_text = time_elem.get_text(strip=True)
-                        temp_text = temp_elem.get_text(strip=True)
+                if time_cells and temp_cells:
+                    periods_data = {}
+                    
+                    for i, (time_cell, temp_cell) in enumerate(zip(time_cells[:8], temp_cells[:8])):
+                        time_text = time_cell.get_text(strip=True)
+                        temp_text = temp_cell.get_text(strip=True)
+                        temp_match = re.search(r'([+-]?\d+)', temp_text)
                         
-                        if time_text and temp_text:
-                            # Определяем время суток по индексу
-                            periods = ['🌅 Утро', '☀ День', '🌇 Вечер', '🌙 Ночь']
-                            if i < len(periods):
-                                period = periods[i]
-                                result += f"• {period}: {temp_text}\n"
-                    break
+                        if time_text and temp_match:
+                            # Определяем период суток по времени
+                            hour_match = re.search(r'(\d+)', time_text)
+                            if hour_match:
+                                hour = int(hour_match.group(1))
+                                if 5 <= hour < 12:
+                                    period = '🌅 Утро'
+                                elif 12 <= hour < 17:
+                                    period = '☀ День'
+                                elif 17 <= hour < 23:
+                                    period = '🌇 Вечер'
+                                else:
+                                    period = '🌙 Ночь'
+                                
+                                if period not in periods_data:
+                                    periods_data[period] = temp_match.group(1)
+                    
+                    # Формируем результат
+                    for period in ['🌅 Утро', '☀ День', '🌇 Вечер', '🌙 Ночь']:
+                        if period in periods_data:
+                            result += f"• {period}: {periods_data[period]}°C\n"
+                    
+                    if result:
+                        return result
+                
+                break
         
-        if not result:
-            # Альтернативный метод - поиск по тексту
-            time_periods = {
-                'утром': '🌅 Утро',
-                'днем': '☀ День', 
-                'вечером': '🌇 Вечер',
-                'ночью': '🌙 Ночь'
-            }
-            
-            all_text = soup.get_text()
-            for period_ru, period_emoji in time_periods.items():
-                # Ищем температуру рядом с указанием времени
-                pattern = rf'{period_ru}[^\.]*?([+-]?\d+)°'
-                match = re.search(pattern, all_text, re.IGNORECASE)
-                if match:
-                    result += f"• {period_emoji}: {match.group(1)}°C\n"
+        # Метод 2: Поиск по текстовым описаниям
+        all_text = soup.get_text()
+        time_periods = {
+            'утром': '🌅 Утро',
+            'днем': '☀ День', 
+            'вечером': '🌇 Вечер',
+            'ночью': '🌙 Ночь'
+        }
         
-        return result if result else None
+        found_periods = 0
+        for period_ru, period_emoji in time_periods.items():
+            # Ищем температуру рядом с указанием времени суток
+            pattern = rf'{period_ru}[^°]*?([+-]?\d+)°'
+            match = re.search(pattern, all_text, re.IGNORECASE)
+            if match:
+                result += f"• {period_emoji}: {match.group(1)}°C\n"
+                found_periods += 1
+        
+        if found_periods >= 2:
+            return result
+        
+        return None
         
     except Exception:
         return None
@@ -2304,11 +2330,11 @@ async def get_weather_week_formatted() -> str:
         
         result = "📅 Погода в Омске на неделю\n\n"
         
-        weekly_data = await extract_weekly_detailed(soup)
+        weekly_data = await extract_weekly_correct(soup)
         if weekly_data:
             result += weekly_data
         else:
-            result += await extract_weekly_simple(soup)
+            result += "📊 Подробный прогноз на неделю временно недоступен\n\n💡 Используйте приложение погоды для точного прогноза"
         
         return result
         
@@ -2316,47 +2342,113 @@ async def get_weather_week_formatted() -> str:
         print(f"Ошибка форматирования недельной погоды: {e}")
         return "❌ Не удалось получить данные на неделю"
 
-async def extract_weekly_detailed(soup) -> str:
-    """Детальный парсинг недельной погоды"""
+async def extract_weekly_correct(soup) -> str:
+    """Корректный парсинг недельной погоды с Яндекс.Погоды"""
     try:
         result = ""
-        days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        days_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
         
-        # Ищем блоки с днями недели
-        day_selectors = [
-            '[class*="day__name"]',
-            '[class*="day-name"]',
-            '[class*="forecast"]'
+        # Метод 1: Ищем блоки с прогнозом на несколько дней
+        forecast_selectors = [
+            '[class*="forecast-brief"]',
+            '[class*="weather-table"]',
+            '[class*="daily-weather"]',
+            '.forecast-brief',
+            '.weather-table'
         ]
         
+        for selector in forecast_selectors:
+            forecast_block = soup.select_one(selector)
+            if forecast_block:
+                # Ищем все температуры в этом блоке
+                temp_elems = forecast_block.find_all(string=re.compile(r'[+-]?\d+°'))
+                temps = []
+                
+                for elem in temp_elems:
+                    temp_text = elem.strip()
+                    # Извлекаем числовое значение температуры
+                    temp_match = re.search(r'([+-]?\d+)', temp_text)
+                    if temp_match:
+                        temp_val = temp_match.group(1)
+                        # Проверяем на реалистичность (для Омска в это время года)
+                        if -30 <= int(temp_val) <= 30:
+                            temps.append(temp_val)
+                
+                # Группируем температуры по дням (день/ночь)
+                if len(temps) >= 14:  # 7 дней × 2 температуры
+                    for i in range(7):
+                        day_temp = temps[i * 2]
+                        night_temp = temps[i * 2 + 1]
+                        result += f"• {days_ru[i]}: {day_temp}° / {night_temp}°\n"
+                    return result
+                elif len(temps) >= 7:
+                    for i in range(7):
+                        result += f"• {days_ru[i]}: {temps[i]}°\n"
+                    return result
+        
+        # Метод 2: Ищем по отдельным дням
+        day_selectors = [
+            '[class*="day_"]',
+            '[class*="day-"]',
+            '[data-day]'
+        ]
+        
+        found_days = 0
         for selector in day_selectors:
             day_blocks = soup.select(selector)
-            if len(day_blocks) >= 7:
+            if len(day_blocks) >= 3:  # Хотя бы 3 дня нашли
                 for i, day_block in enumerate(day_blocks[:7]):
-                    # Ищем температуру в блоке дня
-                    temp_elems = day_block.find_next_siblings(limit=3)
-                    day_temp = "?"
-                    night_temp = "?"
+                    # Ищем температуры в блоке дня
+                    day_text = day_block.get_text()
+                    temp_matches = re.findall(r'([+-]?\d+)°', day_text)
                     
-                    for elem in temp_elems:
-                        text = elem.get_text()
-                        temp_matches = re.findall(r'([+-]?\d+)°', text)
-                        if len(temp_matches) >= 2:
-                            day_temp = temp_matches[0]
-                            night_temp = temp_matches[1]
-                            break
-                        elif len(temp_matches) == 1:
-                            if day_temp == "?":
-                                day_temp = temp_matches[0]
-                            else:
-                                night_temp = temp_matches[0]
+                    valid_temps = []
+                    for temp in temp_matches:
+                        if -30 <= int(temp) <= 30:  # Фильтр реалистичных температур
+                            valid_temps.append(temp)
                     
-                    result += f"• {days[i]}: {day_temp}° / {night_temp}°\n"
+                    if len(valid_temps) >= 2:
+                        day_temp = valid_temps[0]
+                        night_temp = valid_temps[1]
+                        result += f"• {days_ru[i]}: {day_temp}° / {night_temp}°\n"
+                        found_days += 1
+                    elif len(valid_temps) >= 1:
+                        result += f"• {days_ru[i]}: {valid_temps[0]}°\n"
+                        found_days += 1
                 
-                return result
+                if found_days >= 3:
+                    return result
+                break
+        
+        # Метод 3: Простой поиск по всей странице с фильтрацией
+        all_text = soup.get_text()
+        all_temp_matches = re.findall(r'([+-]?\d+)°', all_text)
+        
+        valid_weekly_temps = []
+        for temp in all_temp_matches:
+            temp_val = int(temp)
+            # Фильтруем только реалистичные температуры для Омска
+            if -25 <= temp_val <= 25:
+                valid_weekly_temps.append(temp)
+        
+        # Берем первые 14 температур (7 дней × 2)
+        if len(valid_weekly_temps) >= 14:
+            result = ""
+            for i in range(7):
+                day_temp = valid_weekly_temps[i * 2]
+                night_temp = valid_weekly_temps[i * 2 + 1]
+                result += f"• {days_ru[i]}: {day_temp}° / {night_temp}°\n"
+            return result
+        elif len(valid_weekly_temps) >= 7:
+            result = ""
+            for i in range(7):
+                result += f"• {days_ru[i]}: {valid_weekly_temps[i]}°\n"
+            return result
         
         return None
-    except Exception:
+        
+    except Exception as e:
+        print(f"Ошибка в extract_weekly_correct: {e}")
         return None
 
 async def extract_weekly_simple(soup) -> str:
