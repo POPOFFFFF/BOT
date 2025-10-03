@@ -2732,6 +2732,52 @@ async def cancel_delete_subject(callback: types.CallbackQuery, state: FSMContext
     await menu_back_handler(callback, state)
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("subject_type_"))
+async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMContext):
+    """Обработчик выбора типа предмета"""
+    try:
+        subject_type = callback.data[len("subject_type_"):]
+        data = await state.get_data()
+        subject_name = data["name"]
+        
+        if subject_type == "fixed":
+            # Предмет с фиксированным кабинетом
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+            ])
+            
+            await callback.message.edit_text(
+                f"📝 Предмет: {subject_name}\n"
+                f"🏫 Тип: с фиксированным кабинетом\n\n"
+                "Введите номер кабинета:",
+                reply_markup=kb
+            )
+            await state.set_state(AddSubjectState.cabinet)
+            
+        elif subject_type == "rk":
+            # Предмет с запросом кабинета (rK)
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (subject_name, True))
+            
+            await callback.message.edit_text(
+                f"✅ Предмет добавлен!\n\n"
+                f"📚 Название: {subject_name}\n"
+                f"🔢 Тип: с запросом кабинета (rK)\n\n"
+                f"Теперь при добавлении этого предмета в расписание "
+                f"кабинет будет запрашиваться отдельно.",
+                reply_markup=admin_menu()
+            )
+            await state.clear()
+        
+        await callback.answer()
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка при добавлении предмета: {e}")
+        await state.clear()
+        await callback.answer()
+        
+
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
@@ -2744,13 +2790,26 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         # Проверяем, есть ли у предмета фиксированный кабинет (rK)
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("SELECT rK FROM subjects WHERE name=%s", (subject_name,))
+                await cur.execute("SELECT id, rK FROM subjects WHERE name=%s", (subject_name,))
                 result = await cur.fetchone()
-                is_rk = result[0] if result else False
+                if not result:
+                    await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
+                    await state.clear()
+                    return
+                    
+                subject_id, is_rk = result
         
         if is_rk:
             # Если предмет с rK - спрашиваем кабинет
-            await callback.message.edit_text("Введите кабинет для этой пары:")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+            ])
+            await callback.message.edit_text(
+                f"📚 Предмет: {subject_name}\n"
+                f"🔢 Тип: с запросом кабинета\n\n"
+                "Введите кабинет для этой пары:",
+                reply_markup=kb
+            )
             await state.set_state(AddLessonState.cabinet)
         else:
             # Если предмет без rK - пытаемся извлечь кабинет из названия
@@ -2766,19 +2825,9 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             
             await state.update_data(cabinet=cabinet)
             
-            # ИСПРАВЛЕНИЕ: добавляем урок во ВСЕ разрешенные чаты
+            # Добавляем урок в расписание для ВСЕХ чатов
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
-                    # Получаем ID предмета
-                    await cur.execute("SELECT id FROM subjects WHERE name=%s", (subject_name,))
-                    subject_result = await cur.fetchone()
-                    if not subject_result:
-                        await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
-                        await state.clear()
-                        return
-                    
-                    subject_id = subject_result[0]
-                    
                     # Добавляем урок в расписание для ВСЕХ чатов
                     for chat_id in ALLOWED_CHAT_IDS:
                         await cur.execute("""
@@ -2787,6 +2836,10 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                         """, (chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet))
             
             display_name = clean_subject_name
+            
+            # Автоматическая синхронизация
+            source_chat_id = ALLOWED_CHAT_IDS[0]
+            await sync_rasp_to_all_chats(source_chat_id)
             
             await callback.message.edit_text(
                 f"✅ Урок '{display_name}' добавлен во все чаты!\n"
@@ -2893,7 +2946,7 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # ИСПРАВЛЕНИЕ: устанавливаем кабинет для ВСЕХ чатов
+    # Устанавливаем кабинет для ВСЕХ чатов
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             for chat_id in ALLOWED_CHAT_IDS:
@@ -2913,6 +2966,10 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
                         INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, cabinet)
                         VALUES (%s, %s, %s, %s, %s)
                     """, (chat_id, data["day"], data["week_type"], data["pair_number"], cabinet))
+    
+    # Автоматическая синхронизация
+    source_chat_id = ALLOWED_CHAT_IDS[0]
+    await sync_rasp_to_all_chats(source_chat_id)
     
     await message.answer(
         f"✅ Кабинет установлен для всех чатов!\n"
@@ -2971,7 +3028,7 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("clr_pair_"):])
     data = await state.get_data()
 
-    # ИСПРАВЛЕНИЕ: очищаем пару для ВСЕХ чатов
+    # Очищаем пару для ВСЕХ чатов
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             for chat_id in ALLOWED_CHAT_IDS:
@@ -2995,6 +3052,10 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
                         INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                         VALUES (%s, %s, %s, %s, NULL, NULL)
                     """, (chat_id, data["day"], data["week_type"], pair_number))
+
+    # Автоматическая синхронизация
+    source_chat_id = ALLOWED_CHAT_IDS[0]
+    await sync_rasp_to_all_chats(source_chat_id)
 
     await callback.message.edit_text(
         f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
