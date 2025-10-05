@@ -3140,30 +3140,29 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
 
     chat_id = callback.message.chat.id
     now = datetime.datetime.now(TZ)
-    hour = now.hour
+    today = now.date()
     
-    # Определяем день для показа
-    if hour >= 18:
-        target_date = now.date() + datetime.timedelta(days=1)
-        day_to_show = target_date.isoweekday()
-        if day_to_show == 7:  # Воскресенье
-            day_to_show = 1
-            target_date += datetime.timedelta(days=1)
-            day_name = "послезавтра (Понедельник)"
-        else:
-            day_name = "завтра"
+    # Определяем день для показа (завтра)
+    target_date = today + datetime.timedelta(days=1)
+    day_to_show = target_date.isoweekday()
+    
+    # Если завтра воскресенье, показываем понедельник
+    if day_to_show == 7:
+        target_date += datetime.timedelta(days=1)
+        day_to_show = 1
+        day_name = "послезавтра (Понедельник)"
     else:
-        target_date = now.date() + datetime.timedelta(days=1)
-        day_to_show = target_date.isoweekday()
-        if day_to_show == 7:  # Если завтра воскресенье
-            day_to_show = 1
-            target_date += datetime.timedelta(days=1)
-            day_name = "послезавтра (Понедельник)"
-        else:
-            day_name = "завтра"
+        day_name = "завтра"
     
-    # Получаем четность недели
-    week_type = await get_current_week_type(pool, chat_id)
+    # Получаем текущую четность недели
+    current_week_type = await get_current_week_type(pool, chat_id)
+    
+    # Определяем четность для целевого дня
+    # Если завтра понедельник, то неделя меняется
+    if day_to_show == 1:
+        week_type = 2 if current_week_type == 1 else 1  # Меняем четность
+    else:
+        week_type = current_week_type  # Оставляем текущую четность
     
     # Получаем расписание с информацией о домашних заданиях на target_date
     text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
@@ -3179,7 +3178,11 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     }
     
     week_name = "нечетная" if week_type == 1 else "четная"
-    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
+    current_week_name = "нечетная" if current_week_type == 1 else "четная"
+    
+    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n"
+    message += f"📊 Текущая неделя: {current_week_name}\n\n"
+    message += text
     
     # Добавляем анекдот
     async with pool.acquire() as conn:
@@ -3556,11 +3559,12 @@ async def send_today_rasp():
     for chat_id in ALLOWED_CHAT_IDS:
         try:
             now = datetime.datetime.now(TZ)
+            today = now.date()
             hour = now.hour
             
             # Определяем день для публикации
             if hour >= 18:
-                target_date = now.date() + datetime.timedelta(days=1)
+                target_date = today + datetime.timedelta(days=1)
                 day_to_post = target_date.isoweekday()
                 
                 if day_to_post == 7:  # Воскресенье
@@ -3570,8 +3574,8 @@ async def send_today_rasp():
                 else:
                     day_name = "завтра"
             else:
-                target_date = now.date()
-                day_to_post = now.isoweekday()
+                target_date = today
+                day_to_post = today.isoweekday()
                 
                 if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
@@ -3580,18 +3584,21 @@ async def send_today_rasp():
                 else:
                     day_name = "сегодня"
             
-            # Получаем общую четность
-            week_type = await get_current_week_type(pool)
+            # Получаем текущую четность
+            current_week_type = await get_current_week_type(pool)
             
-            # КОРРЕКТИРОВКА: Если сегодня понедельник и публикуем на понедельник, 
-            # то используем текущую четность, иначе смотрим на завтра
-            if day_to_post == 1 and now.isoweekday() == 1 and hour < 18:
-                # Публикуем расписание на понедельник в понедельник - используем текущую четность
-                pass
-            elif day_to_post == 1 and (now.isoweekday() != 1 or hour >= 18):
-                # Публикуем на понедельник, но сегодня не понедельник (или вечер воскресенья)
-                # Значит это следующий понедельник - меняем четность
-                week_type = 2 if week_type == 1 else 1
+            # Определяем четность для целевого дня
+            # Если публикуем на понедельник и сегодня воскресенье ИЛИ сегодня понедельник до 18:00
+            if day_to_post == 1:
+                if (today.isoweekday() == 7 and hour >= 18) or (today.isoweekday() == 1 and hour < 18):
+                    # Понедельник текущей недели
+                    week_type = current_week_type
+                else:
+                    # Следующий понедельник - меняем четность
+                    week_type = 2 if current_week_type == 1 else 1
+            else:
+                # Для других дней используем текущую четность
+                week_type = current_week_type
             
             # Получаем расписание для конкретного чата
             text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
@@ -3604,12 +3611,9 @@ async def send_today_rasp():
             
             week_name = "нечетная" if week_type == 1 else "четная"
             
-            # ИСПРАВЛЕНИЕ дублирования: убираем лишнее упоминание дня
             if "(" in day_name and ")" in day_name:
-                # Если уже указан день в скобках (например "послезавтра (Понедельник)")
                 msg = f"📅 Расписание на {day_name} | Неделя: {week_name}\n\n{text}"
             else:
-                # Если просто "сегодня" или "завтра"
                 msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
             
             # Добавляем анекдот
