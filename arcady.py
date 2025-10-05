@@ -675,20 +675,50 @@ def format_duration(seconds: int) -> str:
 
 
 async def get_current_week_type(pool, chat_id: int = None) -> int:
-    """Получаем текущую четность (общую для всех чатов)"""
+    """Получаем текущую четность с автоматической сменой при наступлении понедельника"""
     # Используем фиксированный chat_id для хранения общей четности
     COMMON_CHAT_ID = 0  # Специальный ID для общей четности
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT week_type FROM current_week_type WHERE chat_id=%s", (COMMON_CHAT_ID,))
+            # Получаем текущую запись
+            await cur.execute("SELECT week_type, updated_at FROM current_week_type WHERE chat_id=%s", (COMMON_CHAT_ID,))
             row = await cur.fetchone()
+            
+            now = datetime.datetime.now(TZ)
+            today = now.date()
+            
             if row:
-                return row[0]
+                week_type, last_updated = row
+                
+                # Проверяем, нужно ли обновить четность
+                if isinstance(last_updated, datetime.datetime):
+                    last_updated_date = last_updated.date()
+                else:
+                    last_updated_date = last_updated
+                
+                # Если сегодня понедельник и последнее обновление было до этого понедельника
+                if today.isoweekday() == 1:
+                    # Находим дату последнего понедельника
+                    last_monday = today
+                    
+                    # Если последнее обновление было до этого понедельника - меняем четность
+                    if last_updated_date < last_monday:
+                        week_type = 2 if week_type == 1 else 1
+                        await cur.execute("""
+                            UPDATE current_week_type 
+                            SET week_type=%s, updated_at=%s 
+                            WHERE chat_id=%s
+                        """, (week_type, today, COMMON_CHAT_ID))
+                        print(f"✅ Автоматически переключена неделя на: {'нечетная' if week_type == 1 else 'четная'}")
+                
+                return week_type
             else:
                 # Если запись не существует, создаем по умолчанию нечетную неделю
-                await cur.execute("INSERT INTO current_week_type (chat_id, week_type) VALUES (%s, %s)", (COMMON_CHAT_ID, 1))
-                return 1
+                week_type = 1
+                await cur.execute("INSERT INTO current_week_type (chat_id, week_type, updated_at) VALUES (%s, %s, %s)", 
+                                 (COMMON_CHAT_ID, week_type, today))
+                return week_type
 
 async def set_current_week_type(pool, chat_id: int = None, week_type: int = None):
     """Устанавливаем четность недели (общую для всех чатов)"""
@@ -3154,15 +3184,8 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     else:
         day_name = "завтра"
     
-    # Получаем текущую четность недели
-    current_week_type = await get_current_week_type(pool, chat_id)
-    
-    # Определяем четность для целевого дня
-    # Если завтра понедельник, то неделя меняется
-    if day_to_show == 1:
-        week_type = 2 if current_week_type == 1 else 1  # Меняем четность
-    else:
-        week_type = current_week_type  # Оставляем текущую четность
+    # Получаем актуальную четность недели (функция сама обновит если нужно)
+    week_type = await get_current_week_type(pool, chat_id)
     
     # Получаем расписание с информацией о домашних заданиях на target_date
     text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
@@ -3178,11 +3201,8 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     }
     
     week_name = "нечетная" if week_type == 1 else "четная"
-    current_week_name = "нечетная" if current_week_type == 1 else "четная"
     
-    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n"
-    message += f"📊 Текущая неделя: {current_week_name}\n\n"
-    message += text
+    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
     
     # Добавляем анекдот
     async with pool.acquire() as conn:
@@ -3584,21 +3604,8 @@ async def send_today_rasp():
                 else:
                     day_name = "сегодня"
             
-            # Получаем текущую четность
-            current_week_type = await get_current_week_type(pool)
-            
-            # Определяем четность для целевого дня
-            # Если публикуем на понедельник и сегодня воскресенье ИЛИ сегодня понедельник до 18:00
-            if day_to_post == 1:
-                if (today.isoweekday() == 7 and hour >= 18) or (today.isoweekday() == 1 and hour < 18):
-                    # Понедельник текущей недели
-                    week_type = current_week_type
-                else:
-                    # Следующий понедельник - меняем четность
-                    week_type = 2 if current_week_type == 1 else 1
-            else:
-                # Для других дней используем текущую четность
-                week_type = current_week_type
+            # Получаем актуальную четность (функция сама обновит если нужно)
+            week_type = await get_current_week_type(pool)
             
             # Получаем расписание для конкретного чата
             text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
