@@ -918,23 +918,29 @@ async def cmd_add_birthday(message: types.Message):
         await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
         return
 
-    parts = message.text.split(maxsplit=2)
+    # Разбиваем сообщение на части
+    parts = message.text.split()
+    
     if len(parts) < 3:
         await message.answer(
             "⚠ Использование: /adddr Имя ДД.ММ.ГГГГ\n\n"
             "Пример:\n"
             "/adddr Егор 15.05.1990\n"
-            "/adddr \"Иван Иванов\" 20.12.1985"
+            "/adddr Иван_Иванов 20.12.1985"
         )
         return
 
-    name = parts[1].strip()
-    date_str = parts[2].strip()
-
-    # Если имя в кавычках, обрабатываем это
-    if name.startswith('"') and name.endswith('"'):
-        name = name[1:-1]
+    # Дата всегда последний элемент
+    date_str = parts[-1]
     
+    # Имя - это всё между командой и датой
+    name_parts = parts[1:-1]  # Все части кроме первой (команда) и последней (дата)
+    name = ' '.join(name_parts)
+    
+    if not name:
+        await message.answer("❌ Имя не может быть пустым.")
+        return
+
     try:
         # Проверяем формат даты
         birth_date = datetime.datetime.strptime(date_str, '%d.%m.%Y').date()
