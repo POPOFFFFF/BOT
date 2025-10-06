@@ -65,6 +65,14 @@ async def init_db(pool):
                 text TEXT
             )""")
             await cur.execute("""
+            CREATE TABLE IF NOT EXISTS birthdays (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_name VARCHAR(255) NOT NULL,
+                birth_date DATE NOT NULL,
+                chat_id BIGINT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""")
+            await cur.execute("""
             CREATE TABLE IF NOT EXISTS nicknames (
                 user_id BIGINT PRIMARY KEY,
                 nickname VARCHAR(255)
@@ -128,6 +136,7 @@ async def init_db(pool):
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (subject_id) REFERENCES subjects(id)
             )""")
+
             await conn.commit()
 
 async def ensure_columns(pool):
@@ -790,7 +799,9 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
-
+class AddBirthdayState(StatesGroup):
+    name = State()
+    date = State()
 class ViewMessagesState(StatesGroup):
     browsing = State()
 class SendMessageState(StatesGroup):
@@ -845,6 +856,176 @@ class EditHomeworkState(StatesGroup):
     task_text = State()
 class DeleteHomeworkState(StatesGroup):
     homework_id = State()
+
+
+async def add_birthday(pool, user_name: str, birth_date: str, added_by_user_id: int):
+    """Добавляет день рождения в базу (без привязки к чату)"""
+    try:
+        # Конвертируем дату из DD.MM.YYYY в YYYY-MM-DD для MySQL
+        birth_date_mysql = datetime.datetime.strptime(birth_date, '%d.%m.%Y').strftime('%Y-%m-%d')
+    except ValueError:
+        raise ValueError("Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                INSERT INTO birthdays (user_name, birth_date, added_by_user_id)
+                VALUES (%s, %s, %s)
+            """, (user_name, birth_date_mysql, added_by_user_id))
+
+async def get_today_birthdays(pool):
+    """Получает все дни рождения на сегодня"""
+    today = datetime.datetime.now(TZ).date().strftime('%m-%d')
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT id, user_name, birth_date
+                FROM birthdays 
+                WHERE DATE_FORMAT(birth_date, '%m-%d') = %s
+            """, (today,))
+            return await cur.fetchall()
+
+async def get_all_birthdays(pool):
+    """Получает все дни рождения"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT id, user_name, birth_date, added_by_user_id, created_at
+                FROM birthdays 
+                ORDER BY DATE_FORMAT(birth_date, '%m-%d')
+            """)
+            return await cur.fetchall()
+
+async def delete_birthday(pool, birthday_id: int):
+    """Удаляет день рождения"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM birthdays WHERE id=%s", (birthday_id,))
+
+@dp.message(Command("adddr"))
+async def cmd_add_birthday(message: types.Message, state: FSMContext):
+    """Добавление дня рождения - только админы в ЛС"""
+    # Проверяем, что это ЛС и пользователь админ
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
+        return
+
+    await message.answer(
+        "🎂 Добавление дня рождения\n\n"
+        "Введите имя человека:"
+    )
+    await state.set_state(AddBirthdayState.name)
+
+@dp.message(AddBirthdayState.name)
+async def process_birthday_name(message: types.Message, state: FSMContext):
+    # Проверяем, что это ЛС и пользователь админ
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ Эта команда доступна только администраторам")
+        await state.clear()
+        return
+
+    name = message.text.strip()
+    
+    if not name:
+        await message.answer("❌ Имя не может быть пустым. Введите имя:")
+        return
+    
+    await state.update_data(name=name)
+    
+    await message.answer(
+        f"👤 Имя: {name}\n\n"
+        "Теперь введите дату рождения в формате ДД.ММ.ГГГГ (например: 15.12.1990):"
+    )
+    await state.set_state(AddBirthdayState.date)
+
+@dp.message(AddBirthdayState.date)
+async def process_birthday_date(message: types.Message, state: FSMContext):
+    # Проверяем, что это ЛС и пользователь админ
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ Эта команда доступна только администраторам")
+        await state.clear()
+        return
+
+    date_str = message.text.strip()
+    data = await state.get_data()
+    name = data["name"]
+    
+    try:
+        # Проверяем формат даты
+        birth_date = datetime.datetime.strptime(date_str, '%d.%m.%Y').date()
+        
+        # Проверяем, что дата не в будущем
+        today = datetime.datetime.now(TZ).date()
+        if birth_date > today:
+            await message.answer("❌ Дата рождения не может быть в будущем. Введите корректную дату:")
+            return
+        
+        # Добавляем в базу (без привязки к чату)
+        await add_birthday(pool, name, date_str, message.from_user.id)
+        
+        # Вычисляем возраст
+        age = today.year - birth_date.year
+        if today.month < birth_date.month or (today.month == birth_date.month and today.day < birth_date.day):
+            age -= 1
+        
+        await message.answer(
+            f"✅ День рождения добавлен!\n\n"
+            f"👤 Имя: {name}\n"
+            f"📅 Дата рождения: {date_str}\n"
+            f"🎂 Возраст: {age} лет\n\n"
+            f"Теперь {name} будет получать поздравления автоматически во всех беседах!"
+        )
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ (например: 15.12.1990):")
+        return
+    
+    await state.clear()
+
+async def check_birthdays():
+    """Проверяет дни рождения и отправляет поздравления во все беседы"""
+    try:
+        birthdays = await get_today_birthdays(pool)
+        
+        if not birthdays:
+            print("🎂 Сегодня нет дней рождения")
+            return
+        
+        for birthday in birthdays:
+            birthday_id, user_name, birth_date = birthday
+            
+            # Вычисляем возраст
+            today = datetime.datetime.now(TZ).date()
+            birth_date_obj = birth_date if isinstance(birth_date, datetime.date) else datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
+            age = today.year - birth_date_obj.year
+            
+            # Если день рождения еще не наступил в этом году, корректируем возраст
+            if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
+                age -= 1
+            
+            # Создаем текст поздравления
+            message_text = (
+                f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
+                f"В этом году тебе исполнилось целых {age} лет!\n\n"
+                f"От сердца и почек дарю тебе цветочек 💐"
+            )
+            
+            # Отправляем поздравление во ВСЕ беседы из конфига
+            success_count = 0
+            for chat_id in ALLOWED_CHAT_IDS:
+                try:
+                    await bot.send_message(chat_id, message_text)
+                    success_count += 1
+                    print(f"✅ Отправлено поздравление для {user_name} в чат {chat_id}")
+                except Exception as e:
+                    print(f"❌ Ошибка отправки поздравления для {user_name} в чат {chat_id}: {e}")
+            
+            print(f"✅ Успешно отправлено {success_count} поздравлений для {user_name}")
+                
+    except Exception as e:
+        print(f"❌ Ошибка проверки дней рождения: {e}")
+
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
     async with pool.acquire() as conn:
@@ -3666,9 +3847,16 @@ async def main():
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
     
+    # Добавляем проверку дней рождения каждый день в 9:00 утра
+    scheduler.add_job(
+        check_birthdays,
+        CronTrigger(hour=6, minute=0, timezone=TZ),
+        id="birthday_check"
+    )
+
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
-    
+
     scheduler.start()
     print("Планировщик запущен")
     
