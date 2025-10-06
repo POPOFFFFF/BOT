@@ -69,7 +69,7 @@ async def init_db(pool):
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_name VARCHAR(255) NOT NULL,
                 birth_date DATE NOT NULL,
-                chat_id BIGINT,
+                added_by_user_id BIGINT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""")
             await cur.execute("""
@@ -147,7 +147,17 @@ async def ensure_columns(pool):
             if not row:
                 await cur.execute("ALTER TABLE week_setting ADD COLUMN set_at DATE")
 
-# Добавьте эту функцию после других функций работы с базой данных, например после ensure_columns:
+async def ensure_birthday_columns(pool):
+    """Добавляет недостающие колонки в таблицу birthdays"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Проверяем наличие колонки added_by_user_id
+            await cur.execute("SHOW COLUMNS FROM birthdays LIKE 'added_by_user_id'")
+            row = await cur.fetchone()
+            if not row:
+                await cur.execute("ALTER TABLE birthdays ADD COLUMN added_by_user_id BIGINT")
+                print("✅ Добавлена колонка added_by_user_id в таблицу birthdays")
+
 
 async def sync_rasp_to_all_chats(source_chat_id: int):
     """Синхронизирует расписание из исходного чата во все остальные"""
@@ -799,9 +809,6 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
-class AddBirthdayState(StatesGroup):
-    name = State()
-    date = State()
 class ViewMessagesState(StatesGroup):
     browsing = State()
 class SendMessageState(StatesGroup):
@@ -904,52 +911,29 @@ async def delete_birthday(pool, birthday_id: int):
             await cur.execute("DELETE FROM birthdays WHERE id=%s", (birthday_id,))
 
 @dp.message(Command("adddr"))
-async def cmd_add_birthday(message: types.Message, state: FSMContext):
-    """Добавление дня рождения - только админы в ЛС"""
+async def cmd_add_birthday(message: types.Message):
+    """Добавление дня рождения - только админы в ЛС (формат: /adddr Имя ДД.ММ.ГГГГ)"""
     # Проверяем, что это ЛС и пользователь админ
     if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
         return
 
-    await message.answer(
-        "🎂 Добавление дня рождения\n\n"
-        "Введите имя человека:"
-    )
-    await state.set_state(AddBirthdayState.name)
-
-@dp.message(AddBirthdayState.name)
-async def process_birthday_name(message: types.Message, state: FSMContext):
-    # Проверяем, что это ЛС и пользователь админ
-    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ Эта команда доступна только администраторам")
-        await state.clear()
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(
+            "⚠ Использование: /adddr Имя ДД.ММ.ГГГГ\n\n"
+            "Пример:\n"
+            "/adddr Егор 15.05.1990\n"
+            "/adddr \"Иван Иванов\" 20.12.1985"
+        )
         return
 
-    name = message.text.strip()
-    
-    if not name:
-        await message.answer("❌ Имя не может быть пустым. Введите имя:")
-        return
-    
-    await state.update_data(name=name)
-    
-    await message.answer(
-        f"👤 Имя: {name}\n\n"
-        "Теперь введите дату рождения в формате ДД.ММ.ГГГГ (например: 15.12.1990):"
-    )
-    await state.set_state(AddBirthdayState.date)
+    name = parts[1].strip()
+    date_str = parts[2].strip()
 
-@dp.message(AddBirthdayState.date)
-async def process_birthday_date(message: types.Message, state: FSMContext):
-    # Проверяем, что это ЛС и пользователь админ
-    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ Эта команда доступна только администраторам")
-        await state.clear()
-        return
-
-    date_str = message.text.strip()
-    data = await state.get_data()
-    name = data["name"]
+    # Если имя в кавычках, обрабатываем это
+    if name.startswith('"') and name.endswith('"'):
+        name = name[1:-1]
     
     try:
         # Проверяем формат даты
@@ -958,10 +942,10 @@ async def process_birthday_date(message: types.Message, state: FSMContext):
         # Проверяем, что дата не в будущем
         today = datetime.datetime.now(TZ).date()
         if birth_date > today:
-            await message.answer("❌ Дата рождения не может быть в будущем. Введите корректную дату:")
+            await message.answer("❌ Дата рождения не может быть в будущем.")
             return
         
-        # Добавляем в базу (без привязки к чату)
+        # Добавляем в базу
         await add_birthday(pool, name, date_str, message.from_user.id)
         
         # Вычисляем возраст
@@ -978,10 +962,12 @@ async def process_birthday_date(message: types.Message, state: FSMContext):
         )
         
     except ValueError:
-        await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ (например: 15.12.1990):")
-        return
-    
-    await state.clear()
+        await message.answer(
+            "❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ\n\n"
+            "Пример: /adddr Егор 15.05.1990"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении: {e}")
 
 async def check_birthdays():
     """Проверяет дни рождения и отправляет поздравления во все беседы"""
@@ -3839,24 +3825,82 @@ async def sync_week_all_chats(message: types.Message):
         await message.answer(f"❌ Ошибка синхронизации: {e}")
 
 
+@dp.message(Command("listdr"))
+async def cmd_list_birthdays(message: types.Message):
+    """Показывает список всех дней рождения - только админы в ЛС"""
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
+        return
+
+    birthdays = await get_all_birthdays(pool)
+    
+    if not birthdays:
+        await message.answer("📅 В базе нет добавленных дней рождения.")
+        return
+    
+    today = datetime.datetime.now(TZ).date()
+    birthday_list = "📅 Все дни рождения в базе:\n\n"
+    
+    for bday in birthdays:
+        bday_id, name, birth_date, added_by, created_at = bday
+        
+        birth_date_obj = birth_date if isinstance(birth_date, datetime.date) else datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
+        
+        # Вычисляем возраст
+        age = today.year - birth_date_obj.year
+        if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
+            age -= 1
+        
+        # Форматируем дату
+        birth_date_str = birth_date_obj.strftime("%d.%m.%Y")
+        
+        # Отмечаем, если день рождения сегодня
+        today_str = today.strftime("%m-%d")
+        bday_str = birth_date_obj.strftime("%m-%d")
+        today_flag = " 🎉 СЕГОДНЯ!" if today_str == bday_str else ""
+        
+        birthday_list += f"👤 {name}{today_flag}\n"
+        birthday_list += f"📅 {birth_date_str} (возраст: {age} лет)\n"
+        birthday_list += f"🆔 ID: {bday_id}\n"
+        birthday_list += "─" * 30 + "\n"
+    
+    await message.answer(birthday_list)
+
+@dp.message(Command("deldr"))
+async def cmd_delete_birthday(message: types.Message):
+    """Удаление дня рождения - только админы в ЛС"""
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠ Использование: /deldr <id>\n\nИдентификатор можно посмотреть в /listdr")
+        return
+    
+    try:
+        birthday_id = int(parts[1])
+        await delete_birthday(pool, birthday_id)
+        await message.answer(f"✅ День рождения с ID {birthday_id} удален")
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Используйте цифры.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при удалении: {e}")
+
+
 async def main():
     global pool
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
+    await ensure_birthday_columns(pool)  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
+    
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
     
-    # Добавляем проверку дней рождения каждый день в 9:00 утра
-    scheduler.add_job(
-        check_birthdays,
-        CronTrigger(hour=6, minute=0, timezone=TZ),
-        id="birthday_check"
-    )
-
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
-
+    
     scheduler.start()
     print("Планировщик запущен")
     
