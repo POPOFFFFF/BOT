@@ -3865,12 +3865,112 @@ async def cmd_list_birthdays(message: types.Message):
         bday_str = birth_date_obj.strftime("%m-%d")
         today_flag = " 🎉 СЕГОДНЯ!" if today_str == bday_str else ""
         
+        birthday_list += f"🆔 ID: {bday_id}\n"
         birthday_list += f"👤 {name}{today_flag}\n"
         birthday_list += f"📅 {birth_date_str} (возраст: {age} лет)\n"
-        birthday_list += f"🆔 ID: {bday_id}\n"
         birthday_list += "─" * 30 + "\n"
     
+    birthday_list += f"\n💡 Для теста используйте: /testdr <ID>"
+    
     await message.answer(birthday_list)
+
+async def get_birthday_by_id(pool, birthday_id: int):
+    """Получает день рождения по ID"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT id, user_name, birth_date, added_by_user_id, created_at
+                FROM birthdays 
+                WHERE id = %s
+            """, (birthday_id,))
+            return await cur.fetchone()
+
+
+@dp.message(Command("testdr"))
+async def cmd_test_birthday(message: types.Message):
+    """Тестирование отправки поздравления по ID из базы - только админы в ЛС"""
+    if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "⚠ Использование: /testdr <ID_из_базы>\n\n"
+            "Сначала посмотрите ID в /listdr\n\n"
+            "Пример:\n"
+            "/testdr 1\n"
+            "/testdr 5"
+        )
+        return
+
+    try:
+        birthday_id = int(parts[1].strip())
+        
+        # Получаем данные о дне рождения из базы
+        birthday_data = await get_birthday_by_id(pool, birthday_id)
+        if not birthday_data:
+            await message.answer(f"❌ День рождения с ID {birthday_id} не найден в базе.\nИспользуйте /listdr чтобы посмотреть все ID.")
+            return
+
+        bday_id, user_name, birth_date, added_by, created_at = birthday_data
+        
+        # Вычисляем возраст
+        today = datetime.datetime.now(TZ).date()
+        birth_date_obj = birth_date if isinstance(birth_date, datetime.date) else datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
+        age = today.year - birth_date_obj.year
+        if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
+            age -= 1
+
+        # Создаем текст поздравления (точно такой же как в автоматической отправке)
+        message_text = (
+            f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
+            f"В этом году тебе исполнилось целых {age} лет!\n\n"
+            f"От сердца и почек дарю тебе цветочек 💐"
+        )
+
+        # Отправляем поздравление во ВСЕ беседы из конфига
+        success_count = 0
+        failed_chats = []
+
+        await message.answer(f"🔄 Отправляю тестовое поздравление для {user_name}...")
+
+        for chat_id in ALLOWED_CHAT_IDS:
+            try:
+                await bot.send_message(chat_id, message_text)
+                success_count += 1
+                print(f"✅ Тестовое поздравление для {user_name} отправлено в чат {chat_id}")
+            except Exception as e:
+                failed_chats.append(f"{chat_id}: {e}")
+                print(f"❌ Ошибка отправки тестового поздравления для {user_name} в чат {chat_id}: {e}")
+
+        # Формируем отчет
+        report = f"✅ Тестовое поздравление отправлено!\n\n"
+        report += f"👤 Имя: {user_name}\n"
+        report += f"📅 Дата рождения: {birth_date_obj.strftime('%d.%m.%Y')}\n"
+        report += f"🎂 Возраст: {age} лет\n"
+        report += f"🆔 ID в базе: {birthday_id}\n\n"
+        report += f"📊 Статистика отправки:\n"
+        report += f"✅ Успешно: {success_count} из {len(ALLOWED_CHAT_IDS)} чатов\n"
+
+        if failed_chats:
+            report += f"❌ Ошибки: {len(failed_chats)} чатов\n\n"
+            report += "Чаты с ошибками:\n"
+            for i, error in enumerate(failed_chats[:3], 1):
+                report += f"{i}. {error}\n"
+            if len(failed_chats) > 3:
+                report += f"... и еще {len(failed_chats) - 3} ошибок"
+
+        await message.answer(report)
+
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Используйте цифры.\n\nПример: /testdr 1")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при тестировании: {e}")
+
+
+
+
 
 @dp.message(Command("deldr"))
 async def cmd_delete_birthday(message: types.Message):
