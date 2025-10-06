@@ -3885,7 +3885,7 @@ async def get_birthday_by_id(pool, birthday_id: int):
             """, (birthday_id,))
             return await cur.fetchone()
 
-
+'''
 @dp.message(Command("testdr"))
 async def cmd_test_birthday(message: types.Message):
     """Тестирование отправки поздравления по ID из базы - только админы в ЛС"""
@@ -3968,7 +3968,7 @@ async def cmd_test_birthday(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при тестировании: {e}")
 
-
+'''
 
 
 
