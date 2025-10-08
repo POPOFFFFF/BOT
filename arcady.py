@@ -3999,13 +3999,20 @@ async def main():
     pool = await get_pool()
     await init_db(pool)
     await ensure_columns(pool)
-    await ensure_birthday_columns(pool)  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
+    await ensure_birthday_columns(pool)
     
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
     
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
+    
+    # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
+    scheduler.add_job(
+        check_birthdays, 
+        CronTrigger(hour=7, minute=0, timezone=TZ), 
+        id="birthday_check"
+    )
     
     scheduler.start()
     print("Планировщик запущен")
@@ -4017,6 +4024,5 @@ async def main():
         print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
     
     await dp.start_polling(bot)
-
 if __name__ == "__main__":
     asyncio.run(main())
