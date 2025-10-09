@@ -882,7 +882,10 @@ async def add_birthday(pool, user_name: str, birth_date: str, added_by_user_id: 
 
 async def get_today_birthdays(pool):
     """Получает все дни рождения на сегодня"""
-    today = datetime.datetime.now(TZ).date().strftime('%m-%d')
+    today = datetime.datetime.now(TZ).date()
+    today_str = today.strftime('%m-%d')  # Формат для сравнения
+    
+    print(f"🔍 Проверяем дни рождения на дату: {today_str}")
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -890,8 +893,14 @@ async def get_today_birthdays(pool):
                 SELECT id, user_name, birth_date
                 FROM birthdays 
                 WHERE DATE_FORMAT(birth_date, '%m-%d') = %s
-            """, (today,))
-            return await cur.fetchall()
+            """, (today_str,))
+            results = await cur.fetchall()
+            
+            print(f"📅 Найдено дней рождений: {len(results)}")
+            for result in results:
+                print(f"  - {result[1]}: {result[2]}")
+            
+            return results
 
 async def get_all_birthdays(pool):
     """Получает все дни рождения"""
@@ -978,14 +987,20 @@ async def cmd_add_birthday(message: types.Message):
 async def check_birthdays():
     """Проверяет дни рождения и отправляет поздравления во все беседы"""
     try:
+        print("🎂 Запуск проверки дней рождения...")
         birthdays = await get_today_birthdays(pool)
         
         if not birthdays:
             print("🎂 Сегодня нет дней рождения")
             return
         
+        print(f"🎂 Найдено {len(birthdays)} дней рождений для поздравления")
+        
         for birthday in birthdays:
             birthday_id, user_name, birth_date = birthday
+            
+            # Детальное логирование
+            print(f"🎂 Обрабатываем: {user_name}, дата: {birth_date}")
             
             # Вычисляем возраст
             today = datetime.datetime.now(TZ).date()
@@ -995,6 +1010,8 @@ async def check_birthdays():
             # Если день рождения еще не наступил в этом году, корректируем возраст
             if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
                 age -= 1
+            
+            print(f"🎂 {user_name} исполняется {age} лет")
             
             # Создаем текст поздравления
             message_text = (
@@ -1016,7 +1033,7 @@ async def check_birthdays():
             print(f"✅ Успешно отправлено {success_count} поздравлений для {user_name}")
                 
     except Exception as e:
-        print(f"❌ Ошибка проверки дней рождения: {e}")
+        print(f"❌ Критическая ошибка проверки дней рождения: {e}")
 
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
@@ -3993,6 +4010,16 @@ async def cmd_delete_birthday(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при удалении: {e}")
 
+@dp.message(Command("force_birthday_check"))
+async def cmd_force_birthday_check(message: types.Message):
+    """Принудительная проверка дней рождения - для тестирования"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    await message.answer("🔄 Принудительная проверка дней рождения...")
+    await check_birthdays()
+    await message.answer("✅ Проверка завершена")
+
 
 async def main():
     global pool
@@ -4010,10 +4037,10 @@ async def main():
     # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
     scheduler.add_job(
         check_birthdays, 
-        CronTrigger(hour=7, minute=0, timezone=TZ), 
+        CronTrigger(hour=7, minute=0, timezone=TZ),  # 9:00 утра по Омску
         id="birthday_check"
     )
-    
+        
     scheduler.start()
     print("Планировщик запущен")
     
