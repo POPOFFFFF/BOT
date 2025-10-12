@@ -695,8 +695,7 @@ def format_duration(seconds: int) -> str:
 
 async def get_current_week_type(pool, chat_id: int = None) -> int:
     """Получаем текущую четность с автоматической сменой при наступлении понедельника"""
-    # Используем фиксированный chat_id для хранения общей четности
-    COMMON_CHAT_ID = 0  # Специальный ID для общей четности
+    COMMON_CHAT_ID = 0
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -706,23 +705,26 @@ async def get_current_week_type(pool, chat_id: int = None) -> int:
             
             now = datetime.datetime.now(TZ)
             today = now.date()
+            current_weekday = today.isoweekday()  # 1-понедельник, 7-воскресенье
             
             if row:
                 week_type, last_updated = row
                 
-                # Проверяем, нужно ли обновить четность
+                # Конвертируем last_updated в date если нужно
                 if isinstance(last_updated, datetime.datetime):
                     last_updated_date = last_updated.date()
                 else:
                     last_updated_date = last_updated
                 
-                # Если сегодня понедельник и последнее обновление было до этого понедельника
-                if today.isoweekday() == 1:
-                    # Находим дату последнего понедельника
-                    last_monday = today
+                # Логика смены четности:
+                # - Если сегодня понедельник И последнее обновление было ДО этого понедельника
+                # - ИЛИ если запись очень старая (больше 8 дней)
+                if current_weekday == 1:
+                    # Находим дату этого понедельника
+                    this_monday = today
                     
                     # Если последнее обновление было до этого понедельника - меняем четность
-                    if last_updated_date < last_monday:
+                    if last_updated_date < this_monday:
                         week_type = 2 if week_type == 1 else 1
                         await cur.execute("""
                             UPDATE current_week_type 
@@ -731,10 +733,26 @@ async def get_current_week_type(pool, chat_id: int = None) -> int:
                         """, (week_type, today, COMMON_CHAT_ID))
                         print(f"✅ Автоматически переключена неделя на: {'нечетная' if week_type == 1 else 'четная'}")
                 
+                # Дополнительная проверка: если запись очень старая
+                days_since_update = (today - last_updated_date).days
+                if days_since_update >= 8:
+                    week_type = 2 if week_type == 1 else 1
+                    await cur.execute("""
+                        UPDATE current_week_type 
+                        SET week_type=%s, updated_at=%s 
+                        WHERE chat_id=%s
+                    """, (week_type, today, COMMON_CHAT_ID))
+                    print(f"✅ Принудительно переключена неделя (старая запись): {'нечетная' if week_type == 1 else 'четная'}")
+                
                 return week_type
             else:
-                # Если запись не существует, создаем по умолчанию нечетную неделю
-                week_type = 1
+                # Если запись не существует, создаем
+                # Определяем начальную четность по текущему дню недели
+                if current_weekday == 1:  # Понедельник
+                    week_type = 1  # Начинаем с нечетной
+                else:
+                    week_type = 1  # По умолчанию нечетная
+                    
                 await cur.execute("INSERT INTO current_week_type (chat_id, week_type, updated_at) VALUES (%s, %s, %s)", 
                                  (COMMON_CHAT_ID, week_type, today))
                 return week_type
