@@ -2184,128 +2184,6 @@ async def process_confirm_delete_homework(callback: types.CallbackQuery):
     
     await callback.answer()
 
-@dp.callback_query(F.data == "today_rasp")
-async def today_rasp_handler(callback: types.CallbackQuery):
-    if not is_allowed_chat(callback.message.chat.id):
-        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
-        return
-    
-    chat_id = callback.message.chat.id
-    now = datetime.datetime.now(TZ)
-    target_date = now.date()
-    day_to_show = now.isoweekday()
-    
-    # Если сегодня воскресенье, показываем понедельник
-    if day_to_show == 7:
-        target_date += datetime.timedelta(days=1)
-        day_to_show = 1
-        day_name = "завтра (Понедельник)"
-    else:
-        day_name = "сегодня"
-    
-    # Получаем базовую четность недели
-    base_week_type = await get_current_week_type(pool, chat_id)
-    
-    # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕГОДНЯ ВОСКРЕСЕНЬЕ - МЕНЯЕМ ЧЕТНОСТЬ
-    if day_to_show == 1 and now.isoweekday() == 7:
-        week_type = 2 if base_week_type == 1 else 1
-        week_name = "нечетная" if week_type == 1 else "четная"
-        day_note = " (неделя сменилась)"
-    else:
-        week_type = base_week_type
-        week_name = "нечетная" if week_type == 1 else "четная"
-        day_note = ""
-    
-    # Получаем расписание с информацией о домашних заданиях на target_date
-    text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
-    
-    # Формируем сообщение
-    day_names = {
-        1: "Понедельник", 2: "Вторник", 3: "Среда",
-        4: "Четверг", 5: "Пятница", 6: "Суббота"
-    }
-    
-    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}{day_note}\n\n{text}"
-    
-    # Добавляем анекдот
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-            row = await cur.fetchone()
-            if row:
-                message += f"\n\n😂 Анекдот:\n{row[0]}"
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
-    ])
-    
-    await callback.message.edit_text(message, reply_markup=kb)
-    await callback.answer()
-
-@dp.callback_query(F.data == "tomorrow_rasp")
-async def tomorrow_rasp_handler(callback: types.CallbackQuery):
-    is_private = callback.message.chat.type == "private"
-    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-    
-    if not (is_private or is_allowed_chat):
-        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
-        return
-
-    chat_id = callback.message.chat.id
-    now = datetime.datetime.now(TZ)
-    today = now.date()
-    
-    # Определяем день для показа (завтра)
-    target_date = today + datetime.timedelta(days=1)
-    day_to_show = target_date.isoweekday()
-    
-    # Если завтра воскресенье, показываем понедельник
-    if day_to_show == 7:
-        target_date += datetime.timedelta(days=1)
-        day_to_show = 1
-        day_name = "послезавтра (Понедельник)"
-    else:
-        day_name = "завтра"
-    
-    # Получаем базовую четность недели
-    base_week_type = await get_current_week_type(pool, chat_id)
-    
-    # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И ЗАВТРА ВОСКРЕСЕНЬЕ (т.е. сегодня суббота) - МЕНЯЕМ ЧЕТНОСТЬ
-    if day_to_show == 1 and (today + datetime.timedelta(days=1)).isoweekday() == 7:
-        week_type = 2 if base_week_type == 1 else 1
-        week_name = "нечетная" if week_type == 1 else "четная"
-        day_note = " (неделя сменится)"
-    else:
-        week_type = base_week_type
-        week_name = "нечетная" if week_type == 1 else "четная"
-        day_note = ""
-    
-    # Получаем расписание с информацией о домашних заданиях на target_date
-    text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
-    
-    # Формируем сообщение
-    day_names = {
-        1: "Понедельник", 2: "Вторник", 3: "Среда",
-        4: "Четверг", 5: "Пятница", 6: "Суббота"
-    }
-    
-    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}{day_note}\n\n{text}"
-    
-    # Добавляем анекдот
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-            row = await cur.fetchone()
-            if row:
-                message += f"\n\n😂 Анекдот:\n{row[0]}"
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
-    ])
-    
-    await callback.message.edit_text(message, reply_markup=kb)
-    await callback.answer()
-
 
 
 @dp.callback_query(F.data == "admin_add_lesson")
@@ -3326,6 +3204,74 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
         result += "\n\n📚 Есть заданное домашнее задание"
     
     return result
+
+async def send_today_rasp():
+    for chat_id in ALLOWED_CHAT_IDS:
+        try:
+            now = datetime.datetime.now(TZ)
+            today = now.date()
+            current_weekday = today.isoweekday()
+            hour = now.hour
+            
+            # Определяем день для публикации
+            if hour >= 18:
+                target_date = today + datetime.timedelta(days=1)
+                day_to_post = target_date.isoweekday()
+                
+                if day_to_post == 7:  # Воскресенье
+                    target_date += datetime.timedelta(days=1)
+                    day_to_post = 1
+                    day_name = "послезавтра (Понедельник)"
+                else:
+                    day_name = "завтра"
+            else:
+                target_date = today
+                day_to_post = current_weekday
+                
+                if day_to_post == 7:  # Воскресенье
+                    target_date += datetime.timedelta(days=1)
+                    day_to_post = 1
+                    day_name = "завтра (Понедельник)"
+                else:
+                    day_name = "сегодня"
+            
+            # ПОЛУЧАЕМ АКТУАЛЬНУЮ ЧЕТНОСТЬ
+            week_type = await get_current_week_type(pool)
+            
+            # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - ИСПОЛЬЗУЕМ ПРОТИВОПОЛОЖНУЮ ЧЕТНОСТЬ
+            if day_to_post == 1 and (current_weekday == 7 or (hour >= 18 and (today + datetime.timedelta(days=1)).isoweekday() == 7)):
+                week_type = 2 if week_type == 1 else 1
+            
+            # Получаем расписание
+            text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
+            
+            # Формируем сообщение
+            day_names = {
+                1: "Понедельник", 2: "Вторник", 3: "Среда",
+                4: "Четверг", 5: "Пятница", 6: "Суббота"
+            }
+            
+            week_name = "нечетная" if week_type == 1 else "четная"
+            
+            if "(" in day_name and ")" in day_name:
+                msg = f"📅 Расписание на {day_name} | Неделя: {week_name}\n\n{text}"
+            else:
+                msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
+            
+            # Добавляем анекдот
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+                    row = await cur.fetchone()
+                    if row:
+                        msg += f"\n\n😂 Анекдот:\n{row[0]}"
+            
+            await bot.send_message(chat_id, msg)
+            
+        except Exception as e:
+            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
+
+
 
 
 def _job_id_for_time(hour: int, minute: int) -> str:
