@@ -243,31 +243,14 @@ async def upload_to_google_drive(file_path):
             print(f"❌ Ошибка создания сервиса: {e}")
             return False
         
-        # Подготавливаем метаданные
+        # Подготавливаем метаданные - БЕЗ ПАПКИ для теста
         file_name = os.path.basename(file_path)
         file_metadata = {
             'name': file_name,
             'mimeType': 'application/sql'
         }
         
-        # Добавляем папку если указана
-        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-        if folder_id:
-            print(f"📁 Загружаем в папку: {folder_id}")
-            file_metadata['parents'] = [folder_id]
-            
-            # Проверяем доступность папки
-            try:
-                folder = service.files().get(fileId=folder_id, fields='id, name').execute()
-                print(f"✅ Папка найдена: {folder.get('name')}")
-            except Exception as e:
-                print(f"❌ Ошибка доступа к папке {folder_id}: {e}")
-                return False
-        else:
-            print("📁 Загружаем в корневую папку")
-        
-        # Загружаем файл
-        print(f"📤 Начинаем загрузку файла: {file_name}")
+        print(f"📤 Загружаем файл в корневую папку: {file_name}")
         try:
             media = MediaFileUpload(file_path, resumable=True)
             print("✅ Media объект создан")
@@ -275,7 +258,7 @@ async def upload_to_google_drive(file_path):
             request = service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id, name, webViewLink, parents'
+                fields='id, name, webViewLink'
             )
             
             print("🔄 Выполняем запрос...")
@@ -303,6 +286,46 @@ async def upload_to_google_drive(file_path):
         import traceback
         print(f"🔍 Детали: {traceback.format_exc()}")
         return False
+
+@dp.message(Command("test_no_folder"))
+async def cmd_test_no_folder(message: types.Message):
+    """Тестирование загрузки без указания папки"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Тестируем загрузку в корневую папку...")
+    
+    # Создаем тестовый файл
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("Test file for Google Drive - root folder\n")
+            f.write(f"Created: {datetime.datetime.now(TZ)}\n")
+            test_file_path = f.name
+        
+        # Временно убираем ID папки
+        original_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+        if original_folder_id:
+            os.environ.pop('GOOGLE_DRIVE_FOLDER_ID', None)
+            print("🔧 Временно убрали GOOGLE_DRIVE_FOLDER_ID")
+        
+        # Пробуем загрузить
+        success = await upload_to_google_drive(test_file_path)
+        
+        # Восстанавливаем ID папки
+        if original_folder_id:
+            os.environ['GOOGLE_DRIVE_FOLDER_ID'] = original_folder_id
+        
+        # Удаляем временный файл
+        os.unlink(test_file_path)
+        
+        if success:
+            await message.answer("✅ Загрузка в корневую папку работает! Проверь корневую папку Google Drive")
+        else:
+            await message.answer("❌ Загрузка в корневую папку тоже не работает")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("check_folder"))
 async def cmd_check_folder(message: types.Message):
