@@ -492,54 +492,206 @@ async def copy_sql_to_existing_txt():
         print(f"🔍 Детали: {traceback.format_exc()}")
         return False
 
-@dp.message(Command("test_drive_access"))
-async def cmd_test_drive_access(message: types.Message):
-    """Тестирование доступа к Google Drive"""
+@dp.message(Command("check_drive_info"))
+async def cmd_check_drive_info(message: types.Message):
+    """Проверяем информацию о сервисном аккаунте и доступных email"""
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для этой команды")
         return
     
-    await message.answer("🔍 Тестируем доступ к Google Drive...")
+    await message.answer("🔍 Проверяем информацию о Google Drive...")
     
     try:
-        # Получаем credentials
         credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
         if not credentials_json:
             await message.answer("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
             return
         
         creds_data = json.loads(credentials_json)
-        user_email = "joespeen131@gmail.com"
+        
+        # Показываем информацию о сервисном аккаунте
+        client_email = creds_data.get('client_email', 'Не найден')
+        project_id = creds_data.get('project_id', 'Не найден')
+        
+        info_text = (
+            f"🔐 **Информация о сервисном аккаунте:**\n"
+            f"📧 Client Email: `{client_email}`\n"
+            f"🏢 Project ID: `{project_id}`\n\n"
+            f"💡 **Для делегирования прав нужно использовать email:**\n"
+            f"`{client_email}`\n\n"
+            f"📋 **Действия:**\n"
+            f"1. Откройте файл на Google Drive\n"
+            f"2. Нажмите 'Настройки доступа'\n"
+            f"3. Добавьте email выше с правами 'Редактор'"
+        )
+        
+        await message.answer(info_text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+@dp.message(Command("fix_drive_access"))
+async def cmd_fix_drive_access(message: types.Message):
+    """Исправляем доступ к Google Drive с правильным email"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔧 Исправляем доступ к Google Drive...")
+    
+    try:
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            await message.answer("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return
+        
+        creds_data = json.loads(credentials_json)
+        client_email = creds_data.get('client_email')
+        
+        if not client_email:
+            await message.answer("❌ Не удалось получить client_email из credentials")
+            return
+        
+        # Используем правильный email (client_email самого сервисного аккаунта)
         SCOPES = ['https://www.googleapis.com/auth/drive']
         
         creds = service_account.Credentials.from_service_account_info(
             creds_data, 
-            scopes=SCOPES,
-            subject=user_email
+            scopes=SCOPES
+            # Убираем subject - используем сервисный аккаунт напрямую
         )
         
         service = build('drive', 'v3', credentials=creds)
         
-        # Пробуем получить информацию о корневой папке
-        results = service.files().list(
-            pageSize=10,
-            fields="files(id, name, mimeType)"
+        # Пробуем создать тестовый файл
+        file_metadata = {
+            'name': f'test_file_{datetime.datetime.now(TZ).strftime("%Y%m%d_%H%M%S")}.txt',
+            'mimeType': 'text/plain'
+        }
+        
+        media = MediaFileUpload(
+            io.BytesIO(b"Test content from Arcady Bot"), 
+            mimetype='text/plain'
+        )
+        
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, name, webViewLink'
         ).execute()
         
-        files = results.get('files', [])
+        await message.answer(
+            f"✅ Доступ работает!\n"
+            f"📄 Создан тестовый файл: {file.get('name')}\n"
+            f"🔗 Ссылка: {file.get('webViewLink')}\n\n"
+            f"💡 **Используемый email:** `{client_email}`\n"
+            f"Добавьте этот email с правами редактора к вашему TXT файлу"
+        )
         
-        if not files:
-            await message.answer("✅ Доступ есть, но файлов не найдено")
-        else:
-            file_list = "📁 Файлы на Google Drive:\n"
-            for file in files:
-                file_list += f"- {file['name']} ({file['mimeType']})\n"
-            
-            await message.answer(file_list)
-            
     except Exception as e:
-        await message.answer(f"❌ Ошибка доступа к Google Drive: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
 
+# Обновленная функция для бэкапа (исправленная версия)
+async def copy_sql_to_existing_txt_fixed():
+    """Исправленная версия - копирует SQL бэкап в существующий TXT файл"""
+    try:
+        print("🔄 Копируем SQL бэкап в существующий TXT файл (исправленная версия)...")
+        
+        # 1. Создаем SQL бэкап
+        sql_backup_path = await create_database_backup()
+        if not sql_backup_path:
+            print("❌ Не удалось создать SQL бэкап")
+            return False
+        
+        # 2. ID файла (замените на реальный)
+        existing_txt_file_id = "1VEt3C726q37cJqoRzjAVjymO32R6lUmr"
+        
+        if existing_txt_file_id == "1VEt3C726q37cJqoRzjAVjymO32R6lUmr":
+            print("❌ Не указан реальный ID TXT файла")
+            return False
+        
+        # 3. Настраиваем доступ
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            print("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return False
+        
+        creds_data = json.loads(credentials_json)
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        
+        # Используем сервисный аккаунт напрямую (без делегирования)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_data, 
+            scopes=SCOPES
+        )
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # 4. Проверяем доступ к файлу
+        try:
+            file_info = service.files().get(
+                fileId=existing_txt_file_id,
+                fields='id, name, mimeType'
+            ).execute()
+            print(f"✅ Файл найден: {file_info.get('name')}")
+        except Exception as e:
+            print(f"❌ Ошибка доступа к файлу: {e}")
+            return False
+        
+        # 5. Читаем SQL и создаем временный файл
+        with open(sql_backup_path, 'r', encoding='utf-8') as f:
+            sql_content = f.read()
+        
+        new_content = f"""=== АВТОМАТИЧЕСКИЙ БЭКАП БАЗЫ ДАННЫХ ===
+Дата обновления: {datetime.datetime.now(TZ)}
+Файл обновлен ботом Arcady
+
+{sql_content}
+"""
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(new_content)
+            temp_txt_path = f.name
+        
+        # 6. Обновляем файл
+        media = MediaFileUpload(temp_txt_path, mimetype='text/plain')
+        
+        updated_file = service.files().update(
+            fileId=existing_txt_file_id,
+            media_body=media,
+            fields='id, name, modifiedTime, size'
+        ).execute()
+        
+        print(f"✅ Файл обновлен: {updated_file.get('name')}")
+        print(f"📏 Размер: {updated_file.get('size', 'N/A')} bytes")
+        
+        # 7. Чистим временные файлы
+        os.unlink(sql_backup_path)
+        os.unlink(temp_txt_path)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        import traceback
+        print(f"🔍 Детали: {traceback.format_exc()}")
+        return False
+
+@dp.message(Command("update_backup_fixed"))
+async def cmd_update_backup_fixed(message: types.Message):
+    """Обновляет TXT файл исправленной версией"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Обновляю TXT файл (исправленная версия)...")
+    
+    success = await copy_sql_to_existing_txt_fixed()
+    
+    if success:
+        await message.answer("✅ TXT файл успешно обновлен!")
+    else:
+        await message.answer("❌ Не удалось обновить TXT файл")
 @dp.message(Command("update_backup"))
 async def cmd_update_backup(message: types.Message):
     """Обновляет существующий TXT файл новым бэкапом"""
