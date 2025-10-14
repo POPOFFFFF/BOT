@@ -257,6 +257,45 @@ async def upload_to_google_drive(file_path):
         print(f"❌ Ошибка загрузки на Google Drive: {e}")
         return False
 
+@dp.message(Command("check_setup"))
+async def cmd_check_setup(message: types.Message):
+    """Проверка всей настройки"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    response = "🔍 Проверка настройки бэкапа:\n\n"
+    
+    # Проверка credentials
+    credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+    credentials_file = os.getenv("GOOGLE_DRIVE_CREDENTIALS_FILE", "credentials.json")
+    
+    if credentials_json:
+        response += "1. Credentials: ✅ из переменных окружения\n"
+        try:
+            creds_data = json.loads(credentials_json)
+            email = creds_data.get('client_email', 'Не найден')
+            response += f"   📧 Email: {email}\n"
+        except:
+            response += "   ❌ Ошибка парсинга JSON\n"
+    elif os.path.exists(credentials_file):
+        response += f"1. Credentials: ✅ из файла {credentials_file}\n"
+        try:
+            with open(credentials_file, 'r') as f:
+                creds_data = json.load(f)
+            email = creds_data.get('client_email', 'Не найден')
+            response += f"   📧 Email: {email}\n"
+        except:
+            response += "   ❌ Ошибка чтения файла\n"
+    else:
+        response += "1. Credentials: ❌ не настроены\n"
+    
+    # Проверка папки
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    response += f"\n2. ID папки: {folder_id if folder_id else 'Не указан'}\n"
+    
+    await message.answer(response)
+
 async def backup_database_job():
     """Ежедневная задача бэкапа базы данных"""
     try:
