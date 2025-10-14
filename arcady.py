@@ -327,24 +327,186 @@ async def copy_sql_to_existing_txt():
     try:
         print("🔄 Копируем SQL бэкап в существующий TXT файл...")
         
-        # Сначала создаем SQL бэкап
+        # Шаг 1: Создаем SQL бэкап
+        print("1. Создаем SQL бэкап...")
         sql_backup_path = await create_database_backup()
         if not sql_backup_path:
             print("❌ Не удалось создать SQL бэкап")
             return False
+        print(f"✅ SQL бэкап создан: {sql_backup_path}")
         
-        # ID существующего TXT файла на Google Drive (замени на реальный ID)
+        # Шаг 2: Проверяем ID файла
+        print("2. Проверяем ID файла...")
         existing_txt_file_id = "1VEt3C726q37cJqoRzjAVjymO32R6lUmr"
         
         if existing_txt_file_id == "1VEt3C726q37cJqoRzjAVjymO32R6lUmr":
-            print("❌ Не указан ID TXT файла")
+            print("❌ Не указан ID TXT файла (используется заглушка)")
             return False
+        print(f"✅ ID файла: {existing_txt_file_id}")
         
-        # Получаем credentials
+        # Шаг 3: Получаем credentials
+        print("3. Получаем credentials...")
         credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
         if not credentials_json:
             print("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
             return False
+        
+        print("✅ Credentials получены из переменных окружения")
+        
+        # Шаг 4: Парсим credentials
+        print("4. Парсим credentials...")
+        try:
+            creds_data = json.loads(credentials_json)
+            email = creds_data.get('client_email')
+            print(f"✅ Сервисный аккаунт: {email}")
+        except Exception as e:
+            print(f"❌ Ошибка парсинга credentials: {e}")
+            return False
+        
+        # Шаг 5: Делегирование прав
+        print("5. Настраиваем делегирование прав...")
+        user_email = "joespeen131@gmail.com"
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                creds_data, 
+                scopes=SCOPES,
+                subject=user_email
+            )
+            print(f"✅ Делегирование прав для: {user_email}")
+        except Exception as e:
+            print(f"❌ Ошибка делегирования: {e}")
+            return False
+        
+        # Шаг 6: Создаем сервис
+        print("6. Создаем сервис Google Drive...")
+        try:
+            service = build('drive', 'v3', credentials=creds)
+            print("✅ Сервис Google Drive создан")
+        except Exception as e:
+            print(f"❌ Ошибка создания сервиса: {e}")
+            return False
+        
+        # Шаг 7: Проверяем доступ к файлу
+        print("7. Проверяем доступ к файлу...")
+        try:
+            file_info = service.files().get(
+                fileId=existing_txt_file_id,
+                fields='id, name, mimeType, permissions'
+            ).execute()
+            print(f"✅ Файл найден: {file_info.get('name')}")
+            print(f"📄 Тип файла: {file_info.get('mimeType')}")
+            
+            # Проверяем права доступа
+            permissions = file_info.get('permissions', [])
+            print(f"🔐 Права доступа: {len(permissions)} записей")
+            for perm in permissions:
+                print(f"   - {perm.get('role')}: {perm.get('type')} ({perm.get('emailAddress', 'N/A')})")
+                
+        except Exception as e:
+            print(f"❌ Ошибка доступа к файлу: {e}")
+            return False
+        
+        # Шаг 8: Читаем содержимое SQL файла
+        print("8. Читаем содержимое SQL файла...")
+        try:
+            with open(sql_backup_path, 'r', encoding='utf-8') as f:
+                sql_content = f.read()
+            
+            print(f"✅ Содержимое прочитано: {len(sql_content)} символов")
+            print(f"📝 Первые 100 символов: {sql_content[:100]}...")
+        except Exception as e:
+            print(f"❌ Ошибка чтения SQL файла: {e}")
+            return False
+        
+        # Шаг 9: Создаем новое содержимое
+        print("9. Создаем новое содержимое для TXT файла...")
+        new_content = f"""=== АВТОМАТИЧЕСКИЙ БЭКАП БАЗЫ ДАННЫХ ===
+Дата обновления: {datetime.datetime.now(TZ)}
+Файл обновлен ботом Arcady
+
+{sql_content}
+"""
+        print(f"✅ Новое содержимое создано: {len(new_content)} символов")
+        
+        # Шаг 10: Создаем временный файл
+        print("10. Создаем временный файл...")
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                f.write(new_content)
+                temp_txt_path = f.name
+            print(f"✅ Временный файл создан: {temp_txt_path}")
+            
+            # Проверяем размер временного файла
+            file_size = os.path.getsize(temp_txt_path)
+            print(f"📁 Размер временного файла: {file_size} bytes")
+        except Exception as e:
+            print(f"❌ Ошибка создания временного файла: {e}")
+            return False
+        
+        # Шаг 11: Обновляем файл на Google Drive
+        print("11. Обновляем файл на Google Drive...")
+        try:
+            media = MediaFileUpload(temp_txt_path, mimetype='text/plain')
+            print("✅ Media объект создан")
+            
+            updated_file = service.files().update(
+                fileId=existing_txt_file_id,
+                media_body=media,
+                fields='id, name, modifiedTime, size'
+            ).execute()
+            
+            print(f"✅ Файл обновлен!")
+            print(f"📎 ID: {updated_file.get('id')}")
+            print(f"📄 Имя: {updated_file.get('name')}")
+            print(f"🕐 Время изменения: {updated_file.get('modifiedTime')}")
+            print(f"📏 Размер: {updated_file.get('size', 'N/A')} bytes")
+            
+        except Exception as e:
+            print(f"❌ Ошибка при обновлении файла: {e}")
+            # Детальная информация об ошибке
+            import traceback
+            print(f"🔍 Детали ошибки: {traceback.format_exc()}")
+            return False
+        
+        # Шаг 12: Удаляем временные файлы
+        print("12. Удаляем временные файлы...")
+        try:
+            if os.path.exists(sql_backup_path):
+                os.unlink(sql_backup_path)
+                print(f"✅ Удален SQL файл: {sql_backup_path}")
+            
+            if os.path.exists(temp_txt_path):
+                os.unlink(temp_txt_path)
+                print(f"✅ Удален временный TXT файл: {temp_txt_path}")
+        except Exception as e:
+            print(f"⚠ Ошибка удаления временных файлов: {e}")
+        
+        print("🎉 Все шаги выполнены успешно!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Критическая ошибка в copy_sql_to_existing_txt: {e}")
+        import traceback
+        print(f"🔍 Детали: {traceback.format_exc()}")
+        return False
+
+@dp.message(Command("test_drive_access"))
+async def cmd_test_drive_access(message: types.Message):
+    """Тестирование доступа к Google Drive"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔍 Тестируем доступ к Google Drive...")
+    
+    try:
+        # Получаем credentials
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            await message.answer("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return
         
         creds_data = json.loads(credentials_json)
         user_email = "joespeen131@gmail.com"
@@ -358,46 +520,25 @@ async def copy_sql_to_existing_txt():
         
         service = build('drive', 'v3', credentials=creds)
         
-        # Читаем содержимое SQL файла
-        with open(sql_backup_path, 'r', encoding='utf-8') as f:
-            sql_content = f.read()
-        
-        print(f"📝 Размер SQL контента: {len(sql_content)} символов")
-        
-        # Создаем новое содержимое для TXT файла
-        new_content = f"""=== АВТОМАТИЧЕСКИЙ БЭКАП БАЗЫ ДАННЫХ ===
-Дата обновления: {datetime.datetime.now(TZ)}
-Файл обновлен ботом Arcady
-
-{sql_content}
-"""
-        
-        # Создаем временный файл с новым содержимым
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-            f.write(new_content)
-            temp_txt_path = f.name
-        
-        # Обновляем существующий файл на Google Drive
-        media = MediaFileUpload(temp_txt_path, mimetype='text/plain')
-        
-        updated_file = service.files().update(
-            fileId=existing_txt_file_id,
-            media_body=media,
-            fields='id, name, modifiedTime'
+        # Пробуем получить информацию о корневой папке
+        results = service.files().list(
+            pageSize=10,
+            fields="files(id, name, mimeType)"
         ).execute()
         
-        print(f"✅ Файл обновлен! ID: {updated_file.get('id')}")
-        print(f"🕐 Время изменения: {updated_file.get('modifiedTime')}")
+        files = results.get('files', [])
         
-        # Удаляем временные файлы
-        os.unlink(sql_backup_path)
-        os.unlink(temp_txt_path)
-        
-        return True
-        
+        if not files:
+            await message.answer("✅ Доступ есть, но файлов не найдено")
+        else:
+            file_list = "📁 Файлы на Google Drive:\n"
+            for file in files:
+                file_list += f"- {file['name']} ({file['mimeType']})\n"
+            
+            await message.answer(file_list)
+            
     except Exception as e:
-        print(f"❌ Ошибка при обновлении файла: {e}")
-        return False
+        await message.answer(f"❌ Ошибка доступа к Google Drive: {e}")
 
 @dp.message(Command("update_backup"))
 async def cmd_update_backup(message: types.Message):
