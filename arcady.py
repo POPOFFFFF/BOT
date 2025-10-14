@@ -4053,8 +4053,234 @@ async def cmd_force_birthday_check(message: types.Message):
 
 
 
+async def create_database_backup():
+    """Создает бэкап базы данных MySQL через Python"""
+    try:
+        print("🔄 Создаем бэкап БД через Python...")
+        
+        timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+        backup_filename = f"backup_{timestamp}.sql"
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = os.path.join(temp_dir, backup_filename)
+            
+            print("📋 Получаем список таблиц...")
+            # Получаем все таблицы
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SHOW TABLES")
+                    tables = [row[0] for row in await cur.fetchall()]
+            
+            print(f"📋 Найдено таблиц: {len(tables)}: {tables}")
+            
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write("-- Backup created by Arcady Bot\n")
+                f.write(f"-- Date: {datetime.datetime.now(TZ)}\n")
+                f.write(f"-- Database: {DB_NAME}\n")
+                f.write(f"-- Tables: {len(tables)}\n\n")
+                
+                # Добавляем SET команды для совместимости
+                f.write("SET FOREIGN_KEY_CHECKS=0;\n")
+                f.write("SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n")
+                f.write("SET AUTOCOMMIT=0;\n")
+                f.write("START TRANSACTION;\n\n")
+                
+                for i, table in enumerate(tables):
+                    print(f"📊 Обрабатываем таблицу {i+1}/{len(tables)}: {table}")
+                    f.write(f"--\n-- Table structure for table `{table}`\n--\n\n")
+                    
+                    # Получаем структуру таблицы
+                    async with pool.acquire() as conn:
+                        async with conn.cursor() as cur:
+                            await cur.execute(f"SHOW CREATE TABLE `{table}`")
+                            create_table = await cur.fetchone()
+                            if create_table:
+                                f.write(f"DROP TABLE IF EXISTS `{table}`;\n")
+                                f.write(f"{create_table[1]};\n\n")
+                            
+                            # Получаем данные
+                            print(f"📝 Получаем данные из таблицы {table}...")
+                            await cur.execute(f"SELECT * FROM `{table}`")
+                            rows = await cur.fetchall()
+                            print(f"📝 Найдено строк: {len(rows)}")
+                            
+                            if rows:
+                                f.write(f"--\n-- Dumping data for table `{table}`\n--\n\n")
+                                
+                                # Получаем названия колонок
+                                await cur.execute(f"DESCRIBE `{table}`")
+                                columns = [col[0] for col in await cur.fetchall()]
+                                
+                                for row_num, row in enumerate(rows):
+                                    if row_num % 100 == 0:  # Логируем каждые 100 строк
+                                        print(f"📝 Таблица {table}: обработано {row_num}/{len(rows)} строк")
+                                    
+                                    values = []
+                                    for value in row:
+                                        if value is None:
+                                            values.append("NULL")
+                                        elif isinstance(value, (int, float)):
+                                            values.append(str(value))
+                                        elif isinstance(value, datetime.datetime):
+                                            values.append(f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'")
+                                        elif isinstance(value, datetime.date):
+                                            values.append(f"'{value.strftime('%Y-%m-%d')}'")
+                                        else:
+                                            # Экранируем специальные символы
+                                            escaped_value = str(value).replace("'", "''").replace("\\", "\\\\")
+                                            values.append(f"'{escaped_value}'")
+                                    
+                                    f.write(f"INSERT INTO `{table}` ({', '.join([f'`{col}`' for col in columns])}) VALUES ({', '.join(values)});\n")
+                            
+                            f.write("\n")
+                
+                # Закрываем транзакцию
+                f.write("COMMIT;\n")
+                f.write("SET FOREIGN_KEY_CHECKS=1;\n")
+            
+            # Проверяем результат
+            if os.path.exists(backup_path) and os.path.getsize(backup_path) > 0:
+                file_size = os.path.getsize(backup_path)
+                print(f"✅ Бэкап создан: {backup_path} ({file_size} bytes)")
+                return backup_path
+            else:
+                print("❌ Файл бэкапа пустой или не создан")
+                return None
+                
+    except Exception as e:
+        print(f"❌ Ошибка при создании бэкапа: {e}")
+        import traceback
+        print(f"🔍 Детали: {traceback.format_exc()}")
+        return None
 
+# Упрощенная версия для тестирования
+async def create_simple_backup():
+    """Упрощенная версия бэкапа для тестирования"""
+    try:
+        print("🧪 Создаем упрощенный бэкап для теста...")
+        
+        timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+        backup_filename = f"backup_simple_{timestamp}.sql"
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = os.path.join(temp_dir, backup_filename)
+            
+            print("📋 Получаем список таблиц...")
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SHOW TABLES")
+                    tables = [row[0] for row in await cur.fetchall()]
+            
+            print(f"📋 Найдено таблиц: {len(tables)}")
+            
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write("-- Simple Backup created by Arcady Bot\n")
+                f.write(f"-- Date: {datetime.datetime.now(TZ)}\n")
+                f.write(f"-- Database: {DB_NAME}\n")
+                f.write(f"-- Tables: {len(tables)}\n\n")
+                
+                # Только структура, без данных
+                for table in tables[:5]:  # Ограничим 5 таблицами для теста
+                    print(f"📊 Обрабатываем структуру таблицы: {table}")
+                    async with pool.acquire() as conn:
+                        async with conn.cursor() as cur:
+                            await cur.execute(f"SHOW CREATE TABLE `{table}`")
+                            create_table = await cur.fetchone()
+                            if create_table:
+                                f.write(f"-- Table: {table}\n")
+                                f.write(f"DROP TABLE IF EXISTS `{table}`;\n")
+                                f.write(f"{create_table[1]};\n\n")
+                
+                f.write("-- Backup completed (simple version)\n")
+            
+            if os.path.exists(backup_path) and os.path.getsize(backup_path) > 0:
+                file_size = os.path.getsize(backpath)
+                print(f"✅ Упрощенный бэкап создан: {backup_path} ({file_size} bytes)")
+                return backup_path
+            else:
+                print("❌ Упрощенный бэкап не создан")
+                return None
+                
+    except Exception as e:
+        print(f"❌ Ошибка при создании упрощенного бэкапа: {e}")
+        import traceback
+        print(f"🔍 Детали: {traceback.format_exc()}")
+        return None
 
+@dp.message(Command("test_simple_backup"))
+async def cmd_test_simple_backup(message: types.Message):
+    """Тестирует упрощенную версию бэкапа"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🧪 Тестируем упрощенный бэкап...")
+    
+    backup_path = await create_simple_backup()
+    if not backup_path:
+        await message.answer("❌ Не удалось создать упрощенный бэкап")
+        return
+    
+    try:
+        with open(backup_path, 'rb') as backup_file:
+            await message.answer_document(
+                backup_file,
+                caption=f"🧪 Тестовый упрощенный бэкап\n"
+                       f"📅 {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}"
+            )
+        
+        await message.answer("✅ Упрощенный бэкап отправлен!")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки: {e}")
+    
+    finally:
+        if os.path.exists(backup_path):
+            os.unlink(backup_path)
+
+@dp.message(Command("debug_backup"))
+async def cmd_debug_backup(message: types.Message):
+    """Отладочная информация о бэкапе"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    try:
+        # Проверяем подключение к базе
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT 1")
+                result = await cur.fetchone()
+        
+        # Получаем список таблиц
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SHOW TABLES")
+                tables = [row[0] for row in await cur.fetchall()]
+        
+        # Получаем размеры таблиц
+        table_sizes = []
+        for table in tables[:10]:  # Ограничим 10 таблицами
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"SELECT COUNT(*) FROM `{table}`")
+                    count = await cur.fetchone()
+                    table_sizes.append(f"{table}: {count[0]} строк")
+        
+        debug_info = (
+            f"🔧 **Отладочная информация:**\n"
+            f"✅ Подключение к БД: работает\n"
+            f"📊 Всего таблиц: {len(tables)}\n"
+            f"📋 Таблицы: {', '.join(tables[:5])}{'...' if len(tables) > 5 else ''}\n\n"
+            f"📏 Размеры таблиц:\n" + "\n".join(table_sizes)
+        )
+        
+        await message.answer(debug_info)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отладки: {e}")
+
+# Обновляем команду send_backup с таймаутом
 @dp.message(Command("send_backup"))
 async def cmd_send_backup(message: types.Message):
     """Отправляет бэкап базы данных в Telegram"""
@@ -4064,8 +4290,16 @@ async def cmd_send_backup(message: types.Message):
     
     await message.answer("🔄 Создаю бэкап базы данных...")
     
-    # Создаем бэкап
-    backup_path = await create_database_backup()
+    # Пробуем создать бэкап с таймаутом
+    try:
+        backup_path = await asyncio.wait_for(create_database_backup(), timeout=120)  # 2 минуты таймаут
+    except asyncio.TimeoutError:
+        await message.answer("❌ Создание бэкапа заняло слишком много времени (>2 минут)")
+        return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка создания бэкапа: {e}")
+        return
+    
     if not backup_path:
         await message.answer("❌ Не удалось создать бэкап БД")
         return
@@ -4089,6 +4323,10 @@ async def cmd_send_backup(message: types.Message):
         # Удаляем временный файл
         if os.path.exists(backup_path):
             os.unlink(backup_path)
+
+
+
+
 
 async def send_daily_backup():
     """Ежедневная отправка бэкапа админам"""
@@ -4281,6 +4519,6 @@ async def main():
         print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
     
     await dp.start_polling(bot)
-    
+
 if __name__ == "__main__":
     asyncio.run(main())
