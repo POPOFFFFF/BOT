@@ -322,6 +322,120 @@ async def cmd_test_backup_simple(message: types.Message):
         await message.answer("❌ Загрузка на Google Drive не работает")
 
 
+async def copy_sql_to_existing_txt():
+    """Копирует содержимое SQL бэкапа в существующий TXT файл на Google Drive"""
+    try:
+        print("🔄 Копируем SQL бэкап в существующий TXT файл...")
+        
+        # Сначала создаем SQL бэкап
+        sql_backup_path = await create_database_backup()
+        if not sql_backup_path:
+            print("❌ Не удалось создать SQL бэкап")
+            return False
+        
+        # ID существующего TXT файла на Google Drive (замени на реальный ID)
+        existing_txt_file_id = "1VEt3C726q37cJqoRzjAVjymO32R6lUmr"
+        
+        if existing_txt_file_id == "1VEt3C726q37cJqoRzjAVjymO32R6lUmr":
+            print("❌ Не указан ID TXT файла")
+            return False
+        
+        # Получаем credentials
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            print("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return False
+        
+        creds_data = json.loads(credentials_json)
+        user_email = "joespeen131@gmail.com"
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        
+        creds = service_account.Credentials.from_service_account_info(
+            creds_data, 
+            scopes=SCOPES,
+            subject=user_email
+        )
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Читаем содержимое SQL файла
+        with open(sql_backup_path, 'r', encoding='utf-8') as f:
+            sql_content = f.read()
+        
+        print(f"📝 Размер SQL контента: {len(sql_content)} символов")
+        
+        # Создаем новое содержимое для TXT файла
+        new_content = f"""=== АВТОМАТИЧЕСКИЙ БЭКАП БАЗЫ ДАННЫХ ===
+Дата обновления: {datetime.datetime.now(TZ)}
+Файл обновлен ботом Arcady
+
+{sql_content}
+"""
+        
+        # Создаем временный файл с новым содержимым
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(new_content)
+            temp_txt_path = f.name
+        
+        # Обновляем существующий файл на Google Drive
+        media = MediaFileUpload(temp_txt_path, mimetype='text/plain')
+        
+        updated_file = service.files().update(
+            fileId=existing_txt_file_id,
+            media_body=media,
+            fields='id, name, modifiedTime'
+        ).execute()
+        
+        print(f"✅ Файл обновлен! ID: {updated_file.get('id')}")
+        print(f"🕐 Время изменения: {updated_file.get('modifiedTime')}")
+        
+        # Удаляем временные файлы
+        os.unlink(sql_backup_path)
+        os.unlink(temp_txt_path)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка при обновлении файла: {e}")
+        return False
+
+@dp.message(Command("update_backup"))
+async def cmd_update_backup(message: types.Message):
+    """Обновляет существующий TXT файл новым бэкапом"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Обновляю TXT файл новым бэкапом...")
+    
+    success = await copy_sql_to_existing_txt()
+    
+    if success:
+        await message.answer("✅ TXT файл успешно обновлен новым бэкапом!")
+    else:
+        await message.answer("❌ Не удалось обновить TXT файл")
+
+@dp.message(Command("get_file_id"))
+async def cmd_get_file_id(message: types.Message):
+    """Помогает получить ID файла"""
+    response = """🔍 Как получить ID файла на Google Drive:
+
+1. Открой файл в браузере
+2. Посмотри на URL:
+   https://drive.google.com/file/d/✅ЭТО_ID_ФАЙЛА✅/view
+3. Скопируй часть между /d/ и /view
+
+Пример:
+URL: https://drive.google.com/file/d/1ABC123def456/view
+ID: 1ABC123def456
+
+После получения ID замени его в коде в переменной:
+existing_txt_file_id = "ТВОЙ_ID_ЗДЕСЬ"
+"""
+    await message.answer(response)
+
+
+
 def is_allowed_chat(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
 
