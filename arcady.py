@@ -199,63 +199,157 @@ async def upload_to_google_drive(file_path):
     try:
         print("🔄 Начинаем загрузку на Google Drive...")
         
-        # Попробуем получить credentials из переменных окружения
+        # Проверяем что файл существует
+        if not os.path.exists(file_path):
+            print(f"❌ Файл для загрузки не существует: {file_path}")
+            return False
+        
+        file_size = os.path.getsize(file_path)
+        print(f"📁 Файл для загрузки: {file_path} ({file_size} bytes)")
+        
+        # Получаем credentials из переменных окружения
         credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
         
-        if credentials_json:
-            print("✅ Используем credentials из переменных окружения")
-            try:
-                creds_data = json.loads(credentials_json)
-                SCOPES = ['https://www.googleapis.com/auth/drive']
-                creds = service_account.Credentials.from_service_account_info(
-                    creds_data, scopes=SCOPES
-                )
-            except Exception as e:
-                print(f"❌ Ошибка парсинга credentials из переменных: {e}")
-                return False
-        else:
-            # Старый способ с файлом
-            credentials_file = os.getenv("GOOGLE_DRIVE_CREDENTIALS_FILE", "credentials.json")
-            print(f"📁 Ищем файл учетных данных: {credentials_file}")
-            
-            if not os.path.exists(credentials_file):
-                print(f"❌ Файл учетных данных не найден")
-                return False
-            
-            print("✅ Файл учетных данных найден")
-            SCOPES = ['https://www.googleapis.com/auth/drive']
-            creds = service_account.Credentials.from_service_account_file(
-                credentials_file, scopes=SCOPES
-            )
-
-        # Остальной код без изменений...
-        service = build('drive', 'v3', credentials=creds)
+        if not credentials_json:
+            print("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return False
         
+        print("✅ Credentials из переменных окружения получены")
+        
+        try:
+            creds_data = json.loads(credentials_json)
+            email = creds_data.get('client_email')
+            print(f"📧 Используем сервисный аккаунт: {email}")
+        except Exception as e:
+            print(f"❌ Ошибка парсинга credentials: {e}")
+            return False
+        
+        # Создаем credentials
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                creds_data, scopes=SCOPES
+            )
+            print("✅ Credentials созданы")
+        except Exception as e:
+            print(f"❌ Ошибка создания credentials: {e}")
+            return False
+        
+        # Создаем сервис
+        try:
+            service = build('drive', 'v3', credentials=creds)
+            print("✅ Сервис Google Drive создан")
+        except Exception as e:
+            print(f"❌ Ошибка создания сервиса: {e}")
+            return False
+        
+        # Подготавливаем метаданные
         file_name = os.path.basename(file_path)
         file_metadata = {
             'name': file_name,
             'mimeType': 'application/sql'
         }
         
+        # Добавляем папку если указана
         folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         if folder_id:
             print(f"📁 Загружаем в папку: {folder_id}")
             file_metadata['parents'] = [folder_id]
+            
+            # Проверяем доступность папки
+            try:
+                folder = service.files().get(fileId=folder_id, fields='id, name').execute()
+                print(f"✅ Папка найдена: {folder.get('name')}")
+            except Exception as e:
+                print(f"❌ Ошибка доступа к папке {folder_id}: {e}")
+                return False
+        else:
+            print("📁 Загружаем в корневую папку")
         
-        print(f"📤 Загружаем файл: {file_name}")
-        media = MediaFileUpload(file_path, resumable=True)
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, name'
-        ).execute()
-        
-        print(f"✅ Файл загружен на Google Drive! ID: {file.get('id')}")
-        return True
+        # Загружаем файл
+        print(f"📤 Начинаем загрузку файла: {file_name}")
+        try:
+            media = MediaFileUpload(file_path, resumable=True)
+            print("✅ Media объект создан")
+            
+            request = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, name, webViewLink, parents'
+            )
+            
+            print("🔄 Выполняем запрос...")
+            file = request.execute()
+            
+            file_id = file.get('id')
+            file_name = file.get('name')
+            file_url = file.get('webViewLink', 'N/A')
+            
+            print(f"✅ Файл успешно загружен!")
+            print(f"📎 ID: {file_id}")
+            print(f"📁 Имя: {file_name}") 
+            print(f"🔗 Ссылка: {file_url}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка загрузки файла: {e}")
+            import traceback
+            print(f"🔍 Детали: {traceback.format_exc()}")
+            return False
         
     except Exception as e:
-        print(f"❌ Ошибка загрузки на Google Drive: {e}")
+        print(f"❌ Критическая ошибка: {e}")
+        import traceback
+        print(f"🔍 Детали: {traceback.format_exc()}")
         return False
+
+@dp.message(Command("check_folder"))
+async def cmd_check_folder(message: types.Message):
+    """Проверка доступа к папке"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔍 Проверяем доступ к папке...")
+    
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    if not folder_id:
+        await message.answer("❌ GOOGLE_DRIVE_FOLDER_ID не настроен")
+        return
+    
+    try:
+        # Получаем credentials
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        creds_data = json.loads(credentials_json)
+        
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        creds = service_account.Credentials.from_service_account_info(
+            creds_data, scopes=SCOPES
+        )
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Пробуем получить информацию о папке
+        folder = service.files().get(
+            fileId=folder_id, 
+            fields='id, name, mimeType, capabilities'
+        ).execute()
+        
+        response = f"✅ Папка доступна!\n\n"
+        response += f"📁 Имя: {folder.get('name')}\n"
+        response += f"🆔 ID: {folder.get('id')}\n"
+        response += f"📄 Тип: {folder.get('mimeType')}\n"
+        
+        # Проверяем права
+        caps = folder.get('capabilities', {})
+        response += f"✏️ Может редактировать: {caps.get('canEdit', False)}\n"
+        response += f"📤 Может загружать: {caps.get('canUpload', False)}\n"
+        
+        await message.answer(response)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка доступа к папке: {e}")
 
 @dp.message(Command("fix_drive"))
 async def cmd_fix_drive(message: types.Message):
