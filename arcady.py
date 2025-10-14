@@ -1,3 +1,10 @@
+import subprocess
+import shutil
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+import json
+import tempfile
 import asyncio
 import os
 import datetime
@@ -38,6 +45,168 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
+
+# Функции для бэкапа на Google Drive
+async def create_database_backup():
+    """Создает бэкап базы данных MySQL"""
+    try:
+        # Создаем имя файла с временной меткой
+        timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+        backup_filename = f"backup_{timestamp}.sql"
+        
+        # Создаем временную директорию для бэкапа
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = os.path.join(temp_dir, backup_filename)
+            
+            # Команда для создания дампа MySQL
+            dump_cmd = [
+                'mysqldump',
+                f'-h{DB_HOST}',
+                f'-P{DB_PORT}',
+                f'-u{DB_USER}',
+                f'-p{DB_PASSWORD}',
+                DB_NAME
+            ]
+            
+            # Выполняем дамп
+            with open(backup_path, 'w') as backup_file:
+                process = await asyncio.create_subprocess_exec(
+                    *dump_cmd,
+                    stdout=backup_file,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                _, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    print(f"❌ Ошибка создания дампа БД: {stderr.decode()}")
+                    return None
+            
+            # Проверяем что файл создан и не пустой
+            if os.path.exists(backup_path) and os.path.getsize(backup_path) > 0:
+                print(f"✅ Бэкап создан: {backup_path} ({os.path.getsize(backup_path)} bytes)")
+                return backup_path
+            else:
+                print("❌ Файл бэкапа пустой или не создан")
+                return None
+                
+    except Exception as e:
+        print(f"❌ Ошибка при создании бэкапа: {e}")
+        return None
+
+async def upload_to_google_drive(file_path):
+    """Загружает файл на Google Drive"""
+    try:
+        # Проверяем наличие файла с учетными данными
+        credentials_file = os.getenv("GOOGLE_DRIVE_CREDENTIALS_FILE")
+        if not credentials_file or not os.path.exists(credentials_file):
+            print("❌ Файл учетных данных Google Drive не найден")
+            return False
+        
+        # Загружаем учетные данные
+        SCOPES = ['https://www.googleapis.com/auth/drive.file']
+        creds = service_account.Credentials.from_service_account_file(
+            credentials_file, scopes=SCOPES
+        )
+        
+        # Создаем сервис
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Метаданные файла
+        file_metadata = {
+            'name': os.path.basename(file_path),
+            'mimeType': 'application/sql'
+        }
+        
+        # Если указана папка, загружаем в нее
+        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+        if folder_id:
+            file_metadata['parents'] = [folder_id]
+        
+        # Загружаем файл
+        media = MediaFileUpload(file_path, resumable=True)
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id'
+        ).execute()
+        
+        print(f"✅ Файл загружен на Google Drive. ID: {file.get('id')}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка загрузки на Google Drive: {e}")
+        return False
+
+async def backup_database_job():
+    """Ежедневная задача бэкапа базы данных"""
+    try:
+        print("🔄 Запуск ежедневного бэкапа БД...")
+        
+        # Создаем бэкап
+        backup_path = await create_database_backup()
+        if not backup_path:
+            print("❌ Не удалось создать бэкап БД")
+            return
+        
+        # Загружаем на Google Drive
+        success = await upload_to_google_drive(backup_path)
+        if success:
+            print("✅ Бэкап успешно создан и загружен на Google Drive")
+            
+            # Отправляем уведомление админам
+            for admin_id in ALLOWED_USERS:
+                try:
+                    await bot.send_message(
+                        admin_id, 
+                        f"✅ Ежедневный бэкап БД выполнен успешно!\n"
+                        f"📁 Файл: {os.path.basename(backup_path)}\n"
+                        f"⏰ Время: {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}"
+                    )
+                except Exception as e:
+                    print(f"❌ Ошибка отправки уведомления админу {admin_id}: {e}")
+        else:
+            print("❌ Не удалось загрузить бэкап на Google Drive")
+            
+            # Отправляем уведомление об ошибке админам
+            for admin_id in ALLOWED_USERS:
+                try:
+                    await bot.send_message(
+                        admin_id, 
+                        f"❌ Ошибка при создании бэкапа БД!\n"
+                        f"⏰ Время: {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}\n"
+                        f"⚠ Проверьте логи бота"
+                    )
+                except Exception as e:
+                    print(f"❌ Ошибка отправки уведомления об ошибке админу {admin_id}: {e}")
+                    
+    except Exception as e:
+        print(f"❌ Критическая ошибка в задаче бэкапа: {e}")
+
+@dp.message(Command("backup"))
+async def cmd_backup(message: types.Message):
+    """Ручной запуск бэкапа базы данных"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Запуск ручного бэкапа базы данных...")
+    
+    # Создаем бэкап
+    backup_path = await create_database_backup()
+    if not backup_path:
+        await message.answer("❌ Не удалось создать бэкап БД")
+        return
+    
+    # Загружаем на Google Drive
+    success = await upload_to_google_drive(backup_path)
+    if success:
+        await message.answer(
+            f"✅ Бэкап успешно создан и загружен на Google Drive!\n"
+            f"📁 Файл: {os.path.basename(backup_path)}"
+        )
+    else:
+        await message.answer("❌ Не удалось загрузить бэкап на Google Drive")
 
 
 def is_allowed_chat(chat_id: int) -> bool:
@@ -4065,11 +4234,18 @@ async def main():
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
-    # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
+    # Проверка дней рождения каждый день в 7:00 утра
     scheduler.add_job(
         check_birthdays, 
-        CronTrigger(hour=7, minute=0, timezone=TZ),  # 9:00 утра по Омску
+        CronTrigger(hour=7, minute=0, timezone=TZ),
         id="birthday_check"
+    )
+    
+    # ЕЖЕДНЕВНЫЙ БЭКАП БАЗЫ ДАННЫХ в 6:00 утра
+    scheduler.add_job(
+        backup_database_job,
+        CronTrigger(hour=6, minute=0, timezone=TZ),  # 6:00 утра по Омску
+        id="daily_backup"
     )
         
     scheduler.start()
@@ -4082,5 +4258,6 @@ async def main():
         print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
     
     await dp.start_polling(bot)
-if __name__ == "__main__":
+
+    if __name__ == "__main__":
     asyncio.run(main())
