@@ -601,77 +601,84 @@ async def cmd_fix_drive_access(message: types.Message):
         error_details = traceback.format_exc()
         print(f"Детали ошибки: {error_details}")
 
-# Исправленная основная функция для бэкапа
-async def copy_sql_to_existing_txt_fixed():
-    """Исправленная версия - копирует SQL бэкап в существующий TXT файл"""
+@dp.message(Command("setup_personal_drive"))
+async def cmd_setup_personal_drive(message: types.Message):
+    """Инструкция для личного Google Drive аккаунта"""
+    instructions = """
+🔐 **Настройка для личного Google Drive:**
+
+📝 **Шаг 1 - Проверьте email сервисного аккаунта:**
+Выполните: `/check_drive_info`
+
+📝 **Шаг 2 - Дайте доступ к папке:**
+1. Откройте папку `bkups` на Google Drive
+2. Нажмите "Настройки доступа"
+3. Добавьте email сервисного аккаунта с правами **"Редактор"**
+
+📝 **Шаг 3 - Получите ID файла:**
+1. Откройте файл `Эксперт.txt` (или создайте новый)
+2. Скопируйте ID из URL:
+   `https://drive.google.com/file/d/✅ВАШ_ID_ФАЙЛА✅/view`
+
+📝 **Шаг 4 - Обновите код:**
+Замените ID в функции `copy_sql_to_personal_drive()`
+
+🛠 **Команды для теста:**
+• `/test_personal_drive` - проверить доступ
+• `/update_backup_personal` - сделать бэкап
+"""
+    await message.answer(instructions)
+
+# Функция для работы с личным Google Drive
+async def copy_sql_to_personal_drive():
+    """Копирует SQL бэкап в файл на личном Google Drive"""
     try:
-        print("🔄 Копируем SQL бэкап в существующий TXT файл (исправленная версия)...")
+        print("🔄 Копируем SQL бэкап в личный Google Drive...")
         
         # 1. Создаем SQL бэкап
-        print("1. Создаем SQL бэкап...")
         sql_backup_path = await create_database_backup()
         if not sql_backup_path:
             print("❌ Не удалось создать SQL бэкап")
             return False
-        print(f"✅ SQL бэкап создан: {sql_backup_path}")
         
-        # 2. ID файла (ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ID ВАШЕГО ФАЙЛА!)
-        existing_txt_file_id = "1VEt3C726q37cJqoRzjAVjymO32R6lUmr"  # ЗАМЕНИТЕ ЭТОТ ID!
+        # 2. ID файла в вашей папке bkups (ЗАМЕНИТЕ НА РЕАЛЬНЫЙ!)
+        existing_txt_file_id = "1VEt3C726q37cJqoRzjAVjymO32R6lUmr"  # ⚠️ ЗАМЕНИТЕ ЭТОТ ID!
         
         if existing_txt_file_id == "1VEt3C726q37cJqoRzjAVjymO32R6lUmr":
-            print("❌ Не указан реальный ID TXT файла")
+            print("❌ Не указан реальный ID файла")
             return False
         
         # 3. Настраиваем доступ
-        print("2. Настраиваем доступ к Google Drive...")
         credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
         if not credentials_json:
             print("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
             return False
         
         creds_data = json.loads(credentials_json)
-        client_email = creds_data.get('client_email')
         SCOPES = ['https://www.googleapis.com/auth/drive']
         
-        # Используем сервисный аккаунт напрямую (без делегирования)
+        # Для личного аккаунта используем сервисный аккаунт напрямую
         creds = service_account.Credentials.from_service_account_info(
             creds_data, 
             scopes=SCOPES
         )
         
         service = build('drive', 'v3', credentials=creds)
-        print(f"✅ Сервис создан для: {client_email}")
         
         # 4. Проверяем доступ к файлу
-        print("3. Проверяем доступ к файлу...")
         try:
             file_info = service.files().get(
                 fileId=existing_txt_file_id,
-                fields='id, name, mimeType, permissions'
+                fields='id, name, mimeType'
             ).execute()
             print(f"✅ Файл найден: {file_info.get('name')}")
-            
-            # Проверяем права
-            permissions = file_info.get('permissions', [])
-            has_access = any(perm.get('emailAddress') == client_email for perm in permissions)
-            if not has_access:
-                print(f"⚠ Внимание: сервисный аккаунт {client_email} не имеет явного доступа к файлу")
-            else:
-                print(f"✅ Сервисный аккаунт имеет доступ к файлу")
-                
         except Exception as e:
             print(f"❌ Ошибка доступа к файлу: {e}")
             return False
         
         # 5. Читаем SQL и создаем временный файл
-        print("4. Читаем SQL и создаем временный файл...")
-        try:
-            with open(sql_backup_path, 'r', encoding='utf-8') as f:
-                sql_content = f.read()
-            print(f"✅ SQL прочитан: {len(sql_content)} символов")
-        except Exception as e:
-            print(f"❌ Ошибка чтения SQL: {e}")
-            return False
+        with open(sql_backup_path, 'r', encoding='utf-8') as f:
+            sql_content = f.read()
         
         new_content = f"""=== АВТОМАТИЧЕСКИЙ БЭКАП БАЗЫ ДАННЫХ ===
 Дата обновления: {datetime.datetime.now(TZ)}
@@ -680,57 +687,184 @@ async def copy_sql_to_existing_txt_fixed():
 {sql_content}
 """
         
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-                f.write(new_content)
-                temp_txt_path = f.name
-            print(f"✅ Временный файл создан: {temp_txt_path}")
-        except Exception as e:
-            print(f"❌ Ошибка создания временного файла: {e}")
-            return False
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(new_content)
+            temp_txt_path = f.name
         
         # 6. Обновляем файл
-        print("5. Обновляем файл на Google Drive...")
-        try:
-            media = MediaFileUpload(temp_txt_path, mimetype='text/plain', resumable=True)
-            print("✅ Media объект создан")
-            
-            updated_file = service.files().update(
-                fileId=existing_txt_file_id,
-                media_body=media,
-                fields='id, name, modifiedTime, size'
-            ).execute()
-            
-            print(f"✅ Файл успешно обновлен!")
-            print(f"📄 Имя: {updated_file.get('name')}")
-            print(f"🕐 Время изменения: {updated_file.get('modifiedTime')}")
-            print(f"📏 Размер: {updated_file.get('size', 'N/A')} bytes")
-            
-        except Exception as e:
-            print(f"❌ Ошибка обновления файла: {e}")
-            return False
+        media = MediaFileUpload(temp_txt_path, mimetype='text/plain', resumable=True)
+        
+        updated_file = service.files().update(
+            fileId=existing_txt_file_id,
+            media_body=media,
+            fields='id, name, modifiedTime, size'
+        ).execute()
+        
+        print(f"✅ Файл обновлен: {updated_file.get('name')}")
+        print(f"📏 Размер: {updated_file.get('size', 'N/A')} bytes")
         
         # 7. Чистим временные файлы
-        print("6. Очищаем временные файлы...")
-        try:
-            if os.path.exists(sql_backup_path):
-                os.unlink(sql_backup_path)
-                print(f"✅ Удален SQL файл: {sql_backup_path}")
-            
-            if os.path.exists(temp_txt_path):
-                os.unlink(temp_txt_path)
-                print(f"✅ Удален временный TXT: {temp_txt_path}")
-        except Exception as e:
-            print(f"⚠ Ошибка очистки: {e}")
+        os.unlink(sql_backup_path)
+        os.unlink(temp_txt_path)
         
-        print("🎉 Бэкап успешно завершен!")
         return True
         
     except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
+        print(f"❌ Ошибка: {e}")
         import traceback
         print(f"🔍 Детали: {traceback.format_exc()}")
         return False
+
+@dp.message(Command("update_backup_personal"))
+async def cmd_update_backup_personal(message: types.Message):
+    """Обновляет бэкап в личном Google Drive"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Обновляю бэкап в личном Google Drive...")
+    
+    success = await copy_sql_to_personal_drive()
+    
+    if success:
+        await message.answer("✅ Бэкап успешно обновлен в вашем Google Drive!")
+    else:
+        await message.answer("❌ Не удалось обновить бэкап")
+
+@dp.message(Command("test_personal_drive"))
+async def cmd_test_personal_drive(message: types.Message):
+    """Тестирует доступ к личному Google Drive"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🧪 Тестируем доступ к личному Google Drive...")
+    
+    try:
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            await message.answer("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return
+        
+        creds_data = json.loads(credentials_json)
+        client_email = creds_data.get('client_email')
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        
+        creds = service_account.Credentials.from_service_account_info(
+            creds_data, 
+            scopes=SCOPES
+        )
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # Пробуем получить список файлов (ограничим 5 файлами)
+        results = service.files().list(
+            pageSize=5,
+            fields="files(id, name, mimeType)"
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        if files:
+            file_list = "📁 Доступные файлы:\n"
+            for file in files:
+                file_list += f"- {file['name']} ({file['id']})\n"
+            await message.answer(file_list)
+        else:
+            await message.answer("✅ Доступ есть, но файлов не найдено")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка доступа: {e}")
+
+# Альтернативное решение - создание нового файла каждый раз
+async def create_new_backup_file():
+    """Создает новый файл бэкапа каждый раз (обходит проблему квоты)"""
+    try:
+        print("🔄 Создаем новый файл бэкапа...")
+        
+        # 1. Создаем SQL бэкап
+        sql_backup_path = await create_database_backup()
+        if not sql_backup_path:
+            print("❌ Не удалось создать SQL бэкап")
+            return False
+        
+        # 2. Настраиваем доступ
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            print("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не настроен")
+            return False
+        
+        creds_data = json.loads(credentials_json)
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        
+        creds = service_account.Credentials.from_service_account_info(
+            creds_data, 
+            scopes=SCOPES
+        )
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # 3. Читаем SQL
+        with open(sql_backup_path, 'r', encoding='utf-8') as f:
+            sql_content = f.read()
+        
+        # 4. Создаем новый файл
+        timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+        file_metadata = {
+            'name': f'backup_{timestamp}.sql',
+            'mimeType': 'text/plain'
+        }
+        
+        new_content = f"""=== АВТОМАТИЧЕСКИЙ БЭКАП БАЗЫ ДАННЫХ ===
+Дата создания: {datetime.datetime.now(TZ)}
+Файл создан ботом Arcady
+
+{sql_content}
+"""
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(new_content)
+            temp_txt_path = f.name
+        
+        media = MediaFileUpload(temp_txt_path, mimetype='text/plain', resumable=True)
+        
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, name, webViewLink, size'
+        ).execute()
+        
+        print(f"✅ Новый файл создан: {file.get('name')}")
+        print(f"🔗 Ссылка: {file.get('webViewLink')}")
+        print(f"📏 Размер: {file.get('size', 'N/A')} bytes")
+        
+        # 5. Чистим временные файлы
+        os.unlink(sql_backup_path)
+        os.unlink(temp_txt_path)
+        
+        return file.get('webViewLink')
+        
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        import traceback
+        print(f"🔍 Детали: {traceback.format_exc()}")
+        return None
+
+@dp.message(Command("create_new_backup"))
+async def cmd_create_new_backup(message: types.Message):
+    """Создает новый файл бэкапа"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Создаю новый файл бэкапа...")
+    
+    file_url = await create_new_backup_file()
+    
+    if file_url:
+        await message.answer(f"✅ Новый бэкап создан!\n🔗 {file_url}")
+    else:
+        await message.answer("❌ Не удалось создать бэкап")
 
 # Команда для получения ID файла (практичная)
 @dp.message(Command("get_my_file_id"))
