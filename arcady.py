@@ -46,10 +46,11 @@ ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
-# Функции для бэкапа на Google Drive
 async def create_database_backup():
     """Создает бэкап базы данных MySQL"""
     try:
+        print("🔄 Начинаем создание бэкапа БД...")
+        
         # Создаем имя файла с временной меткой
         timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
         backup_filename = f"backup_{timestamp}.sql"
@@ -58,6 +59,9 @@ async def create_database_backup():
         with tempfile.TemporaryDirectory() as temp_dir:
             backup_path = os.path.join(temp_dir, backup_filename)
             
+            print(f"📁 Временный путь: {backup_path}")
+            print(f"🔌 Подключаемся к БД: {DB_HOST}:{DB_PORT}, база: {DB_NAME}")
+            
             # Команда для создания дампа MySQL
             dump_cmd = [
                 'mysqldump',
@@ -65,8 +69,12 @@ async def create_database_backup():
                 f'-P{DB_PORT}',
                 f'-u{DB_USER}',
                 f'-p{DB_PASSWORD}',
+                '--single-transaction',
+                '--skip-lock-tables',
                 DB_NAME
             ]
+            
+            print(f"🔧 Выполняем команду: {' '.join(dump_cmd).replace(DB_PASSWORD, '***')}")
             
             # Выполняем дамп
             with open(backup_path, 'w') as backup_file:
@@ -78,22 +86,39 @@ async def create_database_backup():
                 
                 _, stderr = await process.communicate()
                 
+                print(f"🔧 Код возврата mysqldump: {process.returncode}")
+                
                 if process.returncode != 0:
-                    print(f"❌ Ошибка создания дампа БД: {stderr.decode()}")
+                    error_msg = stderr.decode() if stderr else "Неизвестная ошибка"
+                    print(f"❌ Ошибка создания дампа БД: {error_msg}")
                     return None
             
             # Проверяем что файл создан и не пустой
-            if os.path.exists(backup_path) and os.path.getsize(backup_path) > 0:
-                print(f"✅ Бэкап создан: {backup_path} ({os.path.getsize(backup_path)} bytes)")
-                return backup_path
+            if os.path.exists(backup_path):
+                file_size = os.path.getsize(backup_path)
+                print(f"📊 Размер файла бэкапа: {file_size} bytes")
+                
+                if file_size > 0:
+                    print(f"✅ Бэкап создан: {backup_path} ({file_size} bytes)")
+                    
+                    # Читаем первые 100 символов для проверки
+                    with open(backup_path, 'r') as f:
+                        first_lines = f.read(100)
+                    print(f"📝 Начало файла: {first_lines}")
+                    
+                    return backup_path
+                else:
+                    print("❌ Файл бэкапа пустой")
+                    return None
             else:
-                print("❌ Файл бэкапа пустой или не создан")
+                print("❌ Файл бэкапа не создан")
                 return None
                 
     except Exception as e:
-        print(f"❌ Ошибка при создании бэкапа: {e}")
+        print(f"❌ Критическая ошибка при создании бэкапа: {e}")
+        import traceback
+        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
         return None
-
 async def upload_to_google_drive(file_path):
     """Загружает файл на Google Drive"""
     try:
