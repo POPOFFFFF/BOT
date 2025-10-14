@@ -287,6 +287,148 @@ async def upload_to_google_drive(file_path):
         print(f"🔍 Детали: {traceback.format_exc()}")
         return False
 
+@dp.message(Command("debug_drive"))
+async def cmd_debug_drive(message: types.Message):
+    """Детальная диагностика Google Drive"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔧 Запускаем детальную диагностику...")
+    
+    try:
+        # Шаг 1: Проверка credentials
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if not credentials_json:
+            await message.answer("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не найден")
+            return
+        
+        await message.answer("✅ Credentials найдены в переменных окружения")
+        
+        # Шаг 2: Парсинг credentials
+        try:
+            creds_data = json.loads(credentials_json)
+            email = creds_data.get('client_email')
+            await message.answer(f"✅ Сервисный аккаунт: {email}")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка парсинга JSON: {e}")
+            return
+        
+        # Шаг 3: Создание credentials
+        SCOPES = ['https://www.googleapis.com/auth/drive']
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                creds_data, scopes=SCOPES
+            )
+            await message.answer("✅ Credentials созданы")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка создания credentials: {e}")
+            return
+        
+        # Шаг 4: Создание сервиса
+        try:
+            service = build('drive', 'v3', credentials=creds)
+            await message.answer("✅ Сервис Google Drive создан")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка создания сервиса: {e}")
+            return
+        
+        # Шаг 5: Проверка доступности API
+        try:
+            about = service.about().get(fields='user, storageQuota').execute()
+            user = about.get('user', {})
+            await message.answer(f"✅ API доступен\n👤 Пользователь: {user.get('displayName')}\n📧 Email: {user.get('emailAddress')}")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка доступа к API: {e}")
+            return
+        
+        # Шаг 6: Создание тестового файла
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write("Test file for Google Drive debug\n")
+                f.write(f"Created: {datetime.datetime.now(TZ)}\n")
+                test_file_path = f.name
+            await message.answer(f"✅ Тестовый файл создан: {test_file_path}")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка создания файла: {e}")
+            return
+        
+        # Шаг 7: Попытка загрузки
+        try:
+            file_name = "debug_test.txt"
+            file_metadata = {'name': file_name}
+            
+            await message.answer("🔄 Пытаемся загрузить файл...")
+            
+            media = MediaFileUpload(test_file_path, resumable=True)
+            file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, name'
+            ).execute()
+            
+            file_id = file.get('id')
+            await message.answer(f"✅ Файл загружен! ID: {file_id}")
+            
+            # Шаг 8: Проверка что файл действительно загружен
+            try:
+                uploaded_file = service.files().get(fileId=file_id, fields='id, name, size').execute()
+                await message.answer(f"✅ Файл подтвержден:\n📁 {uploaded_file.get('name')}\n📊 Размер: {uploaded_file.get('size', 'N/A')} bytes")
+                
+                # Удаляем тестовый файл
+                service.files().delete(fileId=file_id).execute()
+                await message.answer("✅ Тестовый файл удален")
+                
+            except Exception as e:
+                await message.answer(f"⚠ Файл загружен но не подтвержден: {e}")
+            
+        except Exception as e:
+            await message.answer(f"❌ Ошибка загрузки файла: {e}")
+            import traceback
+            error_details = traceback.format_exc()
+            await message.answer(f"🔍 Детали ошибки:\n{error_details[:1000]}...")  # Первые 1000 символов
+        
+        # Удаляем локальный файл
+        os.unlink(test_file_path)
+            
+    except Exception as e:
+        await message.answer(f"❌ Критическая ошибка диагностики: {e}")
+
+@dp.message(Command("check_packages"))
+async def cmd_check_packages(message: types.Message):
+    """Проверка установленных пакетов"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    try:
+        import google.auth
+        import googleapiclient
+        import google.oauth2
+        
+        response = "📦 Проверка пакетов:\n\n"
+        response += f"✅ google-auth: {google.auth.__version__}\n"
+        response += f"✅ googleapiclient: {googleapiclient.__version__}\n"
+        response += f"✅ google.oauth2: доступен\n"
+        
+        # Проверка интернет-соединения
+        try:
+            import urllib.request
+            urllib.request.urlopen('https://www.google.com', timeout=5)
+            response += "✅ Интернет-соединение: есть\n"
+        except:
+            response += "❌ Интернет-соединение: нет\n"
+        
+        await message.answer(response)
+        
+    except ImportError as e:
+        await message.answer(f"❌ Не хватает пакетов: {e}\n\nУстанови: pip install google-auth google-api-python-client")        
+
+
+
+
+
+
 @dp.message(Command("test_no_folder"))
 async def cmd_test_no_folder(message: types.Message):
     """Тестирование загрузки без указания папки"""
