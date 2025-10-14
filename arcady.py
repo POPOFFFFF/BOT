@@ -45,88 +45,14 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
-
+# Функции для бэкапа на Google Drive
 async def create_database_backup():
-    """Создает бэкап базы данных MySQL"""
+    """Создает бэкап базы данных MySQL через Python"""
     try:
-        print("🔄 Начинаем создание бэкапа БД...")
+        print("🔄 Создаем бэкап БД через Python...")
         
-        # Создаем имя файла с временной меткой
         timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
         backup_filename = f"backup_{timestamp}.sql"
-        
-        # Создаем временную директорию для бэкапа
-        with tempfile.TemporaryDirectory() as temp_dir:
-            backup_path = os.path.join(temp_dir, backup_filename)
-            
-            print(f"📁 Временный путь: {backup_path}")
-            print(f"🔌 Подключаемся к БД: {DB_HOST}:{DB_PORT}, база: {DB_NAME}")
-            
-            # Команда для создания дампа MySQL
-            dump_cmd = [
-                'mysqldump',
-                f'-h{DB_HOST}',
-                f'-P{DB_PORT}',
-                f'-u{DB_USER}',
-                f'-p{DB_PASSWORD}',
-                '--single-transaction',
-                '--skip-lock-tables',
-                DB_NAME
-            ]
-            
-            print(f"🔧 Выполняем команду: {' '.join(dump_cmd).replace(DB_PASSWORD, '***')}")
-            
-            # Выполняем дамп
-            with open(backup_path, 'w') as backup_file:
-                process = await asyncio.create_subprocess_exec(
-                    *dump_cmd,
-                    stdout=backup_file,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                
-                _, stderr = await process.communicate()
-                
-                print(f"🔧 Код возврата mysqldump: {process.returncode}")
-                
-                if process.returncode != 0:
-                    error_msg = stderr.decode() if stderr else "Неизвестная ошибка"
-                    print(f"❌ Ошибка создания дампа БД: {error_msg}")
-                    return None
-            
-            # Проверяем что файл создан и не пустой
-            if os.path.exists(backup_path):
-                file_size = os.path.getsize(backup_path)
-                print(f"📊 Размер файла бэкапа: {file_size} bytes")
-                
-                if file_size > 0:
-                    print(f"✅ Бэкап создан: {backup_path} ({file_size} bytes)")
-                    
-                    # Читаем первые 100 символов для проверки
-                    with open(backup_path, 'r') as f:
-                        first_lines = f.read(100)
-                    print(f"📝 Начало файла: {first_lines}")
-                    
-                    return backup_path
-                else:
-                    print("❌ Файл бэкапа пустой")
-                    return None
-            else:
-                print("❌ Файл бэкапа не создан")
-                return None
-                
-    except Exception as e:
-        print(f"❌ Критическая ошибка при создании бэкапа: {e}")
-        import traceback
-        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
-        return None
-
-async def create_database_backup_python():
-    """Альтернативный метод бэкапа через Python (без mysqldump)"""
-    try:
-        print("🔄 Используем Python-бэкап...")
-        
-        timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
-        backup_filename = f"backup_python_{timestamp}.sql"
         
         with tempfile.TemporaryDirectory() as temp_dir:
             backup_path = os.path.join(temp_dir, backup_filename)
@@ -140,12 +66,19 @@ async def create_database_backup_python():
             print(f"📋 Найдено таблиц: {tables}")
             
             with open(backup_path, 'w', encoding='utf-8') as f:
-                f.write("-- Backup created by Python\n")
+                f.write("-- Backup created by Arcady Bot\n")
                 f.write(f"-- Date: {datetime.datetime.now(TZ)}\n")
-                f.write(f"-- Database: {DB_NAME}\n\n")
+                f.write(f"-- Database: {DB_NAME}\n")
+                f.write(f"-- Tables: {len(tables)}\n\n")
+                
+                # Добавляем SET команды для совместимости
+                f.write("SET FOREIGN_KEY_CHECKS=0;\n")
+                f.write("SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n")
+                f.write("SET AUTOCOMMIT=0;\n")
+                f.write("START TRANSACTION;\n\n")
                 
                 for table in tables:
-                    f.write(f"\n-- Table: {table}\n")
+                    f.write(f"--\n-- Table structure for table `{table}`\n--\n\n")
                     
                     # Получаем структуру таблицы
                     async with pool.acquire() as conn:
@@ -153,6 +86,7 @@ async def create_database_backup_python():
                             await cur.execute(f"SHOW CREATE TABLE `{table}`")
                             create_table = await cur.fetchone()
                             if create_table:
+                                f.write(f"DROP TABLE IF EXISTS `{table}`;\n")
                                 f.write(f"{create_table[1]};\n\n")
                             
                             # Получаем данные
@@ -160,6 +94,8 @@ async def create_database_backup_python():
                             rows = await cur.fetchall()
                             
                             if rows:
+                                f.write(f"--\n-- Dumping data for table `{table}`\n--\n\n")
+                                
                                 # Получаем названия колонок
                                 await cur.execute(f"DESCRIBE `{table}`")
                                 columns = [col[0] for col in await cur.fetchall()]
@@ -171,6 +107,10 @@ async def create_database_backup_python():
                                             values.append("NULL")
                                         elif isinstance(value, (int, float)):
                                             values.append(str(value))
+                                        elif isinstance(value, datetime.datetime):
+                                            values.append(f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'")
+                                        elif isinstance(value, datetime.date):
+                                            values.append(f"'{value.strftime('%Y-%m-%d')}'")
                                         else:
                                             # Экранируем специальные символы
                                             escaped_value = str(value).replace("'", "''").replace("\\", "\\\\")
@@ -179,23 +119,33 @@ async def create_database_backup_python():
                                     f.write(f"INSERT INTO `{table}` ({', '.join([f'`{col}`' for col in columns])}) VALUES ({', '.join(values)});\n")
                             
                             f.write("\n")
+                
+                # Закрываем транзакцию
+                f.write("COMMIT;\n")
+                f.write("SET FOREIGN_KEY_CHECKS=1;\n")
             
             if os.path.exists(backup_path) and os.path.getsize(backup_path) > 0:
-                print(f"✅ Python-бэкап создан: {backup_path}")
+                file_size = os.path.getsize(backup_path)
+                print(f"✅ Бэкап создан: {backup_path} ({file_size} bytes)")
+                
+                # Проверяем содержимое
+                with open(backup_path, 'r') as f:
+                    first_lines = f.readlines()[:5]
+                print(f"📝 Начало файла: {''.join(first_lines)}")
+                
                 return backup_path
             else:
-                print("❌ Python-бэкап не удался")
+                print("❌ Файл бэкапа пустой или не создан")
                 return None
                 
     except Exception as e:
-        print(f"❌ Ошибка Python-бэкапа: {e}")
+        print(f"❌ Ошибка при создании бэкапа: {e}")
         import traceback
-        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
+        print(f"🔍 Детали: {traceback.format_exc()}")
         return None
 
-
 async def upload_to_google_drive(file_path):
-    """Загружает файл на Google Drive"""
+    """Загружает файл на Google Drive с делегированием прав"""
     try:
         print("🔄 Начинаем загрузку на Google Drive...")
         
@@ -219,20 +169,24 @@ async def upload_to_google_drive(file_path):
         try:
             creds_data = json.loads(credentials_json)
             email = creds_data.get('client_email')
-            print(f"📧 Используем сервисный аккаунт: {email}")
+            print(f"📧 Сервисный аккаунт: {email}")
         except Exception as e:
             print(f"❌ Ошибка парсинга credentials: {e}")
             return False
         
-        # Создаем credentials
+        # Используем делегирование прав на твой личный аккаунт
+        user_email = "joespeen131@gmail.com"  # Твой email
         SCOPES = ['https://www.googleapis.com/auth/drive']
+        
         try:
             creds = service_account.Credentials.from_service_account_info(
-                creds_data, scopes=SCOPES
+                creds_data, 
+                scopes=SCOPES,
+                subject=user_email  # Делегируем права твоего аккаунта
             )
-            print("✅ Credentials созданы")
+            print(f"✅ Делегирование прав для: {user_email}")
         except Exception as e:
-            print(f"❌ Ошибка создания credentials: {e}")
+            print(f"❌ Ошибка делегирования: {e}")
             return False
         
         # Создаем сервис
@@ -243,364 +197,57 @@ async def upload_to_google_drive(file_path):
             print(f"❌ Ошибка создания сервиса: {e}")
             return False
         
-        # Подготавливаем метаданные - БЕЗ ПАПКИ для теста
+        # Загружаем файл в корневую папку (без указания папки)
         file_name = os.path.basename(file_path)
         file_metadata = {
             'name': file_name,
             'mimeType': 'application/sql'
         }
         
-        print(f"📤 Загружаем файл в корневую папку: {file_name}")
+        # Можно использовать папку если указана, но лучше без нее для простоты
+        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+        if folder_id:
+            print(f"📁 Загружаем в папку: {folder_id}")
+            file_metadata['parents'] = [folder_id]
+        else:
+            print("📁 Загружаем в корневую папку")
+        
+        print(f"📤 Загружаем файл: {file_name}")
         try:
             media = MediaFileUpload(file_path, resumable=True)
-            print("✅ Media объект создан")
             
-            request = service.files().create(
+            file = service.files().create(
                 body=file_metadata,
                 media_body=media,
                 fields='id, name, webViewLink'
-            )
-            
-            print("🔄 Выполняем запрос...")
-            file = request.execute()
+            ).execute()
             
             file_id = file.get('id')
-            file_name = file.get('name')
             file_url = file.get('webViewLink', 'N/A')
             
             print(f"✅ Файл успешно загружен!")
             print(f"📎 ID: {file_id}")
-            print(f"📁 Имя: {file_name}") 
             print(f"🔗 Ссылка: {file_url}")
             
             return True
             
         except Exception as e:
             print(f"❌ Ошибка загрузки файла: {e}")
-            import traceback
-            print(f"🔍 Детали: {traceback.format_exc()}")
             return False
         
     except Exception as e:
         print(f"❌ Критическая ошибка: {e}")
-        import traceback
-        print(f"🔍 Детали: {traceback.format_exc()}")
         return False
-
-@dp.message(Command("debug_drive"))
-async def cmd_debug_drive(message: types.Message):
-    """Детальная диагностика Google Drive"""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    await message.answer("🔧 Запускаем детальную диагностику...")
-    
-    try:
-        # Шаг 1: Проверка credentials
-        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
-        if not credentials_json:
-            await message.answer("❌ GOOGLE_DRIVE_CREDENTIALS_JSON не найден")
-            return
-        
-        await message.answer("✅ Credentials найдены в переменных окружения")
-        
-        # Шаг 2: Парсинг credentials
-        try:
-            creds_data = json.loads(credentials_json)
-            email = creds_data.get('client_email')
-            await message.answer(f"✅ Сервисный аккаунт: {email}")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка парсинга JSON: {e}")
-            return
-        
-        # Шаг 3: Создание credentials
-        SCOPES = ['https://www.googleapis.com/auth/drive']
-        try:
-            creds = service_account.Credentials.from_service_account_info(
-                creds_data, scopes=SCOPES
-            )
-            await message.answer("✅ Credentials созданы")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка создания credentials: {e}")
-            return
-        
-        # Шаг 4: Создание сервиса
-        try:
-            service = build('drive', 'v3', credentials=creds)
-            await message.answer("✅ Сервис Google Drive создан")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка создания сервиса: {e}")
-            return
-        
-        # Шаг 5: Проверка доступности API
-        try:
-            about = service.about().get(fields='user, storageQuota').execute()
-            user = about.get('user', {})
-            await message.answer(f"✅ API доступен\n👤 Пользователь: {user.get('displayName')}\n📧 Email: {user.get('emailAddress')}")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка доступа к API: {e}")
-            return
-        
-        # Шаг 6: Создание тестового файла
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-                f.write("Test file for Google Drive debug\n")
-                f.write(f"Created: {datetime.datetime.now(TZ)}\n")
-                test_file_path = f.name
-            await message.answer(f"✅ Тестовый файл создан: {test_file_path}")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка создания файла: {e}")
-            return
-        
-        # Шаг 7: Попытка загрузки
-        try:
-            file_name = "debug_test.txt"
-            file_metadata = {'name': file_name}
-            
-            await message.answer("🔄 Пытаемся загрузить файл...")
-            
-            media = MediaFileUpload(test_file_path, resumable=True)
-            file = service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, name'
-            ).execute()
-            
-            file_id = file.get('id')
-            await message.answer(f"✅ Файл загружен! ID: {file_id}")
-            
-            # Шаг 8: Проверка что файл действительно загружен
-            try:
-                uploaded_file = service.files().get(fileId=file_id, fields='id, name, size').execute()
-                await message.answer(f"✅ Файл подтвержден:\n📁 {uploaded_file.get('name')}\n📊 Размер: {uploaded_file.get('size', 'N/A')} bytes")
-                
-                # Удаляем тестовый файл
-                service.files().delete(fileId=file_id).execute()
-                await message.answer("✅ Тестовый файл удален")
-                
-            except Exception as e:
-                await message.answer(f"⚠ Файл загружен но не подтвержден: {e}")
-            
-        except Exception as e:
-            await message.answer(f"❌ Ошибка загрузки файла: {e}")
-            import traceback
-            error_details = traceback.format_exc()
-            await message.answer(f"🔍 Детали ошибки:\n{error_details[:1000]}...")  # Первые 1000 символов
-        
-        # Удаляем локальный файл
-        os.unlink(test_file_path)
-            
-    except Exception as e:
-        await message.answer(f"❌ Критическая ошибка диагностики: {e}")
-
-@dp.message(Command("check_packages"))
-async def cmd_check_packages(message: types.Message):
-    """Проверка установленных пакетов"""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    try:
-        import google.auth
-        import googleapiclient
-        import google.oauth2
-        
-        response = "📦 Проверка пакетов:\n\n"
-        response += f"✅ google-auth: {google.auth.__version__}\n"
-        response += f"✅ googleapiclient: {googleapiclient.__version__}\n"
-        response += f"✅ google.oauth2: доступен\n"
-        
-        # Проверка интернет-соединения
-        try:
-            import urllib.request
-            urllib.request.urlopen('https://www.google.com', timeout=5)
-            response += "✅ Интернет-соединение: есть\n"
-        except:
-            response += "❌ Интернет-соединение: нет\n"
-        
-        await message.answer(response)
-        
-    except ImportError as e:
-        await message.answer(f"❌ Не хватает пакетов: {e}\n\nУстанови: pip install google-auth google-api-python-client")        
-
-
-
-
-
-
-@dp.message(Command("test_no_folder"))
-async def cmd_test_no_folder(message: types.Message):
-    """Тестирование загрузки без указания папки"""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    await message.answer("🔄 Тестируем загрузку в корневую папку...")
-    
-    # Создаем тестовый файл
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-            f.write("Test file for Google Drive - root folder\n")
-            f.write(f"Created: {datetime.datetime.now(TZ)}\n")
-            test_file_path = f.name
-        
-        # Временно убираем ID папки
-        original_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-        if original_folder_id:
-            os.environ.pop('GOOGLE_DRIVE_FOLDER_ID', None)
-            print("🔧 Временно убрали GOOGLE_DRIVE_FOLDER_ID")
-        
-        # Пробуем загрузить
-        success = await upload_to_google_drive(test_file_path)
-        
-        # Восстанавливаем ID папки
-        if original_folder_id:
-            os.environ['GOOGLE_DRIVE_FOLDER_ID'] = original_folder_id
-        
-        # Удаляем временный файл
-        os.unlink(test_file_path)
-        
-        if success:
-            await message.answer("✅ Загрузка в корневую папку работает! Проверь корневую папку Google Drive")
-        else:
-            await message.answer("❌ Загрузка в корневую папку тоже не работает")
-            
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
-
-@dp.message(Command("check_folder"))
-async def cmd_check_folder(message: types.Message):
-    """Проверка доступа к папке"""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    await message.answer("🔍 Проверяем доступ к папке...")
-    
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-    if not folder_id:
-        await message.answer("❌ GOOGLE_DRIVE_FOLDER_ID не настроен")
-        return
-    
-    try:
-        # Получаем credentials
-        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
-        creds_data = json.loads(credentials_json)
-        
-        SCOPES = ['https://www.googleapis.com/auth/drive']
-        creds = service_account.Credentials.from_service_account_info(
-            creds_data, scopes=SCOPES
-        )
-        
-        service = build('drive', 'v3', credentials=creds)
-        
-        # Пробуем получить информацию о папке
-        folder = service.files().get(
-            fileId=folder_id, 
-            fields='id, name, mimeType, capabilities'
-        ).execute()
-        
-        response = f"✅ Папка доступна!\n\n"
-        response += f"📁 Имя: {folder.get('name')}\n"
-        response += f"🆔 ID: {folder.get('id')}\n"
-        response += f"📄 Тип: {folder.get('mimeType')}\n"
-        
-        # Проверяем права
-        caps = folder.get('capabilities', {})
-        response += f"✏️ Может редактировать: {caps.get('canEdit', False)}\n"
-        response += f"📤 Может загружать: {caps.get('canUpload', False)}\n"
-        
-        await message.answer(response)
-        
-    except Exception as e:
-        await message.answer(f"❌ Ошибка доступа к папке: {e}")
-
-@dp.message(Command("fix_drive"))
-async def cmd_fix_drive(message: types.Message):
-    """Тестирование с правильным ID папки"""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    await message.answer("🔄 Тестируем загрузку с правильным ID...")
-    
-    # Создаем тестовый файл
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-            f.write("Test file for Google Drive with correct folder ID\n")
-            f.write(f"Created: {datetime.datetime.now(TZ)}\n")
-            test_file_path = f.name
-        
-        # Пробуем загрузить
-        success = await upload_to_google_drive(test_file_path)
-        
-        # Удаляем временный файл
-        os.unlink(test_file_path)
-        
-        if success:
-            await message.answer("✅ Загрузка работает! Проверь папку на Google Drive")
-        else:
-            await message.answer("❌ Все еще не работает\n\n" +
-                               "Проверь:\n" +
-                               "1. ID папки: 1ZuaIFiCvmVW4V_sIduwG7zo7CKIdHlxf\n" +
-                               "2. Доступ для arcady-bot-backup@oval-airship-468313-v8.iam.gserviceaccount.com")
-            
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
-
-@dp.message(Command("check_setup"))
-async def cmd_check_setup(message: types.Message):
-    """Проверка всей настройки"""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("❌ У вас нет прав для этой команды")
-        return
-    
-    response = "🔍 Проверка настройки бэкапа:\n\n"
-    
-    # Проверка credentials
-    credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
-    
-    if credentials_json:
-        response += "1. Credentials: ✅ из переменных окружения\n"
-        try:
-            creds_data = json.loads(credentials_json)
-            email = creds_data.get('client_email', 'Не найден')
-            response += f"   📧 Email: {email}\n"
-        except:
-            response += "   ❌ Ошибка парсинга JSON\n"
-    else:
-        response += "1. Credentials: ❌ не настроены\n"
-    
-    # Проверка папки
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-    response += f"\n2. ID папки: {folder_id if folder_id else 'Не указан'}\n"
-    
-    if folder_id:
-        response += f"   🔗 Ссылка: https://drive.google.com/drive/folders/{folder_id}\n"
-    
-    response += f"\n💡 Действия:\n"
-    response += f"1. Добавь email выше как редактора в папку\n"
-    response += f"2. Убедись что ID папки: 1ZuaIFiCvmVW4V_sIduwG7zo7CKIdHlxf\n"
-    response += f"3. Используй /fix_drive для теста"
-    
-    await message.answer(response)
 
 async def backup_database_job():
     """Ежедневная задача бэкапа базы данных"""
     try:
         print("🔄 Запуск ежедневного бэкапа БД...")
         
-        # Пробуем стандартный метод
+        # Создаем бэкап
         backup_path = await create_database_backup()
-        
-        # Если не получилось, пробуем Python-метод
         if not backup_path:
-            print("🔄 Пробуем альтернативный метод бэкапа...")
-            backup_path = await create_database_backup_python()
-        
-        if not backup_path:
-            print("❌ Не удалось создать бэкап БД ни одним методом")
+            print("❌ Не удалось создать бэкап БД")
             return
         
         # Загружаем на Google Drive
@@ -624,8 +271,6 @@ async def backup_database_job():
             
     except Exception as e:
         print(f"❌ Критическая ошибка в задаче бэкапа: {e}")
-        import traceback
-        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
 
 @dp.message(Command("backup"))
 async def cmd_backup(message: types.Message):
@@ -652,40 +297,30 @@ async def cmd_backup(message: types.Message):
     else:
         await message.answer("❌ Не удалось загрузить бэкап на Google Drive")
 
-
-@dp.message(Command("test_backup"))
-async def cmd_test_backup(message: types.Message):
-    """Тестирование разных методов бэкапа"""
+@dp.message(Command("test_backup_simple"))
+async def cmd_test_backup_simple(message: types.Message):
+    """Простой тест бэкапа"""
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для этой команды")
         return
     
-    await message.answer("🔄 Тестирование методов бэкапа...")
+    await message.answer("🧪 Тестируем упрощенный бэкап...")
     
-    # Тестируем стандартный метод
-    await message.answer("1. Тестируем стандартный метод (mysqldump)...")
-    backup_path1 = await create_database_backup()
+    # Создаем бэкап
+    backup_path = await create_database_backup()
+    if not backup_path:
+        await message.answer("❌ Не удалось создать бэкап БД")
+        return
     
-    if backup_path1:
-        await message.answer("✅ Стандартный метод работает!")
+    await message.answer(f"✅ Бэкап создан: {os.path.basename(backup_path)}")
+    
+    # Пробуем загрузить
+    success = await upload_to_google_drive(backup_path)
+    if success:
+        await message.answer("✅ Загрузка на Google Drive работает!")
     else:
-        await message.answer("❌ Стандартный метод не работает")
-    
-    # Тестируем Python метод
-    await message.answer("2. Тестируем Python метод...")
-    backup_path2 = await create_database_backup_python()
-    
-    if backup_path2:
-        await message.answer("✅ Python метод работает!")
-        
-        # Пробуем загрузить на Google Drive
-        success = await upload_to_google_drive(backup_path2)
-        if success:
-            await message.answer("✅ Загрузка на Google Drive работает!")
-        else:
-            await message.answer("❌ Загрузка на Google Drive не работает")
-    else:
-        await message.answer("❌ Python метод не работает")
+        await message.answer("❌ Загрузка на Google Drive не работает")
+
 
 def is_allowed_chat(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
