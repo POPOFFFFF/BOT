@@ -119,6 +119,81 @@ async def create_database_backup():
         import traceback
         print(f"🔍 Детали ошибки: {traceback.format_exc()}")
         return None
+
+async def create_database_backup_python():
+    """Альтернативный метод бэкапа через Python (без mysqldump)"""
+    try:
+        print("🔄 Используем Python-бэкап...")
+        
+        timestamp = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+        backup_filename = f"backup_python_{timestamp}.sql"
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = os.path.join(temp_dir, backup_filename)
+            
+            # Получаем все таблицы
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SHOW TABLES")
+                    tables = [row[0] for row in await cur.fetchall()]
+            
+            print(f"📋 Найдено таблиц: {tables}")
+            
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write("-- Backup created by Python\n")
+                f.write(f"-- Date: {datetime.datetime.now(TZ)}\n")
+                f.write(f"-- Database: {DB_NAME}\n\n")
+                
+                for table in tables:
+                    f.write(f"\n-- Table: {table}\n")
+                    
+                    # Получаем структуру таблицы
+                    async with pool.acquire() as conn:
+                        async with conn.cursor() as cur:
+                            await cur.execute(f"SHOW CREATE TABLE `{table}`")
+                            create_table = await cur.fetchone()
+                            if create_table:
+                                f.write(f"{create_table[1]};\n\n")
+                            
+                            # Получаем данные
+                            await cur.execute(f"SELECT * FROM `{table}`")
+                            rows = await cur.fetchall()
+                            
+                            if rows:
+                                # Получаем названия колонок
+                                await cur.execute(f"DESCRIBE `{table}`")
+                                columns = [col[0] for col in await cur.fetchall()]
+                                
+                                for row in rows:
+                                    values = []
+                                    for value in row:
+                                        if value is None:
+                                            values.append("NULL")
+                                        elif isinstance(value, (int, float)):
+                                            values.append(str(value))
+                                        else:
+                                            # Экранируем специальные символы
+                                            escaped_value = str(value).replace("'", "''").replace("\\", "\\\\")
+                                            values.append(f"'{escaped_value}'")
+                                    
+                                    f.write(f"INSERT INTO `{table}` ({', '.join([f'`{col}`' for col in columns])}) VALUES ({', '.join(values)});\n")
+                            
+                            f.write("\n")
+            
+            if os.path.exists(backup_path) and os.path.getsize(backup_path) > 0:
+                print(f"✅ Python-бэкап создан: {backup_path}")
+                return backup_path
+            else:
+                print("❌ Python-бэкап не удался")
+                return None
+                
+    except Exception as e:
+        print(f"❌ Ошибка Python-бэкапа: {e}")
+        import traceback
+        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
+        return None
+
+
 async def upload_to_google_drive(file_path):
     """Загружает файл на Google Drive"""
     try:
@@ -168,10 +243,16 @@ async def backup_database_job():
     try:
         print("🔄 Запуск ежедневного бэкапа БД...")
         
-        # Создаем бэкап
+        # Пробуем стандартный метод
         backup_path = await create_database_backup()
+        
+        # Если не получилось, пробуем Python-метод
         if not backup_path:
-            print("❌ Не удалось создать бэкап БД")
+            print("🔄 Пробуем альтернативный метод бэкапа...")
+            backup_path = await create_database_backup_python()
+        
+        if not backup_path:
+            print("❌ Не удалось создать бэкап БД ни одним методом")
             return
         
         # Загружаем на Google Drive
@@ -193,20 +274,10 @@ async def backup_database_job():
         else:
             print("❌ Не удалось загрузить бэкап на Google Drive")
             
-            # Отправляем уведомление об ошибке админам
-            for admin_id in ALLOWED_USERS:
-                try:
-                    await bot.send_message(
-                        admin_id, 
-                        f"❌ Ошибка при создании бэкапа БД!\n"
-                        f"⏰ Время: {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}\n"
-                        f"⚠ Проверьте логи бота"
-                    )
-                except Exception as e:
-                    print(f"❌ Ошибка отправки уведомления об ошибке админу {admin_id}: {e}")
-                    
     except Exception as e:
         print(f"❌ Критическая ошибка в задаче бэкапа: {e}")
+        import traceback
+        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
 
 @dp.message(Command("backup"))
 async def cmd_backup(message: types.Message):
@@ -233,6 +304,40 @@ async def cmd_backup(message: types.Message):
     else:
         await message.answer("❌ Не удалось загрузить бэкап на Google Drive")
 
+
+@dp.message(Command("test_backup"))
+async def cmd_test_backup(message: types.Message):
+    """Тестирование разных методов бэкапа"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Тестирование методов бэкапа...")
+    
+    # Тестируем стандартный метод
+    await message.answer("1. Тестируем стандартный метод (mysqldump)...")
+    backup_path1 = await create_database_backup()
+    
+    if backup_path1:
+        await message.answer("✅ Стандартный метод работает!")
+    else:
+        await message.answer("❌ Стандартный метод не работает")
+    
+    # Тестируем Python метод
+    await message.answer("2. Тестируем Python метод...")
+    backup_path2 = await create_database_backup_python()
+    
+    if backup_path2:
+        await message.answer("✅ Python метод работает!")
+        
+        # Пробуем загрузить на Google Drive
+        success = await upload_to_google_drive(backup_path2)
+        if success:
+            await message.answer("✅ Загрузка на Google Drive работает!")
+        else:
+            await message.answer("❌ Загрузка на Google Drive не работает")
+    else:
+        await message.answer("❌ Python метод не работает")
 
 def is_allowed_chat(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
