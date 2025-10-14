@@ -257,6 +257,39 @@ async def upload_to_google_drive(file_path):
         print(f"❌ Ошибка загрузки на Google Drive: {e}")
         return False
 
+@dp.message(Command("fix_drive"))
+async def cmd_fix_drive(message: types.Message):
+    """Тестирование с правильным ID папки"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Тестируем загрузку с правильным ID...")
+    
+    # Создаем тестовый файл
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("Test file for Google Drive with correct folder ID\n")
+            f.write(f"Created: {datetime.datetime.now(TZ)}\n")
+            test_file_path = f.name
+        
+        # Пробуем загрузить
+        success = await upload_to_google_drive(test_file_path)
+        
+        # Удаляем временный файл
+        os.unlink(test_file_path)
+        
+        if success:
+            await message.answer("✅ Загрузка работает! Проверь папку на Google Drive")
+        else:
+            await message.answer("❌ Все еще не работает\n\n" +
+                               "Проверь:\n" +
+                               "1. ID папки: 1ZuaIFiCvmVW4V_sIduwG7zo7CKIdHlxf\n" +
+                               "2. Доступ для arcady-bot-backup@oval-airship-468313-v8.iam.gserviceaccount.com")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
 @dp.message(Command("check_setup"))
 async def cmd_check_setup(message: types.Message):
     """Проверка всей настройки"""
@@ -268,7 +301,6 @@ async def cmd_check_setup(message: types.Message):
     
     # Проверка credentials
     credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
-    credentials_file = os.getenv("GOOGLE_DRIVE_CREDENTIALS_FILE", "credentials.json")
     
     if credentials_json:
         response += "1. Credentials: ✅ из переменных окружения\n"
@@ -278,21 +310,20 @@ async def cmd_check_setup(message: types.Message):
             response += f"   📧 Email: {email}\n"
         except:
             response += "   ❌ Ошибка парсинга JSON\n"
-    elif os.path.exists(credentials_file):
-        response += f"1. Credentials: ✅ из файла {credentials_file}\n"
-        try:
-            with open(credentials_file, 'r') as f:
-                creds_data = json.load(f)
-            email = creds_data.get('client_email', 'Не найден')
-            response += f"   📧 Email: {email}\n"
-        except:
-            response += "   ❌ Ошибка чтения файла\n"
     else:
         response += "1. Credentials: ❌ не настроены\n"
     
     # Проверка папки
     folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
     response += f"\n2. ID папки: {folder_id if folder_id else 'Не указан'}\n"
+    
+    if folder_id:
+        response += f"   🔗 Ссылка: https://drive.google.com/drive/folders/{folder_id}\n"
+    
+    response += f"\n💡 Действия:\n"
+    response += f"1. Добавь email выше как редактора в папку\n"
+    response += f"2. Убедись что ID папки: 1ZuaIFiCvmVW4V_sIduwG7zo7CKIdHlxf\n"
+    response += f"3. Используй /fix_drive для теста"
     
     await message.answer(response)
 
