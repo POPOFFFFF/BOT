@@ -4052,6 +4052,194 @@ async def cmd_force_birthday_check(message: types.Message):
     await message.answer("✅ Проверка завершена")
 
 
+
+
+
+@dp.message(Command("send_backup"))
+async def cmd_send_backup(message: types.Message):
+    """Отправляет бэкап базы данных в Telegram"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    await message.answer("🔄 Создаю бэкап базы данных...")
+    
+    # Создаем бэкап
+    backup_path = await create_database_backup()
+    if not backup_path:
+        await message.answer("❌ Не удалось создать бэкап БД")
+        return
+    
+    try:
+        # Отправляем файл
+        with open(backup_path, 'rb') as backup_file:
+            await message.answer_document(
+                backup_file,
+                caption=f"📦 Бэкап базы данных\n"
+                       f"📅 {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}\n"
+                       f"🤖 Создан ботом Arcady"
+            )
+        
+        await message.answer("✅ Бэкап успешно отправлен!")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки файла: {e}")
+    
+    finally:
+        # Удаляем временный файл
+        if os.path.exists(backup_path):
+            os.unlink(backup_path)
+
+async def send_daily_backup():
+    """Ежедневная отправка бэкапа админам"""
+    try:
+        print("🔄 Запуск ежедневной отправки бэкапа...")
+        
+        # Создаем бэкап
+        backup_path = await create_database_backup()
+        if not backup_path:
+            print("❌ Не удалось создать бэкап БД")
+            return
+        
+        # Отправляем всем админам
+        success_count = 0
+        for admin_id in ALLOWED_USERS:
+            try:
+                with open(backup_path, 'rb') as backup_file:
+                    await bot.send_document(
+                        admin_id,
+                        backup_file,
+                        caption=f"📦 Ежедневный бэкап базы данных\n"
+                               f"📅 {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}\n"
+                               f"🤖 Автоматическая отправка от Arcady"
+                    )
+                success_count += 1
+                print(f"✅ Бэкап отправлен админу {admin_id}")
+                
+            except Exception as e:
+                print(f"❌ Ошибка отправки админу {admin_id}: {e}")
+        
+        # Удаляем временный файл
+        if os.path.exists(backup_path):
+            os.unlink(backup_path)
+        
+        print(f"✅ Ежедневные бэкапы отправлены! Успешно: {success_count}/{len(ALLOWED_USERS)}")
+        
+    except Exception as e:
+        print(f"❌ Критическая ошибка в ежедневной отправке бэкапа: {e}")
+
+@dp.message(Command("setup_daily_backup"))
+async def cmd_setup_daily_backup(message: types.Message):
+    """Настройка времени ежедневной отправки бэкапа"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для этой команды")
+        return
+    
+    # Создаем клавиатуру с вариантами времени
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏰ 06:00 утра", callback_data="backup_time_6")],
+        [InlineKeyboardButton(text="⏰ 07:00 утра", callback_data="backup_time_7")],
+        [InlineKeyboardButton(text="⏰ 08:00 утра", callback_data="backup_time_8")],
+        [InlineKeyboardButton(text="⏰ 09:00 утра", callback_data="backup_time_9")],
+        [InlineKeyboardButton(text="🔄 Тест отправки", callback_data="test_backup_now")],
+        [InlineKeyboardButton(text="❌ Отключить автобэкап", callback_data="disable_backup")]
+    ])
+    
+    await message.answer(
+        "🕐 **Настройка ежедневной отправки бэкапа**\n\n"
+        "Выберите время для автоматической отправки бэкапа:\n"
+        "• Бэкап будет отправляться всем администраторам\n"
+        "• Файл будет создаваться автоматически\n"
+        "• Можно тестировать командой /send_backup",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data.startswith("backup_time_"))
+async def set_backup_time(callback: types.CallbackQuery):
+    """Устанавливает время ежедневной отправки бэкапа"""
+    if callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("❌ Нет прав")
+        return
+    
+    hour = int(callback.data.split("_")[2])
+    
+    try:
+        # Удаляем старую задачу если есть
+        try:
+            scheduler.remove_job("daily_backup_telegram")
+        except:
+            pass
+        
+        # Добавляем новую задачу
+        scheduler.add_job(
+            send_daily_backup,
+            CronTrigger(hour=hour, minute=0, timezone=TZ),
+            id="daily_backup_telegram"
+        )
+        
+        await callback.message.edit_text(
+            f"✅ Ежедневный бэкап настроен!\n"
+            f"🕐 Время отправки: {hour:02d}:00\n"
+            f"👥 Получатели: все администраторы\n\n"
+            f"Бэкап будет автоматически создаваться и отправляться каждый день."
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка настройки: {e}")
+    
+    await callback.answer()
+
+@dp.callback_query(F.data == "test_backup_now")
+async def test_backup_now(callback: types.CallbackQuery):
+    """Тестовая отправка бэкапа"""
+    if callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("❌ Нет прав")
+        return
+    
+    await callback.message.edit_text("🔄 Тестовая отправка бэкапа...")
+    
+    # Создаем и отправляем бэкап
+    backup_path = await create_database_backup()
+    if not backup_path:
+        await callback.message.edit_text("❌ Не удалось создать бэкап БД")
+        return
+    
+    try:
+        with open(backup_path, 'rb') as backup_file:
+            await callback.message.answer_document(
+                backup_file,
+                caption=f"🧪 Тестовый бэкап базы данных\n"
+                       f"📅 {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}\n"
+                       f"🤖 Тест автоматической отправки"
+            )
+        
+        await callback.message.answer("✅ Тестовая отправка завершена!")
+        
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка отправки: {e}")
+    
+    finally:
+        if os.path.exists(backup_path):
+            os.unlink(backup_path)
+    
+    await callback.answer()
+
+@dp.callback_query(F.data == "disable_backup")
+async def disable_backup(callback: types.CallbackQuery):
+    """Отключает ежедневную отправку бэкапа"""
+    if callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("❌ Нет прав")
+        return
+    
+    try:
+        scheduler.remove_job("daily_backup_telegram")
+        await callback.message.edit_text("✅ Ежедневная отправка бэкапа отключена")
+    except:
+        await callback.message.edit_text("ℹ️ Автобэкап и так не был настроен")
+    
+    await callback.answer()
+
+# Обновляем функцию main для настройки бэкапа по умолчанию
 async def main():
     global pool
     pool = await get_pool()
@@ -4065,12 +4253,23 @@ async def main():
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
-    # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
+    # Проверка дней рождения каждый день в 7:00 утра
     scheduler.add_job(
         check_birthdays, 
-        CronTrigger(hour=7, minute=0, timezone=TZ),  # 9:00 утра по Омску
+        CronTrigger(hour=7, minute=0, timezone=TZ),
         id="birthday_check"
     )
+    
+    # ЕЖЕДНЕВНЫЙ БЭКАП В TELEGRAM в 7:30 утра (по умолчанию)
+    try:
+        scheduler.add_job(
+            send_daily_backup,
+            CronTrigger(hour=7, minute=30, timezone=TZ),
+            id="daily_backup_telegram"
+        )
+        print("✅ Ежедневный бэкап в Telegram настроен на 7:30")
+    except Exception as e:
+        print(f"⚠️ Не удалось настроить ежедневный бэкап: {e}")
         
     scheduler.start()
     print("Планировщик запущен")
@@ -4082,5 +4281,6 @@ async def main():
         print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
     
     await dp.start_polling(bot)
+    
 if __name__ == "__main__":
     asyncio.run(main())
