@@ -197,41 +197,60 @@ async def create_database_backup_python():
 async def upload_to_google_drive(file_path):
     """Загружает файл на Google Drive"""
     try:
-        # Проверяем наличие файла с учетными данными
-        credentials_file = os.getenv("GOOGLE_DRIVE_CREDENTIALS_FILE")
-        if not credentials_file or not os.path.exists(credentials_file):
-            print("❌ Файл учетных данных Google Drive не найден")
-            return False
+        print("🔄 Начинаем загрузку на Google Drive...")
         
-        # Загружаем учетные данные
-        SCOPES = ['https://www.googleapis.com/auth/drive.file']
-        creds = service_account.Credentials.from_service_account_file(
-            credentials_file, scopes=SCOPES
-        )
+        # Попробуем получить credentials из переменных окружения
+        credentials_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")
         
-        # Создаем сервис
+        if credentials_json:
+            print("✅ Используем credentials из переменных окружения")
+            try:
+                creds_data = json.loads(credentials_json)
+                SCOPES = ['https://www.googleapis.com/auth/drive']
+                creds = service_account.Credentials.from_service_account_info(
+                    creds_data, scopes=SCOPES
+                )
+            except Exception as e:
+                print(f"❌ Ошибка парсинга credentials из переменных: {e}")
+                return False
+        else:
+            # Старый способ с файлом
+            credentials_file = os.getenv("GOOGLE_DRIVE_CREDENTIALS_FILE", "credentials.json")
+            print(f"📁 Ищем файл учетных данных: {credentials_file}")
+            
+            if not os.path.exists(credentials_file):
+                print(f"❌ Файл учетных данных не найден")
+                return False
+            
+            print("✅ Файл учетных данных найден")
+            SCOPES = ['https://www.googleapis.com/auth/drive']
+            creds = service_account.Credentials.from_service_account_file(
+                credentials_file, scopes=SCOPES
+            )
+
+        # Остальной код без изменений...
         service = build('drive', 'v3', credentials=creds)
         
-        # Метаданные файла
+        file_name = os.path.basename(file_path)
         file_metadata = {
-            'name': os.path.basename(file_path),
+            'name': file_name,
             'mimeType': 'application/sql'
         }
         
-        # Если указана папка, загружаем в нее
         folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         if folder_id:
+            print(f"📁 Загружаем в папку: {folder_id}")
             file_metadata['parents'] = [folder_id]
         
-        # Загружаем файл
+        print(f"📤 Загружаем файл: {file_name}")
         media = MediaFileUpload(file_path, resumable=True)
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id'
+            fields='id, name'
         ).execute()
         
-        print(f"✅ Файл загружен на Google Drive. ID: {file.get('id')}")
+        print(f"✅ Файл загружен на Google Drive! ID: {file.get('id')}")
         return True
         
     except Exception as e:
