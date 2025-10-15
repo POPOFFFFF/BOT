@@ -24,7 +24,6 @@ CHAT_IDS_STR = os.getenv("CHAT_ID", "")
 ALLOWED_CHAT_IDS = [int(x.strip()) for x in CHAT_IDS_STR.split(",") if x.strip()]
 DEFAULT_CHAT_ID = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else 0
 ALLOWED_USERS = [5228681344, 7620086223]
-spec_us = [7059079404]
 SPECIAL_USER_ID = []
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
@@ -1626,13 +1625,6 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
-        buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
-        buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data="menu_homework")]),  # Новая кнопка
-        buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
-        buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),
-        buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
-        buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
-    if spec_us:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
         buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data="menu_homework")]),  # Новая кнопка
         buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
