@@ -2189,14 +2189,19 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT name FROM subjects")
+            await cur.execute("SELECT id, name FROM subjects")  # Получаем ID и название
             subjects = await cur.fetchall()
     
     buttons = []
-    for subj in subjects:
-        buttons.append([InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")])
+    for subject_id, subject_name in subjects:
+        # Используем ID предмета вместо названия для callback_data
+        buttons.append([InlineKeyboardButton(
+            text=subject_name, 
+            callback_data=f"choose_subject_{subject_id}"  # Только ID, а не полное название
+        )])
     
     # Добавляем кнопку отмены
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
@@ -2209,14 +2214,26 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
 # Добавляем кнопки отмены на каждом шаге
 @dp.callback_query(F.data.startswith("choose_subject_"))
 async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
-    subject = callback.data[len("choose_subject_"):]
-    await state.update_data(subject=subject)
+    subject_id = int(callback.data[len("choose_subject_"):])
+    
+    # Получаем название предмета по ID
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+            result = await cur.fetchone()
+            if not result:
+                await callback.answer("❌ Предмет не найден", show_alert=True)
+                return
+            subject_name = result[0]
+    
+    await state.update_data(subject_id=subject_id, subject_name=subject_name)
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
         [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-    await callback.message.edit_text("Выберите четность недели:", reply_markup=kb)
+    await callback.message.edit_text(f"Выбран предмет: {subject_name}\n\nВыберите четность недели:", reply_markup=kb)
     await state.set_state(AddLessonState.week_type)
 
 @dp.callback_query(F.data.startswith("week_"))
@@ -2593,20 +2610,21 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pair_number=pair_number)
     
     data = await state.get_data()
-    subject_name = data["subject"]
+    subject_id = data["subject_id"]
+    subject_name = data["subject_name"]
     
     try:
         # Проверяем, есть ли у предмета фиксированный кабинет (rK)
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("SELECT id, rK FROM subjects WHERE name=%s", (subject_name,))
+                await cur.execute("SELECT rK FROM subjects WHERE id=%s", (subject_id,))
                 result = await cur.fetchone()
                 if not result:
                     await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
                     await state.clear()
                     return
                     
-                subject_id, is_rk = result
+                is_rk = result[0]
         
         if is_rk:
             # Если предмет с rK - спрашиваем кабинет
