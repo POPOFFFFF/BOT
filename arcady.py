@@ -163,17 +163,17 @@ async def sync_rasp_to_all_chats(source_chat_id: int):
     """Синхронизирует расписание из исходного чата во все остальные"""
     try:
         synced_count = 0
-
+        
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 # Копируем расписание из исходного чата во все остальные
                 for chat_id in ALLOWED_CHAT_IDS:
                     if chat_id == source_chat_id:
                         continue  # Пропускаем исходный чат
-
+                    
                     # Очищаем расписание в целевом чате
                     await cur.execute("DELETE FROM rasp_detailed WHERE chat_id=%s", (chat_id,))
-
+                    
                     # Копируем из исходного чата
                     await cur.execute("""
                         INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
@@ -181,12 +181,12 @@ async def sync_rasp_to_all_chats(source_chat_id: int):
                         FROM rasp_detailed 
                         WHERE chat_id=%s
                     """, (chat_id, source_chat_id))
-
+                    
                     synced_count += 1
-
+        
         print(f"✅ Расписание синхронизировано! Обновлено {synced_count} чатов.")
         return True
-
+        
     except Exception as e:
         print(f"❌ Ошибка синхронизации расписания: {e}")
         return False
@@ -201,7 +201,7 @@ async def add_homework(pool, subject_id: int, due_date: str, task_text: str):
         due_date_mysql = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
     except ValueError:
         raise ValueError("Неверный формат даты. Используйте ДД.ММ.ГГГГ")
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -230,7 +230,7 @@ async def get_homework_by_date(pool, date: str) -> List[Tuple]:
             date = datetime.datetime.strptime(date, '%d.%m.%Y').strftime('%Y-%m-%d')
         except ValueError:
             return []
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -260,23 +260,23 @@ async def update_homework(pool, homework_id: int, subject_id: int, due_date: str
     current_hw = await get_homework_by_id(pool, homework_id)
     if not current_hw:
         raise ValueError("Задание не найдено")
-
+    
     # Если subject_id не указан (None), используем текущий
     if subject_id is None:
         subject_id = current_hw[5]  # current_subject_id
-
+    
     # Если due_date не указан (None), используем текущий
     if due_date is None:
         due_date = current_hw[2]  # current_due_date
         if isinstance(due_date, datetime.date):
             due_date = due_date.strftime('%Y-%m-%d')
-
+    
     # Обрабатываем дату (может быть уже в формате YYYY-MM-DD или DD.MM.YYYY)
     if isinstance(due_date, str) and '.' in due_date:
         due_date_mysql = datetime.datetime.strptime(due_date, '%d.%m.%Y').strftime('%Y-%m-%d')
     else:
         due_date_mysql = due_date
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -299,7 +299,7 @@ async def has_homework_for_date(pool, date: str) -> bool:
             date = datetime.datetime.strptime(date, '%d.%m.%Y').strftime('%Y-%m-%d')
         except ValueError:
             return False
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT COUNT(*) FROM homework WHERE due_date=%s", (date,))
@@ -375,12 +375,12 @@ async def cmd_admin_kick(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
         return
-
+    
     # Проверяем, что команда в групповом чате
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("❌ Эта команда работает только в групповых чатах")
         return
-
+    
     # Проверяем, что бот админ в чате
     try:
         bot_member = await bot.get_chat_member(message.chat.id, bot.id)
@@ -390,26 +390,26 @@ async def cmd_admin_kick(message: types.Message):
     except Exception:
         await message.answer("❌ Ошибка проверки прав бота")
         return
-
+    
     # Проверяем реплай
     if not message.reply_to_message:
         await message.answer("⚠ Использование: Ответьте на сообщение пользователя командой /акик")
         return
-
+    
     try:
         user_id = message.reply_to_message.from_user.id
         user_to_kick = message.reply_to_message.from_user
-
+        
         # Исключаем кик самого себя
         if user_id == message.from_user.id:
             await message.answer("❌ Нельзя кикнуть самого себя")
             return
-
+        
         # Исключаем кик других админов из ALLOWED_USERS
         if user_id in ALLOWED_USERS:
             await message.answer("❌ Нельзя кикнуть другого администратора")
             return
-
+        
         # Проверяем, не пытаемся ли кикнуть создателя чата
         try:
             target_member = await bot.get_chat_member(message.chat.id, user_id)
@@ -418,15 +418,15 @@ async def cmd_admin_kick(message: types.Message):
                 return
         except Exception as e:
             print(f"Ошибка проверки прав цели: {e}")
-
+        
         # Выполняем кик
         await bot.ban_chat_member(message.chat.id, user_id)
         await message.answer(f"🚫 Пользователь {user_to_kick.first_name} (@{user_to_kick.username or 'нет'}) был кикнут администратором")
-
+        
         # Разбаниваем через 30 секунд, чтобы можно было вернуться
         await asyncio.sleep(30)
         await bot.unban_chat_member(message.chat.id, user_id)
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при кике: {e}")
 
@@ -440,12 +440,12 @@ async def cmd_admin_mute(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
         return
-
+    
     # Проверяем, что команда в групповом чате
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("❌ Эта команда работает только в групповых чатах")
         return
-
+    
     # Проверяем, что бот админ в чате
     try:
         bot_member = await bot.get_chat_member(message.chat.id, bot.id)
@@ -455,10 +455,10 @@ async def cmd_admin_mute(message: types.Message):
     except Exception:
         await message.answer("❌ Ошибка проверки прав бота")
         return
-
+    
     # Парсим аргументы
     args = message.text.split()
-
+    
     # Проверяем минимальное количество аргументов
     if len(args) < 3:
         await message.answer(
@@ -470,26 +470,26 @@ async def cmd_admin_mute(message: types.Message):
             "Доступные единицы: секунды, минуты, часы, дни"
         )
         return
-
+    
     # Проверяем реплай
     if not message.reply_to_message:
         await message.answer("⚠ Ответьте на сообщение пользователя, которого нужно замутить")
         return
-
+    
     try:
         user_id = message.reply_to_message.from_user.id
         user_to_mute = message.reply_to_message.from_user
-
+        
         # Исключаем мут самого себя
         if user_id == message.from_user.id:
             await message.answer("❌ Нельзя замутить самого себя")
             return
-
+        
         # Исключаем мут других админов из ALLOWED_USERS
         if user_id in ALLOWED_USERS:
             await message.answer("❌ Нельзя замутить другого администратора")
             return
-
+        
         # Проверяем, не пытаемся ли замутить создателя чата
         try:
             target_member = await bot.get_chat_member(message.chat.id, user_id)
@@ -498,18 +498,18 @@ async def cmd_admin_mute(message: types.Message):
                 return
         except Exception as e:
             print(f"Ошибка проверки прав цели: {e}")
-
+        
         # Парсим время - берем второй и третий аргумент
         number_str = args[1]
         unit = args[2].lower()
-
+        
         # Проверяем, что число валидно
         try:
             number = int(number_str)
         except ValueError:
             await message.answer("❌ Неверное число. Пример: /амут 10 секунд")
             return
-
+        
         # Конвертируем в секунды
         duration = 0
         if unit in ['секунд', 'секунды', 'секунду', 'сек', 'с']:
@@ -523,20 +523,20 @@ async def cmd_admin_mute(message: types.Message):
         else:
             await message.answer("❌ Неизвестная единица времени. Используйте: секунды, минуты, часы, дни")
             return
-
+        
         # Проверяем максимальное время (30 дней)
         if duration > 2592000:  # 30 дней в секундах
             await message.answer("❌ Максимальное время мута - 30 дней")
             return
-
+        
         # Проверяем минимальное время (10 секунд)
         if duration < 10:
             await message.answer("❌ Минимальное время мута - 10 секунд")
             return
-
+        
         # Устанавливаем мут
         until_date = datetime.datetime.now() + datetime.timedelta(seconds=duration)
-
+        
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
             user_id=user_id,
@@ -552,11 +552,11 @@ async def cmd_admin_mute(message: types.Message):
             ),
             until_date=until_date
         )
-
+        
         # Форматируем время для ответа
         time_display = format_duration(duration)
         await message.answer(f"🔇 Пользователь {user_to_mute.first_name} (@{user_to_mute.username or 'нет'}) замьючен на {time_display} администратором")
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при муте: {e}")
 
@@ -569,12 +569,12 @@ async def cmd_admin_unmute(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
         return
-
+    
     # Проверяем, что команда в групповом чате
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("❌ Эта команда работает только в групповых чатах")
         return
-
+    
     # Проверяем, что бот админ в чате
     try:
         bot_member = await bot.get_chat_member(message.chat.id, bot.id)
@@ -584,16 +584,16 @@ async def cmd_admin_unmute(message: types.Message):
     except Exception:
         await message.answer("❌ Ошибка проверки прав бота")
         return
-
+    
     # Проверяем реплай
     if not message.reply_to_message:
         await message.answer("⚠ Использование: Ответьте на сообщение пользователя командой /аразмут")
         return
-
+    
     try:
         user_id = message.reply_to_message.from_user.id
         user_to_unmute = message.reply_to_message.from_user
-
+        
         # Восстанавливаем все права
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
@@ -609,9 +609,9 @@ async def cmd_admin_unmute(message: types.Message):
                 can_change_info=False
             )
         )
-
+        
         await message.answer(f"🔊 Пользователь {user_to_unmute.first_name} (@{user_to_unmute.username or 'нет'}) размьючен администратором")
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при размуте: {e}")
 
@@ -624,36 +624,36 @@ async def cmd_admin_spam_clean(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ У вас нет прав для использования этой команды")
         return
-
+    
     # Проверяем, что команда в групповом чате
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("❌ Эта команда работает только в групповых чатах")
         return
-
+    
     # Проверяем реплай
     if not message.reply_to_message:
         await message.answer("⚠ Использование: Ответьте на спам-сообщение командой /аспам")
         return
-
+    
     try:
         spam_user_id = message.reply_to_message.from_user.id
         spam_user = message.reply_to_message.from_user
-
+        
         # Удаляем сообщение с командой
         await message.delete()
-
+        
         # Удаляем спам-сообщение
         await message.reply_to_message.delete()
-
+        
         # Кикаем спамера
         await bot.ban_chat_member(message.chat.id, spam_user_id)
-
+        
         await message.answer(f"🧹 Спам от {spam_user.first_name} (@{spam_user.username or 'нет'}) удален, пользователь кикнут")
-
+        
         # Разбаниваем через минуту
         await asyncio.sleep(60)
         await bot.unban_chat_member(message.chat.id, spam_user_id)
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при очистке спама: {e}")
 
@@ -696,32 +696,32 @@ def format_duration(seconds: int) -> str:
 async def get_current_week_type(pool, chat_id: int = None) -> int:
     """Получаем текущую четность с автоматической сменой при наступлении понедельника"""
     COMMON_CHAT_ID = 0
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             # Получаем текущую запись
             await cur.execute("SELECT week_type, updated_at FROM current_week_type WHERE chat_id=%s", (COMMON_CHAT_ID,))
             row = await cur.fetchone()
-
+            
             now = datetime.datetime.now(TZ)
             today = now.date()
             current_weekday = today.isoweekday()  # 1-понедельник, 7-воскресенье
-
+            
             if row:
                 week_type, last_updated = row
-
+                
                 # Конвертируем last_updated в date
                 if isinstance(last_updated, datetime.datetime):
                     last_updated_date = last_updated.date()
                 else:
                     last_updated_date = last_updated
-
+                
                 # ОПРЕДЕЛЯЕМ КОГДА МЕНЯТЬ ЧЕТНОСТЬ:
                 # Меняем четность в ПОНЕДЕЛЬНИК, если последнее обновление было ДО этого понедельника
                 if current_weekday == 1:  # Сегодня понедельник
                     # Находим дату этого понедельника (сегодня)
                     this_monday = today
-
+                    
                     # Если последнее обновление было ДО этого понедельника - меняем четность
                     if last_updated_date < this_monday:
                         week_type = 2 if week_type == 1 else 1
@@ -731,7 +731,7 @@ async def get_current_week_type(pool, chat_id: int = None) -> int:
                             WHERE chat_id=%s
                         """, (week_type, today, COMMON_CHAT_ID))
                         print(f"✅ Автоматически переключена неделя на: {'нечетная' if week_type == 1 else 'четная'}")
-
+                
                 return week_type
             else:
                 # Если запись не существует, создаем по умолчанию нечетную неделю
@@ -744,7 +744,7 @@ async def set_current_week_type(pool, chat_id: int = None, week_type: int = None
     """Устанавливаем четность недели (общую для всех чатов)"""
     # Используем фиксированный chat_id для хранения общей четности
     COMMON_CHAT_ID = 0  # Специальный ID для общей четности
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -873,7 +873,7 @@ async def add_birthday(pool, user_name: str, birth_date: str, added_by_user_id: 
         birth_date_mysql = datetime.datetime.strptime(birth_date, '%d.%m.%Y').strftime('%Y-%m-%d')
     except ValueError:
         raise ValueError("Неверный формат даты. Используйте ДД.ММ.ГГГГ")
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -885,9 +885,9 @@ async def get_today_birthdays(pool):
     """Получает все дни рождения на сегодня"""
     today = datetime.datetime.now(TZ).date()
     today_str = today.strftime('%m-%d')  # Формат для сравнения
-
+    
     print(f"🔍 Проверяем дни рождения на дату: {today_str}")
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -896,11 +896,11 @@ async def get_today_birthdays(pool):
                 WHERE DATE_FORMAT(birth_date, '%m-%d') = %s
             """, (today_str,))
             results = await cur.fetchall()
-
+            
             print(f"📅 Найдено дней рождений: {len(results)}")
             for result in results:
                 print(f"  - {result[1]}: {result[2]}")
-
+            
             return results
 
 async def get_all_birthdays(pool):
@@ -930,7 +930,7 @@ async def cmd_add_birthday(message: types.Message):
 
     # Разбиваем сообщение на части
     parts = message.text.split()
-
+    
     if len(parts) < 3:
         await message.answer(
             "⚠ Использование: /adddr Имя ДД.ММ.ГГГГ\n\n"
@@ -942,11 +942,11 @@ async def cmd_add_birthday(message: types.Message):
 
     # Дата всегда последний элемент
     date_str = parts[-1]
-
+    
     # Имя - это всё между командой и датой
     name_parts = parts[1:-1]  # Все части кроме первой (команда) и последней (дата)
     name = ' '.join(name_parts)
-
+    
     if not name:
         await message.answer("❌ Имя не может быть пустым.")
         return
@@ -954,21 +954,21 @@ async def cmd_add_birthday(message: types.Message):
     try:
         # Проверяем формат даты
         birth_date = datetime.datetime.strptime(date_str, '%d.%m.%Y').date()
-
+        
         # Проверяем, что дата не в будущем
         today = datetime.datetime.now(TZ).date()
         if birth_date > today:
             await message.answer("❌ Дата рождения не может быть в будущем.")
             return
-
+        
         # Добавляем в базу
         await add_birthday(pool, name, date_str, message.from_user.id)
-
+        
         # Вычисляем возраст
         age = today.year - birth_date.year
         if today.month < birth_date.month or (today.month == birth_date.month and today.day < birth_date.day):
             age -= 1
-
+        
         await message.answer(
             f"✅ День рождения добавлен!\n\n"
             f"👤 Имя: {name}\n"
@@ -976,7 +976,7 @@ async def cmd_add_birthday(message: types.Message):
             f"🎂 Возраст: {age} лет\n\n"
             f"Теперь {name} будет получать поздравления автоматически во всех беседах!"
         )
-
+        
     except ValueError:
         await message.answer(
             "❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ\n\n"
@@ -990,37 +990,37 @@ async def check_birthdays():
     try:
         print("🎂 Запуск проверки дней рождения...")
         birthdays = await get_today_birthdays(pool)
-
+        
         if not birthdays:
             print("🎂 Сегодня нет дней рождения")
             return
-
+        
         print(f"🎂 Найдено {len(birthdays)} дней рождений для поздравления")
-
+        
         for birthday in birthdays:
             birthday_id, user_name, birth_date = birthday
-
+            
             # Детальное логирование
             print(f"🎂 Обрабатываем: {user_name}, дата: {birth_date}")
-
+            
             # Вычисляем возраст
             today = datetime.datetime.now(TZ).date()
             birth_date_obj = birth_date if isinstance(birth_date, datetime.date) else datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
             age = today.year - birth_date_obj.year
-
+            
             # Если день рождения еще не наступил в этом году, корректируем возраст
             if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
                 age -= 1
-
+            
             print(f"🎂 {user_name} исполняется {age} лет")
-
+            
             # Создаем текст поздравления
             message_text = (
                 f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
                 f"В этом году тебе исполнилось целых {age} лет!\n\n"
                 f"От сердца и почек дарю тебе цветочек 💐"
             )
-
+            
             # Отправляем поздравление во ВСЕ беседы из конфига
             success_count = 0
             for chat_id in ALLOWED_CHAT_IDS:
@@ -1030,9 +1030,9 @@ async def check_birthdays():
                     print(f"✅ Отправлено поздравление для {user_name} в чат {chat_id}")
                 except Exception as e:
                     print(f"❌ Ошибка отправки поздравления для {user_name} в чат {chat_id}: {e}")
-
+            
             print(f"✅ Успешно отправлено {success_count} поздравлений для {user_name}")
-
+                
     except Exception as e:
         print(f"❌ Критическая ошибка проверки дней рождения: {e}")
 
@@ -1065,7 +1065,7 @@ async def delete_teacher_message(pool, message_id: int) -> bool:
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -1082,15 +1082,15 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
         signature=signature,
         start_time=datetime.datetime.now(TZ)
     )
-
+    
     # Активируем режим пересылки на 180 секунд
     await state.set_state(SendMessageState.active)
-
+    
     # Сообщаем о начале режима с кнопкой отмены
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏹️ Закончить пересылку", callback_data="stop_forward_mode")]
     ])
-
+    
     await callback.message.edit_text(
         f"✅ Режим пересылки активирован на 180 секунд!\n"
         f"📝 Подпись: {signature}\n"
@@ -1098,10 +1098,10 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
         f"Все ваши сообщения будут пересылаться в беседу. Режим автоматически отключится через 3 минуты.",
         reply_markup=kb
     )
-
+    
     # Запускаем таймер отключения
     asyncio.create_task(disable_forward_mode_after_timeout(callback.from_user.id, state))
-
+    
     await callback.answer()
 
 async def send_message_to_all_chats(message_text: str, photo=None, document=None, video=None, audio=None, voice=None, sticker=None, caption: str = ""):
@@ -1152,17 +1152,17 @@ async def process_forward_message(message: types.Message, state: FSMContext):
     if message.text and message.text.startswith('/'):
         await message.answer("❌ Сообщения, начинающиеся с /, не отправляются.")
         return
-
+    
     data = await state.get_data()
     signature = data.get("signature", "ПРОВЕРКА")
-
+    
     prefix = f"Сообщение от {signature}: "
 
     try:
         message_text = ""
         message_type = "text"
         sent_message_ids = []  # Список для хранения ID отправленных сообщений
-
+        
         if message.text:
             message_text = message.text
             # Отправляем во все чаты
@@ -1172,7 +1172,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки в чат {chat_id}: {e}")
-
+                    
         elif message.photo:
             message_text = message.caption or ""
             message_type = "photo"
@@ -1186,7 +1186,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки фото в чат {chat_id}: {e}")
-
+                    
         elif message.document:
             message_text = message.caption or ""
             message_type = "document"
@@ -1200,7 +1200,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки документа в чат {chat_id}: {e}")
-
+                    
         elif message.video:
             message_text = message.caption or ""
             message_type = "video"
@@ -1214,7 +1214,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки видео в чат {chat_id}: {e}")
-
+                    
         elif message.audio:
             message_text = message.caption or ""
             message_type = "audio"
@@ -1228,7 +1228,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки аудио в чат {chat_id}: {e}")
-
+                    
         elif message.voice:
             message_text = "голосовое сообщение"
             message_type = "voice"
@@ -1239,7 +1239,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки голосового сообщения в чат {chat_id}: {e}")
-
+                    
         elif message.sticker:
             message_text = "стикер"
             message_type = "sticker"
@@ -1250,7 +1250,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
                     sent_message_ids.append(sent_message.message_id)
                 except Exception as e:
                     print(f"Ошибка отправки стикера в чат {chat_id}: {e}")
-
+                    
         else:
             await message.answer("⚠ Не удалось распознать тип сообщения.")
             return
@@ -1270,7 +1270,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
         success_chats = len(sent_message_ids)
         total_chats = len(ALLOWED_CHAT_IDS)
         await message.answer(f"✅ Сообщение переслано в {success_chats} из {total_chats} бесед!")
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при пересылке: {e}")
 
@@ -1295,7 +1295,7 @@ async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMC
 async def menu_back_from_messages_handler(callback: types.CallbackQuery, state: FSMContext):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -1305,11 +1305,11 @@ async def menu_back_from_messages_handler(callback: types.CallbackQuery, state: 
 async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMContext, page: int = 0):
     limit = 10
     offset = page * limit
-
+    
     # Получаем сообщения для всех чатов
     messages = await get_teacher_messages(pool, offset, limit)
     total_count = await get_teacher_messages_count(pool)
-
+    
     if not messages:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
@@ -1320,7 +1320,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
             reply_markup=kb
         )
         return
-
+    
     # Создаем клавиатуру с сообщениями
     keyboard = []
     for i, (msg_id, message_id, signature, text, msg_type, created_at) in enumerate(messages):
@@ -1328,31 +1328,31 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
         display_text = text[:50] + "..." if len(text) > 50 else text
         if not display_text:
             display_text = f"{msg_type} сообщение"
-
+        
         emoji = "📝" if msg_type == "text" else "🖼️" if msg_type == "photo" else "📎" if msg_type == "document" else "🎵"
         button_text = f"{emoji} {signature}: {display_text}"
-
+        
         keyboard.append([InlineKeyboardButton(
             text=button_text, 
             callback_data=f"view_message_{msg_id}"
         )])
-
+    
     # Добавляем кнопки навигации
     nav_buttons = []
-
+    
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
-
+    
     nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
-
+    
     if (page + 1) * limit < total_count:
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
-
+    
     if nav_buttons:
         keyboard.append(nav_buttons)
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     page_info = f" (страница {page + 1})" if total_count > limit else ""
     await callback.message.edit_text(
         f"📝 Сообщения от преподавателей{page_info}\n\n"
@@ -1360,7 +1360,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
         f"Выберите сообщение для просмотра:",
         reply_markup=kb
     )
-
+    
     await state.update_data(current_page=page)
 
 @dp.callback_query(F.data.startswith("view_message_"))
@@ -1368,7 +1368,7 @@ async def view_specific_message(callback: types.CallbackQuery):
     try:
         message_db_id = int(callback.data.split("_")[2])
         current_chat_id = callback.message.chat.id
-
+        
         # Получаем информацию о сообщении
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -1377,53 +1377,53 @@ async def view_specific_message(callback: types.CallbackQuery):
                     FROM teacher_messages 
                     WHERE id = %s
                 """, (message_db_id,))
-
+                
                 message_data = await cur.fetchone()
-
+        
         if not message_data:
             await callback.answer("❌ Сообщение не найдено", show_alert=True)
             return
-
+        
         message_id, signature, text, msg_type, created_at = message_data
-
+        
         # Форматируем дату
         if isinstance(created_at, datetime.datetime):
             date_str = created_at.strftime("%d.%m.%Y %H:%M")
         else:
             date_str = str(created_at)
-
+        
         # Создаем ссылку на сообщение в ТЕКУЩЕЙ беседе
         message_link = f"https://t.me/c/{str(current_chat_id).replace('-100', '')}/{message_id}"
-
+        
         # Создаем клавиатуру
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Перейти к сообщению", url=message_link)],
             [InlineKeyboardButton(text="⬅ Назад к списку", callback_data="back_to_messages_list")]
         ])
-
+        
         # Формируем текст сообщения
         message_info = f"👨‍🏫 От: {signature}\n"
         message_info += f"📅 Дата: {date_str}\n"
         message_info += f"📊 Тип: {msg_type}\n\n"
-
+        
         if text and text != "голосовое сообщение" and text != "стикер":
             message_info += f"📝 Текст: {text}\n\n"
-
+        
         message_info += "Нажмите кнопку ниже чтобы перейти к сообщению в беседе."
-
+        
         await callback.message.edit_text(message_info, reply_markup=kb)
-
+        
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
     await callback.answer()
 async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMContext, page: int = 0):
     limit = 10
     offset = page * limit
-
+    
     # Получаем сообщения для всех чатов
     messages = await get_teacher_messages(pool, offset, limit)
     total_count = await get_teacher_messages_count(pool)
-
+    
     if not messages:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
@@ -1434,7 +1434,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
             reply_markup=kb
         )
         return
-
+    
     # Создаем клавиатуру с сообщениями
     keyboard = []
     for i, (msg_id, message_id, signature, text, msg_type, created_at) in enumerate(messages):
@@ -1442,31 +1442,31 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
         display_text = text[:50] + "..." if len(text) > 50 else text
         if not display_text:
             display_text = f"{msg_type} сообщение"
-
+        
         emoji = "📝" if msg_type == "text" else "🖼️" if msg_type == "photo" else "📎" if msg_type == "document" else "🎵"
         button_text = f"{emoji} {signature}: {display_text}"
-
+        
         keyboard.append([InlineKeyboardButton(
             text=button_text, 
             callback_data=f"view_message_{msg_id}"
         )])
-
+    
     # Добавляем кнопки навигации
     nav_buttons = []
-
+    
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
-
+    
     nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
-
+    
     if (page + 1) * limit < total_count:
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
-
+    
     if nav_buttons:
         keyboard.append(nav_buttons)
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     page_info = f" (страница {page + 1})" if total_count > limit else ""
     await callback.message.edit_text(
         f"📝 Сообщения от преподавателей{page_info}\n\n"
@@ -1474,7 +1474,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
         f"Выберите сообщение для просмотра:",
         reply_markup=kb
     )
-
+    
     await state.update_data(current_page=page)
 
 @dp.callback_query(F.data.startswith("view_message_"))
@@ -1482,7 +1482,7 @@ async def view_specific_message(callback: types.CallbackQuery):
     try:
         message_db_id = int(callback.data.split("_")[2])
         current_chat_id = callback.message.chat.id
-
+        
         # Получаем информацию о сообщении
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -1491,42 +1491,42 @@ async def view_specific_message(callback: types.CallbackQuery):
                     FROM teacher_messages 
                     WHERE id = %s
                 """, (message_db_id,))
-
+                
                 message_data = await cur.fetchone()
-
+        
         if not message_data:
             await callback.answer("❌ Сообщение не найдено", show_alert=True)
             return
-
+        
         message_id, signature, text, msg_type, created_at = message_data
-
+        
         # Форматируем дату
         if isinstance(created_at, datetime.datetime):
             date_str = created_at.strftime("%d.%m.%Y %H:%M")
         else:
             date_str = str(created_at)
-
+        
         # Создаем ссылку на сообщение в ТЕКУЩЕЙ беседе
         message_link = f"https://t.me/c/{str(current_chat_id).replace('-100', '')}/{message_id}"
-
+        
         # Создаем клавиатуру
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Перейти к сообщению", url=message_link)],
             [InlineKeyboardButton(text="⬅ Назад к списку", callback_data="back_to_messages_list")]
         ])
-
+        
         # Формируем текст сообщения
         message_info = f"👨‍🏫 От: {signature}\n"
         message_info += f"📅 Дата: {date_str}\n"
         message_info += f"📊 Тип: {msg_type}\n\n"
-
+        
         if text and text != "голосовое сообщение" and text != "стикер":
             message_info += f"📝 Текст: {text}\n\n"
-
+        
         message_info += "Нажмите кнопку ниже чтобы перейти к сообщению в беседе."
-
+        
         await callback.message.edit_text(message_info, reply_markup=kb)
-
+        
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
     await callback.answer()
@@ -1535,7 +1535,7 @@ async def view_specific_message(callback: types.CallbackQuery):
 async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -1569,7 +1569,7 @@ async def process_special_user_id(message: types.Message, state: FSMContext):
         user_id = int(message.text.strip())
         if user_id <= 0:
             raise ValueError("ID должен быть положительным числом")
-
+        
         await state.update_data(user_id=user_id)
         await message.answer(
             f"✅ ID пользователя: {user_id}\n\n"
@@ -1577,7 +1577,7 @@ async def process_special_user_id(message: types.Message, state: FSMContext):
             "(как будет отображаться при отправке сообщений):"
         )
         await state.set_state(AddSpecialUserState.signature)
-
+        
     except ValueError:
         await message.answer("❌ Неверный формат ID. Введите только цифры:")
 
@@ -1588,32 +1588,32 @@ async def process_special_user_signature(message: types.Message, state: FSMConte
     data = await state.get_data()
     user_id = data["user_id"]
     signature = message.text.strip()
-
+    
     if not signature:
         await message.answer("❌ Подпись не может быть пустой. Введите подпись:")
         return
-
+    
     try:
         # Добавляем пользователя в базу
         await set_special_user_signature(pool, user_id, signature)
-
+        
         # Обновляем список SPECIAL_USER_ID для текущей сессии
         if user_id not in SPECIAL_USER_ID:
             SPECIAL_USER_ID.append(user_id)
-
+        
         await message.answer(
             f"✅ Спец-пользователь добавлен!\n\n"
             f"👤 ID: {user_id}\n"
             f"📝 Подпись: {signature}\n\n"
             f"Пользователь теперь может отправлять сообщения в беседу через кнопку в меню."
         )
-
+        
         # Показываем админ-меню
         await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении пользователя: {e}")
-
+    
     await state.clear()
 
 
@@ -1622,7 +1622,7 @@ def get_zvonki(is_saturday: bool):
 
 def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
     buttons = []
-
+    
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
@@ -1631,13 +1631,11 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
         buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
         buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
-
-
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     if is_special_user:
         buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
-
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def admin_menu():
@@ -1677,7 +1675,7 @@ async def menu_homework_handler(callback: types.CallbackQuery):
         return
 
     homework_list = await get_all_homework(pool)
-
+    
     if not homework_list:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
@@ -1688,25 +1686,25 @@ async def menu_homework_handler(callback: types.CallbackQuery):
             reply_markup=kb
         )
         return
-
+    
     # Форматируем список домашних заданий
     homework_text = "📚 Домашнее задание:\n\n"
     for hw_id, subject_name, due_date, task_text, created_at in homework_list:
         # Форматируем дату
         due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
         due_date_str = due_date_obj.strftime("%d.%m.%Y")
-
+        
         # Обрезаем длинный текст задания
         short_task = task_text[:100] + "..." if len(task_text) > 100 else task_text
-
+        
         homework_text += f"📅 {due_date_str} | {subject_name}\n"
         homework_text += f"📝 {short_task}\n"
         homework_text += "─" * 30 + "\n"
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
-
+    
     await callback.message.edit_text(homework_text, reply_markup=kb)
     await callback.answer()
 
@@ -1732,65 +1730,65 @@ async def admin_add_homework_start(callback: types.CallbackQuery, state: FSMCont
 @dp.message(AddHomeworkState.due_date)
 async def process_homework_due_date(message: types.Message, state: FSMContext):
     due_date_str = message.text.strip()
-
+    
     # Проверка на отмену
     if due_date_str.lower() in ['отмена', 'cancel', '❌ отмена']:
         await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         return
-
+    
     # Проверяем формат даты и конвертируем для хранения
     try:
         due_date = datetime.datetime.strptime(due_date_str, '%d.%m.%Y').date()
         # Сохраняем в формате DD.MM.YYYY для отображения, но будем конвертировать при сохранении в БД
         await state.update_data(due_date=due_date_str)
-
+        
         # Получаем список предметов
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT id, name FROM subjects ORDER BY name")
                 subjects = await cur.fetchall()
-
+        
         if not subjects:
             await message.answer("❌ В базе нет предметов. Сначала добавьте предметы.")
             await state.clear()
             return
-
+        
         # Создаем кнопки выбора предмета
         keyboard = []
         for subject_id, name in subjects:
             keyboard.append([InlineKeyboardButton(text=name, callback_data=f"hw_subject_{subject_id}")])
-
+        
         keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+        
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+        
         await message.answer(
             f"📅 Дата выполнения: {due_date_str}\n\n"
             "Выберите предмет:",
             reply_markup=kb
         )
         await state.set_state(AddHomeworkState.subject)
-
+        
     except ValueError:
         await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ (например: 15.12.2024):")
 
 @dp.callback_query(F.data.startswith("hw_subject_"))
 async def process_homework_subject(callback: types.CallbackQuery, state: FSMContext):
     subject_id = int(callback.data[len("hw_subject_"):])
-
+    
     # Получаем название предмета
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
             subject_name = (await cur.fetchone())[0]
-
+    
     await state.update_data(subject_id=subject_id, subject_name=subject_name)
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-
+    
     await callback.message.edit_text(
         f"📅 Дата выполнения: {(await state.get_data())['due_date']}\n"
         f"📚 Предмет: {subject_name}\n\n"
@@ -1803,23 +1801,23 @@ async def process_homework_subject(callback: types.CallbackQuery, state: FSMCont
 @dp.message(AddHomeworkState.task_text)
 async def process_homework_task_text(message: types.Message, state: FSMContext):
     task_text = message.text.strip()
-
+    
     # Проверка на отмену
     if task_text.lower() in ['отмена', 'cancel', '❌ отмена']:
         await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         return
-
+    
     if not task_text:
         await message.answer("❌ Текст задания не может быть пустым. Введите задание:")
         return
-
+    
     data = await state.get_data()
-
+    
     try:
         # Добавляем домашнее задание (без chat_id - общее для всех)
         await add_homework(pool, data['subject_id'], data['due_date'], task_text)
-
+        
         await message.answer(
             f"✅ Домашнее задание добавлено!\n\n"
             f"📅 Дата выполнения: {data['due_date']}\n"
@@ -1828,10 +1826,10 @@ async def process_homework_task_text(message: types.Message, state: FSMContext):
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении задания: {e}")
-
+    
     await state.clear()
 
 @dp.callback_query(F.data == "admin_edit_homework")
@@ -1841,7 +1839,7 @@ async def admin_edit_homework_start(callback: types.CallbackQuery, state: FSMCon
         return
 
     homework_list = await get_all_homework(pool)
-
+    
     if not homework_list:
         await callback.message.edit_text(
             "✏️ Редактирование домашнего задания\n\n"
@@ -1849,22 +1847,22 @@ async def admin_edit_homework_start(callback: types.CallbackQuery, state: FSMCon
         )
         await callback.answer()
         return
-
+    
     # Создаем кнопки выбора задания
     keyboard = []
     for hw_id, subject_name, due_date, task_text, created_at in homework_list:
         due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
         due_date_str = due_date_obj.strftime("%d.%m.%Y")
-
+        
         short_task = task_text[:30] + "..." if len(task_text) > 30 else task_text
         button_text = f"{due_date_str} | {subject_name}: {short_task}"
-
+        
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"edit_hw_{hw_id}")])
-
+    
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     await callback.message.edit_text(
         "✏️ Редактирование домашнего задания\n\n"
         "Выберите задание для редактирования:",
@@ -1876,15 +1874,15 @@ async def admin_edit_homework_start(callback: types.CallbackQuery, state: FSMCon
 @dp.callback_query(F.data.startswith("edit_hw_"))
 async def process_edit_homework_select(callback: types.CallbackQuery, state: FSMContext):
     homework_id = int(callback.data[len("edit_hw_"):])
-
+    
     # Получаем информацию о задании
     homework = await get_homework_by_id(pool, homework_id)
     if not homework:
         await callback.answer("❌ Задание не найдено", show_alert=True)
         return
-
+    
     hw_id, subject_name, due_date, task_text, created_at, subject_id = homework
-
+    
     await state.update_data(
         homework_id=hw_id,
         current_subject_id=subject_id,
@@ -1892,13 +1890,13 @@ async def process_edit_homework_select(callback: types.CallbackQuery, state: FSM
         current_due_date=due_date,
         current_task_text=task_text
     )
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-
+    
     due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
-
+    
     await callback.message.edit_text(
         f"✏️ Редактирование задания:\n\n"
         f"📅 Текущая дата: {due_date_str}\n"
@@ -1924,23 +1922,23 @@ async def process_edit_homework_due_date(message: types.Message, state: FSMConte
         except ValueError:
             await message.answer("❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ или /skip:")
             return
-
+    
     data = await state.get_data()
-
+    
     # Получаем список предметов для выбора
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT id, name FROM subjects ORDER BY name")
             subjects = await cur.fetchall()
-
+    
     keyboard = []
     for subject_id, name in subjects:
         keyboard.append([InlineKeyboardButton(text=name, callback_data=f"edit_hw_subject_{subject_id}")])
-
+    
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     new_date_info = data.get('new_due_date', 'оставить текущую')
     await message.answer(
         f"📅 Новая дата: {new_date_info}\n\n"
@@ -1956,25 +1954,25 @@ async def process_edit_homework_subject(callback: types.CallbackQuery, state: FS
         await state.clear()
         await callback.answer()
         return
-
+    
     subject_id = int(callback.data[len("edit_hw_subject_"):])
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
             subject_name = (await cur.fetchone())[0]
-
+    
     await state.update_data(new_subject_id=subject_id, new_subject_name=subject_name)
-
+    
     data = await state.get_data()
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-
+    
     new_date_info = data.get('new_due_date', 'текущая')
     new_subject_info = data.get('new_subject_name', 'текущий')
-
+    
     await callback.message.edit_text(
         f"✏️ Редактирование задания:\n\n"
         f"📅 Дата: {new_date_info}\n"
@@ -1990,13 +1988,13 @@ async def process_edit_homework_subject_skip(message: types.Message, state: FSMC
     if message.text.strip().lower() == '/skip':
         # Пропускаем изменение предмета
         data = await state.get_data()
-
+        
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
         ])
-
+        
         new_date_info = data.get('new_due_date', 'текущая')
-
+        
         await message.answer(
             f"✏️ Редактирование задания:\n\n"
             f"📅 Дата: {new_date_info}\n"
@@ -2011,15 +2009,15 @@ async def process_edit_homework_subject_skip(message: types.Message, state: FSMC
             async with conn.cursor() as cur:
                 await cur.execute("SELECT id, name FROM subjects ORDER BY name")
                 subjects = await cur.fetchall()
-
+        
         keyboard = []
         for subject_id, name in subjects:
             keyboard.append([InlineKeyboardButton(text=name, callback_data=f"edit_hw_subject_{subject_id}")])
-
+        
         keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+        
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+        
         await message.answer(
             "Выберите новый предмет или введите /skip чтобы оставить текущий:",
             reply_markup=kb
@@ -2029,7 +2027,7 @@ async def process_edit_homework_subject_skip(message: types.Message, state: FSMC
 @dp.message(EditHomeworkState.task_text)
 async def process_edit_homework_task_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
-
+    
     if message.text.strip().lower() == '/skip':
         new_task_text = data['current_task_text']
     else:
@@ -2037,11 +2035,11 @@ async def process_edit_homework_task_text(message: types.Message, state: FSMCont
         if not new_task_text:
             await message.answer("❌ Текст задания не может быть пустым. Введите задание или /skip:")
             return
-
+    
     # Подготавливаем данные для обновления
     subject_id = data.get('new_subject_id', data['current_subject_id'])
     due_date = data.get('new_due_date', data['current_due_date'])
-
+    
     # Если дата в формате DD.MM.YYYY, конвертируем в YYYY-MM-DD
     if isinstance(due_date, str) and '.' in due_date:
         try:
@@ -2050,16 +2048,16 @@ async def process_edit_homework_task_text(message: types.Message, state: FSMCont
             await message.answer("❌ Ошибка в формате даты. Исправьте дату и попробуйте снова.")
             await state.clear()
             return
-
+    
     try:
         await update_homework(pool, data['homework_id'], subject_id, due_date, new_task_text)
-
+        
         # Получаем обновленную информацию для отображения
         updated_hw = await get_homework_by_id(pool, data['homework_id'])
         if updated_hw:
             hw_id, subject_name, due_date, task_text, created_at, subject_id = updated_hw
             due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
-
+            
             await message.answer(
                 f"✅ Домашнее задание обновлено!\n\n"
                 f"📅 Дата выполнения: {due_date_str}\n"
@@ -2074,10 +2072,10 @@ async def process_edit_homework_task_text(message: types.Message, state: FSMCont
                 f"⚙ Админ-панель:",
                 reply_markup=admin_menu()
             )
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка при обновлении задания: {e}")
-
+    
     await state.clear()
 
 @dp.callback_query(F.data == "admin_delete_homework")
@@ -2087,7 +2085,7 @@ async def admin_delete_homework_start(callback: types.CallbackQuery, state: FSMC
         return
 
     homework_list = await get_all_homework(pool)
-
+    
     if not homework_list:
         await callback.message.edit_text(
             "🗑️ Удаление домашнего задания\n\n"
@@ -2095,22 +2093,22 @@ async def admin_delete_homework_start(callback: types.CallbackQuery, state: FSMC
         )
         await callback.answer()
         return
-
+    
     # Создаем кнопки выбора задания
     keyboard = []
     for hw_id, subject_name, due_date, task_text, created_at in homework_list:
         due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
         due_date_str = due_date_obj.strftime("%d.%m.%Y")
-
+        
         short_task = task_text[:30] + "..." if len(task_text) > 30 else task_text
         button_text = f"{due_date_str} | {subject_name}: {short_task}"
-
+        
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_hw_{hw_id}")])
-
+    
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     await callback.message.edit_text(
         "🗑️ Удаление домашнего задания\n\n"
         "Выберите задание для удаления:",
@@ -2122,22 +2120,22 @@ async def admin_delete_homework_start(callback: types.CallbackQuery, state: FSMC
 @dp.callback_query(F.data.startswith("delete_hw_"))
 async def process_delete_homework_select(callback: types.CallbackQuery, state: FSMContext):
     homework_id = int(callback.data[len("delete_hw_"):])
-
+    
     # Получаем информацию о задании
     homework = await get_homework_by_id(pool, homework_id)
     if not homework:
         await callback.answer("❌ Задание не найдено", show_alert=True)
         return
-
+    
     hw_id, subject_name, due_date, task_text, created_at, subject_id = homework
-
+    
     due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_hw_{hw_id}")],
         [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin")]
     ])
-
+    
     await callback.message.edit_text(
         f"🗑️ Подтвердите удаление задания:\n\n"
         f"📅 Дата: {due_date_str}\n"
@@ -2151,16 +2149,16 @@ async def process_delete_homework_select(callback: types.CallbackQuery, state: F
 @dp.callback_query(F.data.startswith("confirm_delete_hw_"))
 async def process_confirm_delete_homework(callback: types.CallbackQuery):
     homework_id = int(callback.data[len("confirm_delete_hw_"):])
-
+    
     try:
         # Получаем информацию перед удалением для сообщения
         homework = await get_homework_by_id(pool, homework_id)
         if homework:
             hw_id, subject_name, due_date, task_text, created_at, subject_id = homework
             due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
-
+            
             await delete_homework(pool, homework_id)
-
+            
             await callback.message.edit_text(
                 f"✅ Домашнее задание удалено!\n\n"
                 f"📅 Дата: {due_date_str}\n"
@@ -2174,14 +2172,14 @@ async def process_confirm_delete_homework(callback: types.CallbackQuery):
                 f"⚙ Админ-панель:",
                 reply_markup=admin_menu()
             )
-
+            
     except Exception as e:
         await callback.message.edit_text(
             f"❌ Ошибка при удалении задания: {e}\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+    
     await callback.answer()
 
 
@@ -2195,16 +2193,16 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
         async with conn.cursor() as cur:
             await cur.execute("SELECT name FROM subjects")
             subjects = await cur.fetchall()
-
+    
     buttons = []
     for subj in subjects:
         buttons.append([InlineKeyboardButton(text=subj[0], callback_data=f"choose_subject_{subj[0]}")])
-
+    
     # Добавляем кнопку отмены
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-
+    
     await callback.message.edit_text("Выберите предмет:", reply_markup=kb)
     await state.set_state(AddLessonState.subject)
 
@@ -2225,16 +2223,16 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
 async def choose_week(callback: types.CallbackQuery, state: FSMContext):
     week_type = int(callback.data[-1])
     await state.update_data(week_type=week_type)
-
+    
     buttons = []
     for i, day in enumerate(DAYS):
         buttons.append([InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")])
-
+    
     # Добавляем кнопку отмены
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-
+    
     await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
     await state.set_state(AddLessonState.day)
 
@@ -2242,16 +2240,16 @@ async def choose_week(callback: types.CallbackQuery, state: FSMContext):
 async def choose_day(callback: types.CallbackQuery, state: FSMContext):
     day = int(callback.data[len("day_"):])
     await state.update_data(day=day)
-
+    
     buttons = []
     for i in range(1, 7):
         buttons.append([InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")])
-
+    
     # Добавляем кнопку отмены
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-
+    
     await callback.message.edit_text("Выберите номер пары:", reply_markup=kb)
     await state.set_state(AddLessonState.pair_number)
 
@@ -2277,26 +2275,26 @@ async def admin_add_subject_start(callback: types.CallbackQuery, state: FSMConte
 @dp.message(AddSubjectState.name)
 async def process_subject_name(message: types.Message, state: FSMContext):
     subject_name = message.text.strip()
-
+    
     # Добавляем проверку на команду отмены
     if subject_name.lower() in ['отмена', 'cancel', '❌ отмена']:
         await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         return
-
+        
     if not subject_name:
         await message.answer("❌ Название предмета не может быть пустым. Введите название:")
         return
-
+    
     await state.update_data(name=subject_name)
-
+    
     # Предлагаем выбрать тип предмета с кнопкой отмены
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏫 С фиксированным кабинетом", callback_data="subject_type_fixed")],
         [InlineKeyboardButton(text="🔢 С запросом кабинета (rK)", callback_data="subject_type_rk")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-
+    
     await message.answer(
         f"📝 Предмет: {subject_name}\n\n"
         "Выберите тип предмета:",
@@ -2307,27 +2305,27 @@ async def process_subject_name(message: types.Message, state: FSMContext):
 @dp.message(AddSubjectState.cabinet)
 async def process_subject_cabinet(message: types.Message, state: FSMContext):
     cabinet = message.text.strip()
-
+    
     # Добавляем проверку на команду отмены
     if cabinet.lower() in ['отмена', 'cancel', '❌ отмена']:
         await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         return
-
+        
     data = await state.get_data()
     subject_name = data["name"]
-
+    
     if not cabinet:
         await message.answer("❌ Номер кабинета не может быть пустым. Введите кабинет:")
         return
-
+    
     # Формируем полное название предмета с кабинетом
     full_subject_name = f"{subject_name} {cabinet}"
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (full_subject_name, False))
-
+    
     await message.answer(
         f"✅ Предмет добавлен!\n\n"
         f"📚 Название: {full_subject_name}\n"
@@ -2335,11 +2333,11 @@ async def process_subject_cabinet(message: types.Message, state: FSMContext):
         f"Теперь при добавлении этого предмета в расписание "
         f"кабинет будет подставляться автоматически."
     )
-
+    
     # Показываем админ-меню
     await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
     await state.clear()
-
+    
     await callback.answer()
 
 @dp.message(AddSubjectState.cabinet)
@@ -2347,18 +2345,18 @@ async def process_subject_cabinet(message: types.Message, state: FSMContext):
     cabinet = message.text.strip()
     data = await state.get_data()
     subject_name = data["name"]
-
+    
     if not cabinet:
         await message.answer("❌ Номер кабинета не может быть пустым. Введите кабинет:")
         return
-
+    
     # Формируем полное название предмета с кабинетом
     full_subject_name = f"{subject_name} {cabinet}"
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (full_subject_name, False))
-
+    
     await message.answer(
         f"✅ Предмет добавлен!\n\n"
         f"📚 Название: {full_subject_name}\n"
@@ -2366,7 +2364,7 @@ async def process_subject_cabinet(message: types.Message, state: FSMContext):
         f"Теперь при добавлении этого предмета в расписание "
         f"кабинет будет подставляться автоматически."
     )
-
+    
     # Показываем админ-меню
     await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
     await state.clear()
@@ -2382,24 +2380,24 @@ async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMCo
         async with conn.cursor() as cur:
             await cur.execute("SELECT id, name, rK FROM subjects ORDER BY name")
             subjects = await cur.fetchall()
-
+    
     if not subjects:
         await callback.message.edit_text("❌ В базе нет предметов для удаления.")
         await callback.answer()
         return
-
+    
     # Создаем кнопки для выбора предмета
     keyboard = []
     for subject_id, name, rk in subjects:
         type_icon = "🔢" if rk else "🏫"
         button_text = f"{type_icon} {name}"
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_subject_{subject_id}")])
-
+    
     # Добавляем кнопку отмены
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     await callback.message.edit_text(
         "🗑️ Удаление предмета\n\n"
         "Выберите предмет для удаления:\n"
@@ -2417,33 +2415,33 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
         await state.clear()
         await callback.answer()
         return
-
+    
     subject_id = int(callback.data[len("delete_subject_"):])
-
+    
     # Получаем информацию о предмете
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT name, rK FROM subjects WHERE id=%s", (subject_id,))
             subject = await cur.fetchone()
-
+            
             if not subject:
                 await callback.message.edit_text("❌ Предмет не найден.")
                 await callback.answer()
                 return
-
+            
             name, rk = subject
-
+            
             # Проверяем, используется ли предмет в расписании
             await cur.execute("SELECT COUNT(*) FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
             usage_count = (await cur.fetchone())[0]
-
+            
             if usage_count > 0:
                 # Предмет используется - предупреждаем
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="✅ Да, удалить вместе с уроками", callback_data=f"confirm_delete_subject_{subject_id}")],
                     [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete_subject")]
                 ])
-
+                
                 await callback.message.edit_text(
                     f"⚠️ Внимание!\n\n"
                     f"Предмет '{name}' используется в {usage_count} урок(ах) расписания.\n\n"
@@ -2454,34 +2452,34 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
                 # Предмет не используется - удаляем сразу
                 await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
                 await callback.message.edit_text(f"✅ Предмет '{name}' удален.")
-
+                
                 # Возвращаем в админ-меню
                 await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
                 await state.clear()
-
+    
     await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("confirm_delete_subject_"))
 async def confirm_delete_subject(callback: types.CallbackQuery):
     subject_id = int(callback.data[len("confirm_delete_subject_"):])
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             # Получаем название предмета перед удалением
             await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
             subject_name = (await cur.fetchone())[0]
-
+            
             # Удаляем уроки с этим предметом
             await cur.execute("DELETE FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
-
+            
             # Удаляем сам предмет
             await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
-
+    
     await callback.message.edit_text(
         f"✅ Предмет '{subject_name}' и все связанные уроки удалены."
     )
-
+    
     # Возвращаем в админ-меню
     await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
     await callback.answer()
@@ -2491,7 +2489,7 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     # Разрешаем в ЛС и разрешенных чатах
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -2500,15 +2498,15 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
     except Exception:
         pass
-
+    
     is_admin = (callback.from_user.id in ALLOWED_USERS) and is_private
-
+    
     # Проверяем спец-пользователей через базу данных
     is_special_user = False
     if is_private:
         signature = await get_special_user_signature(pool, callback.from_user.id)
         is_special_user = signature is not None
-
+    
     try:
         await callback.message.delete()
         await greet_and_send(
@@ -2550,13 +2548,13 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
         subject_type = callback.data[len("subject_type_"):]
         data = await state.get_data()
         subject_name = data["name"]
-
+        
         if subject_type == "fixed":
             # Предмет с фиксированным кабинетом
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
             ])
-
+            
             await callback.message.edit_text(
                 f"📝 Предмет: {subject_name}\n"
                 f"🏫 Тип: с фиксированным кабинетом\n\n"
@@ -2564,13 +2562,13 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
                 reply_markup=kb
             )
             await state.set_state(AddSubjectState.cabinet)
-
+            
         elif subject_type == "rk":
             # Предмет с запросом кабинета (rK)
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("INSERT INTO subjects (name, rK) VALUES (%s, %s)", (subject_name, True))
-
+            
             await callback.message.edit_text(
                 f"✅ Предмет добавлен!\n\n"
                 f"📚 Название: {subject_name}\n"
@@ -2580,9 +2578,9 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
                 reply_markup=admin_menu()
             )
             await state.clear()
-
+        
         await callback.answer()
-
+        
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка при добавлении предмета: {e}")
         await state.clear()
@@ -2593,10 +2591,10 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
     await state.update_data(pair_number=pair_number)
-
+    
     data = await state.get_data()
     subject_name = data["subject"]
-
+    
     try:
         # Проверяем, есть ли у предмета фиксированный кабинет (rK)
         async with pool.acquire() as conn:
@@ -2607,9 +2605,9 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                     await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
                     await state.clear()
                     return
-
+                    
                 subject_id, is_rk = result
-
+        
         if is_rk:
             # Если предмет с rK - спрашиваем кабинет
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2626,16 +2624,16 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             # Если предмет без rK - пытаемся извлечь кабинет из названия
             import re
             cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
-
+            
             if cabinet_match:
                 cabinet = cabinet_match.group(2)
                 clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
             else:
                 cabinet = "Не указан"
                 clean_subject_name = subject_name
-
+            
             await state.update_data(cabinet=cabinet)
-
+            
             # Добавляем урок в расписание для ВСЕХ чатов
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
@@ -2645,13 +2643,13 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                             INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                             VALUES (%s, %s, %s, %s, %s, %s)
                         """, (chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet))
-
+            
             display_name = clean_subject_name
-
+            
             # Автоматическая синхронизация
             source_chat_id = ALLOWED_CHAT_IDS[0]
             await sync_rasp_to_all_chats(source_chat_id)
-
+            
             await callback.message.edit_text(
                 f"✅ Урок '{display_name}' добавлен во все чаты!\n"
                 f"📅 День: {DAYS[data['day']-1]}\n"
@@ -2661,7 +2659,85 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                 reply_markup=admin_menu()
             )
             await state.clear()
+    
+    except Exception as e:
+        print(f"❌ Ошибка в choose_pair: {e}")
+        await callback.message.edit_text(f"❌ Ошибка при добавлении урока: {e}")
+        await state.clear()
 
+@dp.callback_query(F.data.startswith("pair_"))
+async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
+    pair_number = int(callback.data[len("pair_"):])
+    await state.update_data(pair_number=pair_number)
+    
+    data = await state.get_data()
+    subject_name = data["subject"]
+    
+    try:
+        # Проверяем, есть ли у предмета фиксированный кабинет (rK)
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, rK FROM subjects WHERE name=%s", (subject_name,))
+                result = await cur.fetchone()
+                if not result:
+                    await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
+                    await state.clear()
+                    return
+                    
+                subject_id, is_rk = result
+        
+        if is_rk:
+            # Если предмет с rK - спрашиваем кабинет
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+            ])
+            await callback.message.edit_text(
+                f"📚 Предмет: {subject_name}\n"
+                f"🔢 Тип: с запросом кабинета\n\n"
+                "Введите кабинет для этой пары:",
+                reply_markup=kb
+            )
+            await state.set_state(AddLessonState.cabinet)
+        else:
+            # Если предмет без rK - пытаемся извлечь кабинет из названия
+            import re
+            cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+            
+            if cabinet_match:
+                cabinet = cabinet_match.group(2)
+                clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
+            else:
+                cabinet = "Не указан"
+                clean_subject_name = subject_name
+            
+            await state.update_data(cabinet=cabinet)
+            
+            # Добавляем урок в расписание для ВСЕХ чатов
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    # Добавляем урок в расписание для ВСЕХ чатов
+                    for chat_id in ALLOWED_CHAT_IDS:
+                        await cur.execute("""
+                            INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet))
+            
+            display_name = clean_subject_name
+            
+            # Автоматическая синхронизация
+            source_chat_id = ALLOWED_CHAT_IDS[0]
+            await sync_rasp_to_all_chats(source_chat_id)
+            
+            await callback.message.edit_text(
+                f"✅ Урок '{display_name}' добавлен во все чаты!\n"
+                f"📅 День: {DAYS[data['day']-1]}\n"
+                f"🔢 Пара: {pair_number}\n"
+                f"🏫 Кабинет: {cabinet}\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+            await state.clear()
+    
     except Exception as e:
         print(f"❌ Ошибка в choose_pair: {e}")
         await callback.message.edit_text(f"❌ Ошибка при добавлении урока: {e}")
@@ -2671,7 +2747,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
-
+    
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
@@ -2680,7 +2756,7 @@ async def set_cabinet(message: types.Message, state: FSMContext):
                 INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
-
+    
     await message.answer(
         f"✅ Урок '{data['subject']}' добавлен!\n"
         f"📅 День: {DAYS[data['day']-1]}\n" 
@@ -2724,7 +2800,7 @@ async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMConte
 async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
     week_type = int(callback.data[-1])
     await state.update_data(week_type=week_type)
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=day, callback_data=f"cab_day_{i+1}")] 
         for i, day in enumerate(DAYS)
@@ -2738,7 +2814,7 @@ async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
 async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
     day = int(callback.data[len("cab_day_"):])
     await state.update_data(day=day)
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=str(i), callback_data=f"cab_pair_{i}")] for i in range(1, 7)
     ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
@@ -2751,12 +2827,12 @@ async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
 async def set_cabinet_final(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cabinet = message.text.strip()
-
+    
     if cabinet.lower() in ['отмена', 'cancel', '❌ отмена']:
         await message.answer("❌ Действие отменено.\n\n⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         return
-
+    
     # Устанавливаем кабинет для ВСЕХ чатов
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -2777,11 +2853,11 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
                         INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, cabinet)
                         VALUES (%s, %s, %s, %s, %s)
                     """, (chat_id, data["day"], data["week_type"], data["pair_number"], cabinet))
-
+    
     # Автоматическая синхронизация
     source_chat_id = ALLOWED_CHAT_IDS[0]
     await sync_rasp_to_all_chats(source_chat_id)
-
+    
     await message.answer(
         f"✅ Кабинет установлен для всех чатов!\n"
         f"📅 День: {DAYS[data['day']-1]}\n"
@@ -2880,18 +2956,18 @@ async def sync_rasp_all_chats(message: types.Message):
     """Синхронизирует расписание между всеми чатами"""
     if message.from_user.id not in ALLOWED_USERS:
         return
-
+    
     try:
         main_chat_id = ALLOWED_CHAT_IDS[0]
         synced_count = 0
-
+        
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 # Копируем расписание из основного чата во все остальные
                 for chat_id in ALLOWED_CHAT_IDS[1:]:  # Все кроме первого
                     # Очищаем расписание в целевом чате
                     await cur.execute("DELETE FROM rasp_detailed WHERE chat_id=%s", (chat_id,))
-
+                    
                     # Копируем из основного чата
                     await cur.execute("""
                         INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
@@ -2899,11 +2975,11 @@ async def sync_rasp_all_chats(message: types.Message):
                         FROM rasp_detailed 
                         WHERE chat_id=%s
                     """, (chat_id, main_chat_id))
-
+                    
                     synced_count += 1
-
+        
         await message.answer(f"✅ Расписание синхронизировано! Обновлено {synced_count} чатов.")
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка синхронизации расписания: {e}")
 
@@ -2916,7 +2992,7 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
 
     # Получаем последние сообщения для выбора (БЕЗ chat_id параметра)
     messages = await get_teacher_messages(pool, limit=20)
-
+    
     if not messages:
         await callback.message.edit_text(
             "🗑️ Удаление сообщения преподавателя\n\n"
@@ -2924,7 +3000,7 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
         )
         await callback.answer()
         return
-
+    
     # Создаем клавиатуру с сообщениями
     keyboard = []
     for i, (msg_id, message_id, signature, text, msg_type, created_at) in enumerate(messages):
@@ -2932,25 +3008,25 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
         display_text = text[:30] + "..." if len(text) > 30 else text
         if not display_text:
             display_text = f"{msg_type}"
-
+        
         # Форматируем дату
         if isinstance(created_at, datetime.datetime):
             date_str = created_at.strftime("%d.%m %H:%M")
         else:
             date_str = str(created_at)
-
+        
         button_text = f"{signature}: {display_text} ({date_str})"
-
+        
         keyboard.append([InlineKeyboardButton(
             text=button_text, 
             callback_data=f"delete_teacher_msg_{msg_id}"
         )])
-
+    
     # Добавляем кнопку отмены
     keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
+    
     await callback.message.edit_text(
         "🗑️ Удаление сообщения преподавателя\n\n"
         "Выберите сообщение для удаления:",
@@ -2973,10 +3049,10 @@ async def process_delete_teacher_message(callback: types.CallbackQuery, state: F
         await state.clear()
         await callback.answer()
         return
-
+    
     try:
         message_db_id = int(callback.data[len("delete_teacher_msg_"):])
-
+        
         # Получаем информацию о сообщении
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -2985,36 +3061,36 @@ async def process_delete_teacher_message(callback: types.CallbackQuery, state: F
                     FROM teacher_messages WHERE id = %s
                 """, (message_db_id,))
                 message_data = await cur.fetchone()
-
+        
         if not message_data:
             await callback.answer("❌ Сообщение не найдено", show_alert=True)
             return
-
+        
         signature, text, msg_type, created_at = message_data
-
+        
         # Форматируем дату
         if isinstance(created_at, datetime.datetime):
             date_str = created_at.strftime("%d.%m.%Y %H:%M")
         else:
             date_str = str(created_at)
-
+        
         # Показываем подтверждение удаления
         # В функции process_delete_teacher_message замените клавиатуру на эту:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_msg_{message_db_id}")],
             [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin_from_delete")]
         ])
-
+                
         message_info = f"🗑️ Подтвердите удаление сообщения:\n\n"
         message_info += f"👨‍🏫 От: {signature}\n"
         message_info += f"📅 Дата: {date_str}\n"
         message_info += f"📊 Тип: {msg_type}\n"
-
+        
         if text and text != "голосовое сообщение" and text != "стикер":
             message_info += f"📝 Текст: {text}\n"
-
+        
         await callback.message.edit_text(message_info, reply_markup=kb)
-
+        
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
     await callback.answer()
@@ -3024,10 +3100,10 @@ async def process_delete_teacher_message(callback: types.CallbackQuery, state: F
 async def confirm_delete_teacher_message(callback: types.CallbackQuery):
     try:
         message_db_id = int(callback.data[len("confirm_delete_msg_"):])
-
+        
         # Удаляем сообщение
         success = await delete_teacher_message(pool, message_db_id)
-
+        
         if success:
             await callback.message.edit_text(
                 "✅ Сообщение преподавателя успешно удалено из базы данных.\n\n"
@@ -3040,14 +3116,14 @@ async def confirm_delete_teacher_message(callback: types.CallbackQuery):
                 "⚙ Админ-панель:",
                 reply_markup=admin_menu()
             )
-
+            
     except Exception as e:
         await callback.message.edit_text(
             f"❌ Ошибка при удалении: {e}\n\n"
             "⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+    
     await callback.answer()
 
 # Обработчик отмены удаления
@@ -3063,7 +3139,7 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
-
+    
     now = datetime.datetime.now(TZ)
     times = await get_publish_times(pool)
     if not times:
@@ -3077,11 +3153,11 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
             hh, mm = sorted([(h, m) for _, h, m in times])[0]
             msg = f"Сегодня публикаций больше нет. Следующая публикация завтра в Омске: {hh:02d}:{mm:02d}"
         text = msg
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
     ])
-
+    
     await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
     await callback.answer()
 
@@ -3102,7 +3178,7 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                 row = await cur.fetchone()
                 if row:
                     text += f"\n\n😂 Анекдот:\n{row[0]}"
-
+    
     # Добавляем информацию о неделе если нужно
     week_info = ""
     if include_week_info:
@@ -3114,11 +3190,11 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
         except Exception as e:
             print(f"Ошибка получения четности: {e}")
             week_info = f"\n\n📅 Информация о неделе временно недоступна"
-
+    
     nickname = await get_nickname(pool, user.id)
     greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
     full_text = greet + text + week_info
-
+    
     if callback:
         try:
             await callback.message.edit_text(full_text, reply_markup=markup)
@@ -3142,7 +3218,7 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
     # Если chat_id не указан, используем первый из разрешенных
     if chat_id is None:
         chat_id = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else DEFAULT_CHAT_ID
-
+    
     msg_lines = []
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -3155,7 +3231,7 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
                 (chat_id, day, week_type)
             )
             rows = await cur.fetchall()
-
+    
     max_pair = 0
     pairs_dict = {}
     for row in rows:
@@ -3163,7 +3239,7 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
         pairs_dict[pair_num] = row
         if pair_num > max_pair:
             max_pair = pair_num
-
+    
     if max_pair == 0:
         result = "Расписание пустое."
     else:
@@ -3172,13 +3248,13 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
                 row = pairs_dict[i]
                 cabinet = row[1]
                 subject_name = row[2]
-
+                
                 if subject_name == "Свободно":
                     msg_lines.append(f"{i}. Свободно")
                 else:
                     import re
                     clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
-
+                    
                     if cabinet and cabinet != "Не указан":
                         msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
                     else:
@@ -3190,19 +3266,19 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
                             msg_lines.append(f"{i}. {clean_subject_name}")
             else:
                 msg_lines.append(f"{i}. Свободно")
-
+        
         result = "\n".join(msg_lines)
-
+    
     # Добавляем информацию о домашних заданиях на целевую дату
     if target_date is None:
         target_date = datetime.datetime.now(TZ).date()
-
+    
     target_date_str = target_date.strftime("%Y-%m-%d")
     has_hw = await has_homework_for_date(pool, target_date_str)
-
+    
     if has_hw:
         result += "\n\n📚 Есть заданное домашнее задание"
-
+    
     return result
 
 async def send_today_rasp():
@@ -3212,12 +3288,12 @@ async def send_today_rasp():
             today = now.date()
             current_weekday = today.isoweekday()
             hour = now.hour
-
+            
             # Определяем день для публикации
             if hour >= 18:
                 target_date = today + datetime.timedelta(days=1)
                 day_to_post = target_date.isoweekday()
-
+                
                 if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
                     day_to_post = 1
@@ -3227,43 +3303,40 @@ async def send_today_rasp():
             else:
                 target_date = today
                 day_to_post = current_weekday
-
+                
                 if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
                     day_to_post = 1
                     day_name = "завтра (Понедельник)"
                 else:
                     day_name = "сегодня"
-
+            
             # ПОЛУЧАЕМ АКТУАЛЬНУЮ ЧЕТНОСТЬ
             week_type = await get_current_week_type(pool)
-
-            # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - ИСПОЛЬЗУЕМ ПРОТИВОПОЛОЖНУЮ ЧЕТНОСТЬ
-            if day_to_post == 1 and (current_weekday == 7 or (hour >= 18 and (today + datetime.timedelta(days=1)).isoweekday() == 7)):
-                week_type = 2 if week_type == 1 else 1
+            
             # ВАЖНО: ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ ИЛИ СУББОТА ПОСЛЕ 18:00 - МЕНЯЕМ ЧЕТНОСТЬ
             if day_to_post == 1:
                 # Если сегодня воскресенье ИЛИ сегодня суббота после 18:00
                 if current_weekday == 7 or (current_weekday == 6 and hour >= 18):
                     week_type = 2 if week_type == 1 else 1
                     print(f"🔁 Смена четности для понедельника: {'нечетная' if week_type == 1 else 'четная'}")
-
+            
             # Получаем расписание
             text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
-
+            
             # Формируем сообщение
             day_names = {
                 1: "Понедельник", 2: "Вторник", 3: "Среда",
                 4: "Четверг", 5: "Пятница", 6: "Суббота"
             }
-
+            
             week_name = "нечетная" if week_type == 1 else "четная"
-
+            
             if "(" in day_name and ")" in day_name:
                 msg = f"📅 Расписание на {day_name} | Неделя: {week_name}\n\n{text}"
             else:
                 msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
-
+            
             # Добавляем анекдот
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
@@ -3271,9 +3344,9 @@ async def send_today_rasp():
                     row = await cur.fetchone()
                     if row:
                         msg += f"\n\n😂 Анекдот:\n{row[0]}"
-
+            
             await bot.send_message(chat_id, msg)
-
+            
         except Exception as e:
             print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
 
@@ -3300,19 +3373,19 @@ async def reschedule_publish_jobs(pool):
             scheduler.add_job(send_today_rasp, CronTrigger(hour=hour, minute=minute, timezone=TZ), id=job_id)
         except Exception:
             pass
-
+            
 @dp.message(Command("аркадий", "акрадый", "акрадий", "аркаша", "котов", "arkadiy", "arkadiy@arcadiyis07_bot"))
 async def trigger_handler(message: types.Message):
     # Разрешаем команду в ЛС и разрешенных чатах
     is_private = message.chat.type == "private"
     is_allowed_chat = message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await message.answer("⛔ Бот не работает в этом чате")
         return
-
+    
     is_admin = (message.from_user.id in ALLOWED_USERS) and is_private
-
+    
     # Проверяем спец-пользователей через базу данных
     is_special_user = False
     if is_private:
@@ -3336,11 +3409,11 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
     # Разрешаем в ЛС и разрешенных чатах
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
-
+        
     action = callback.data
     if action == "menu_rasp":
         kb = InlineKeyboardMarkup(
@@ -3372,7 +3445,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -3381,11 +3454,11 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     now = datetime.datetime.now(TZ)
     today = now.date()
     current_weekday = today.isoweekday()
-
+    
     # Определяем день для показа (завтра)
     target_date = today + datetime.timedelta(days=1)
     day_to_show = target_date.isoweekday()
-
+    
     # Если завтра воскресенье, показываем понедельник
     if day_to_show == 7:
         target_date += datetime.timedelta(days=1)
@@ -3393,11 +3466,10 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
         day_name = "послезавтра (Понедельник)"
     else:
         day_name = "завтра"
-
-    # Получаем актуальную четность недели (функция сама обновит если нужно)
+    
     # Получаем актуальную четность недели
     week_type = await get_current_week_type(pool, chat_id)
-
+    
     # ВАЖНО: ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ ИЛИ СУББОТА - МЕНЯЕМ ЧЕТНОСТЬ
     if day_to_show == 1:
         # Если сегодня воскресенье ИЛИ сегодня суббота
@@ -3407,7 +3479,7 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     
     # Получаем расписание с информацией о домашних заданиях на target_date
     text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
-
+    
     # Формируем сообщение
     day_names = {
         1: "Понедельник",
@@ -3417,11 +3489,11 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
         5: "Пятница",
         6: "Суббота"
     }
-
+    
     week_name = "нечетная" if week_type == 1 else "четная"
-
+    
     message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
-
+    
     # Добавляем анекдот
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -3429,12 +3501,12 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
             row = await cur.fetchone()
             if row:
                 message += f"\n\n😂 Анекдот:\n{row[0]}"
-
+    
     # Отправляем сообщение с кнопкой "Назад"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
-
+    
     await callback.message.edit_text(message, reply_markup=kb)
     await callback.answer()
 @dp.callback_query(F.data.startswith("rasp_day_"))
@@ -3442,7 +3514,7 @@ async def on_rasp_day(callback: types.CallbackQuery):
 
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -3495,7 +3567,7 @@ async def cmd_anekdot(message: types.Message):
 async def on_rasp_show(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -3503,7 +3575,7 @@ async def on_rasp_show(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     day = int(parts[2])
     week_type = int(parts[3])
-
+    
     # Определяем дату для проверки домашних заданий
     # Для обычного расписания показываем домашние задания на ближайшую дату с этим днем недели
     today = datetime.datetime.now(TZ).date()
@@ -3511,15 +3583,15 @@ async def on_rasp_show(callback: types.CallbackQuery):
     if days_ahead <= 0:
         days_ahead += 7
     target_date = today + datetime.timedelta(days=days_ahead)
-
+    
     # Получаем расписание с информацией о домашних заданиях
     chat_id = callback.message.chat.id
     text = await get_rasp_formatted(day, week_type, chat_id, target_date)
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data=f"rasp_day_{day}")]
     ])
-
+    
     day_names = {
         1: "Понедельник",
         2: "Вторник", 
@@ -3528,9 +3600,9 @@ async def on_rasp_show(callback: types.CallbackQuery):
         5: "Пятница",
         6: "Суббота"
     }
-
+    
     week_name = "нечетная" if week_type == 1 else "четная"
-
+    
     await callback.message.edit_text(
         f"📅 {day_names[day]} | Неделя: {week_name}\n\n{text}", 
         reply_markup=kb
@@ -3541,7 +3613,7 @@ async def on_rasp_show(callback: types.CallbackQuery):
 async def zvonki_handler(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
-
+    
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
@@ -3576,17 +3648,17 @@ async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
-
+    
     # Показываем общую четность
     current = await get_current_week_type(pool)
     current_str = "нечетная (1)" if current == 1 else "четная (2)"
-
+    
     status_text = f"📊 Текущая четность недели (общая для всех чатов):\n\n{current_str}"
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
     ])
-
+    
     await callback.message.edit_text(status_text, reply_markup=kb)
     await callback.answer()
 
@@ -3595,25 +3667,25 @@ async def admin_sync_week_handler(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-
+    
     try:
         # Берем четность из первого группового чата как основную
         main_chat_id = ALLOWED_CHAT_IDS[0]
         main_week_type = await get_current_week_type(pool, main_chat_id)
-
+        
         # Устанавливаем такую же четность для всех групповых чатов
         synced_chats = []
         for chat_id in ALLOWED_CHAT_IDS:
             await set_current_week_type(pool, chat_id, main_week_type)
             synced_chats.append(chat_id)
-
+        
         # Также устанавливаем для ЛС чата админа
         admin_ls_chat_id = callback.message.chat.id
         await set_current_week_type(pool, admin_ls_chat_id, main_week_type)
         synced_chats.append(f"ЛС ({admin_ls_chat_id})")
-
+        
         week_name = "нечетная" if main_week_type == 1 else "четная"
-
+        
         await callback.message.edit_text(
             f"✅ Четность синхронизирована!\n\n"
             f"Все чаты установлены на: {week_name} неделя\n"
@@ -3621,14 +3693,14 @@ async def admin_sync_week_handler(callback: types.CallbackQuery):
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+        
     except Exception as e:
         await callback.message.edit_text(
             f"❌ Ошибка синхронизации: {e}\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+    
     await callback.answer()
 
 
@@ -3637,7 +3709,7 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
-
+    
     rows = await get_publish_times(pool)
     if not rows:
         text = "Время публикаций не задано."
@@ -3645,11 +3717,11 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
         lines = [f"{rid}: {hour:02d}:{minute:02d} (Омск)" for rid, hour, minute in rows]
         text = "Текущие времена публикаций (Омск):\n" + "\n".join(lines)
         text += "\n\nЧтобы удалить время, используйте команду /delptime <id>"
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
     ])
-
+    
     await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
     await callback.answer()
 # В состояние добавления времени публикации
@@ -3658,11 +3730,11 @@ async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContex
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-
+    
     await greet_and_send(
         callback.from_user,
         "Введите время публикации в формате ЧЧ:ММ по Омску (например: 20:00):",
@@ -3717,13 +3789,13 @@ async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔴 Нечетная неделя", callback_data="set_week_1")],
         [InlineKeyboardButton(text="🔵 Четная неделя", callback_data="set_week_2")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
     ])
-
+    
     await greet_and_send(
         callback.from_user, 
         "Выберите тип недели для установки:", 
@@ -3737,28 +3809,28 @@ async def set_week_type_handler(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
-
+    
     week_type = int(callback.data.split("_")[2])
-
+    
     try:
         # Устанавливаем общую четность для всех
         await set_current_week_type(pool, week_type=week_type)
-
+        
         week_name = "нечетная" if week_type == 1 else "четная"
-
+        
         await callback.message.edit_text(
             f"✅ Четность установлена: {week_name} неделя для всех чатов\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+        
     except Exception as e:
         await callback.message.edit_text(
             f"❌ Ошибка при установке четности: {e}\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
-
+    
     await callback.answer()
 
 @dp.message(Command("check_week"))
@@ -3766,14 +3838,14 @@ async def check_week_status(message: types.Message):
     """Проверка текущей четности во всех чатах"""
     if message.from_user.id not in ALLOWED_USERS:
         return
-
+    
     status_text = "📊 Статус четности по чатам:\n\n"
-
+    
     for chat_id in ALLOWED_CHAT_IDS:
         week_type = await get_current_week_type(pool, chat_id)
         week_name = "нечетная" if week_type == 1 else "четная"
         status_text += f"Чат {chat_id}: {week_name} ({week_type})\n"
-
+    
     await message.answer(status_text)
 
 @dp.message(SetChetState.week_type)
@@ -3798,12 +3870,12 @@ async def send_today_rasp():
             now = datetime.datetime.now(TZ)
             today = now.date()
             hour = now.hour
-
+            
             # Определяем день для публикации
             if hour >= 18:
                 target_date = today + datetime.timedelta(days=1)
                 day_to_post = target_date.isoweekday()
-
+                
                 if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
                     day_to_post = 1
@@ -3813,17 +3885,17 @@ async def send_today_rasp():
             else:
                 target_date = today
                 day_to_post = today.isoweekday()
-
+                
                 if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
                     day_to_post = 1
                     day_name = "завтра (Понедельник)"
                 else:
                     day_name = "сегодня"
-
+            
             # Получаем базовую четность
             base_week_type = await get_current_week_type(pool)
-
+            
             # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - МЕНЯЕМ ЧЕТНОСТЬ
             if day_to_post == 1 and (today.isoweekday() == 7 or (hour >= 18 and (today + datetime.timedelta(days=1)).isoweekday() == 7)):
                 week_type = 2 if base_week_type == 1 else 1
@@ -3833,21 +3905,21 @@ async def send_today_rasp():
                 week_type = base_week_type
                 week_name = "нечетная" if week_type == 1 else "четная"
                 day_note = ""
-
+            
             # Получаем расписание для конкретного чата
             text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
-
+            
             # Формируем сообщение
             day_names = {
                 1: "Понедельник", 2: "Вторник", 3: "Среда",
                 4: "Четверг", 5: "Пятница", 6: "Суббота"
             }
-
+            
             if "(" in day_name and ")" in day_name:
                 msg = f"📅 Расписание на {day_name} | Неделя: {week_name}{day_note}\n\n{text}"
             else:
                 msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}{day_note}\n\n{text}"
-
+            
             # Добавляем анекдот
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
@@ -3855,9 +3927,9 @@ async def send_today_rasp():
                     row = await cur.fetchone()
                     if row:
                         msg += f"\n\n😂 Анекдот:\n{row[0]}"
-
+            
             await bot.send_message(chat_id, msg)
-
+            
         except Exception as e:
             print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
 
@@ -3866,19 +3938,19 @@ async def sync_week_all_chats(message: types.Message):
     """Синхронизирует четность во всех чатах"""
     if message.from_user.id not in ALLOWED_USERS:
         return
-
+    
     try:
         # Берем четность из первого чата как основную
         main_chat_id = ALLOWED_CHAT_IDS[0]
         main_week_type = await get_current_week_type(pool, main_chat_id)
-
+        
         # Устанавливаем такую же четность для всех чатов
         for chat_id in ALLOWED_CHAT_IDS:
             await set_current_week_type(pool, chat_id, main_week_type)
-
+        
         week_name = "нечетная" if main_week_type == 1 else "четная"
         await message.answer(f"✅ Четность синхронизирована: {week_name} неделя для всех чатов")
-
+        
     except Exception as e:
         await message.answer(f"❌ Ошибка синхронизации: {e}")
 
@@ -3891,39 +3963,39 @@ async def cmd_list_birthdays(message: types.Message):
         return
 
     birthdays = await get_all_birthdays(pool)
-
+    
     if not birthdays:
         await message.answer("📅 В базе нет добавленных дней рождения.")
         return
-
+    
     today = datetime.datetime.now(TZ).date()
     birthday_list = "📅 Все дни рождения в базе:\n\n"
-
+    
     for bday in birthdays:
         bday_id, name, birth_date, added_by, created_at = bday
-
+        
         birth_date_obj = birth_date if isinstance(birth_date, datetime.date) else datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
-
+        
         # Вычисляем возраст
         age = today.year - birth_date_obj.year
         if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
             age -= 1
-
+        
         # Форматируем дату
         birth_date_str = birth_date_obj.strftime("%d.%m.%Y")
-
+        
         # Отмечаем, если день рождения сегодня
         today_str = today.strftime("%m-%d")
         bday_str = birth_date_obj.strftime("%m-%d")
         today_flag = " 🎉 СЕГОДНЯ!" if today_str == bday_str else ""
-
+        
         birthday_list += f"🆔 ID: {bday_id}\n"
         birthday_list += f"👤 {name}{today_flag}\n"
         birthday_list += f"📅 {birth_date_str} (возраст: {age} лет)\n"
         birthday_list += "─" * 30 + "\n"
-
+    
     birthday_list += f"\n💡 Для теста используйте: /testdr <ID>"
-
+    
     await message.answer(birthday_list)
 
 async def get_birthday_by_id(pool, birthday_id: int):
@@ -3944,6 +4016,7 @@ async def cmd_test_birthday(message: types.Message):
     if message.chat.type != "private" or message.from_user.id not in ALLOWED_USERS:
         await message.answer("❌ Эта команда доступна только администраторам в личных сообщениях")
         return
+
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
         await message.answer(
@@ -3954,6 +4027,7 @@ async def cmd_test_birthday(message: types.Message):
             "/testdr 5"
         )
         return
+
     try:
         birthday_id = int(parts[1].strip())
         
@@ -3962,6 +4036,7 @@ async def cmd_test_birthday(message: types.Message):
         if not birthday_data:
             await message.answer(f"❌ День рождения с ID {birthday_id} не найден в базе.\nИспользуйте /listdr чтобы посмотреть все ID.")
             return
+
         bday_id, user_name, birth_date, added_by, created_at = birthday_data
         
         # Вычисляем возраст
@@ -3970,16 +4045,20 @@ async def cmd_test_birthday(message: types.Message):
         age = today.year - birth_date_obj.year
         if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
             age -= 1
+
         # Создаем текст поздравления (точно такой же как в автоматической отправке)
         message_text = (
             f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
             f"В этом году тебе исполнилось целых {age} лет!\n\n"
             f"От сердца и почек дарю тебе цветочек 💐"
         )
+
         # Отправляем поздравление во ВСЕ беседы из конфига
         success_count = 0
         failed_chats = []
+
         await message.answer(f"🔄 Отправляю тестовое поздравление для {user_name}...")
+
         for chat_id in ALLOWED_CHAT_IDS:
             try:
                 await bot.send_message(chat_id, message_text)
@@ -3988,6 +4067,7 @@ async def cmd_test_birthday(message: types.Message):
             except Exception as e:
                 failed_chats.append(f"{chat_id}: {e}")
                 print(f"❌ Ошибка отправки тестового поздравления для {user_name} в чат {chat_id}: {e}")
+
         # Формируем отчет
         report = f"✅ Тестовое поздравление отправлено!\n\n"
         report += f"👤 Имя: {user_name}\n"
@@ -3996,6 +4076,7 @@ async def cmd_test_birthday(message: types.Message):
         report += f"🆔 ID в базе: {birthday_id}\n\n"
         report += f"📊 Статистика отправки:\n"
         report += f"✅ Успешно: {success_count} из {len(ALLOWED_CHAT_IDS)} чатов\n"
+
         if failed_chats:
             report += f"❌ Ошибки: {len(failed_chats)} чатов\n\n"
             report += "Чаты с ошибками:\n"
@@ -4003,11 +4084,14 @@ async def cmd_test_birthday(message: types.Message):
                 report += f"{i}. {error}\n"
             if len(failed_chats) > 3:
                 report += f"... и еще {len(failed_chats) - 3} ошибок"
+
         await message.answer(report)
+
     except ValueError:
         await message.answer("❌ Неверный формат ID. Используйте цифры.\n\nПример: /testdr 1")
     except Exception as e:
         await message.answer(f"❌ Ошибка при тестировании: {e}")
+
 '''
 
 
@@ -4023,7 +4107,7 @@ async def cmd_delete_birthday(message: types.Message):
     if len(parts) < 2:
         await message.answer("⚠ Использование: /deldr <id>\n\nИдентификатор можно посмотреть в /listdr")
         return
-
+    
     try:
         birthday_id = int(parts[1])
         await delete_birthday(pool, birthday_id)
@@ -4038,7 +4122,7 @@ async def cmd_force_birthday_check(message: types.Message):
     """Принудительная проверка дней рождения - для тестирования"""
     if message.from_user.id not in ALLOWED_USERS:
         return
-
+    
     await message.answer("🔄 Принудительная проверка дней рождения...")
     await check_birthdays()
     await message.answer("✅ Проверка завершена")
@@ -4050,28 +4134,29 @@ async def main():
     await init_db(pool)
     await ensure_columns(pool)
     await ensure_birthday_columns(pool)
-
+    
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
-
+    
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
-
+    
     # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
     scheduler.add_job(
         check_birthdays, 
         CronTrigger(hour=7, minute=0, timezone=TZ),  # 9:00 утра по Омску
         id="birthday_check"
     )
-
+        
     scheduler.start()
     print("Планировщик запущен")
-
+    
     # Проверяем текущие задания
     jobs = scheduler.get_jobs()
     print(f"Активные задания: {len(jobs)}")
     for job in jobs:
         print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
-
+    
     await dp.start_polling(bot)
 if __name__ == "__main__":
+    asyncio.run(main())
