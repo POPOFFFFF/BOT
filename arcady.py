@@ -2665,6 +2665,84 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"❌ Ошибка при добавлении урока: {e}")
         await state.clear()
 
+@dp.callback_query(F.data.startswith("pair_"))
+async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
+    pair_number = int(callback.data[len("pair_"):])
+    await state.update_data(pair_number=pair_number)
+    
+    data = await state.get_data()
+    subject_name = data["subject"]
+    
+    try:
+        # Проверяем, есть ли у предмета фиксированный кабинет (rK)
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, rK FROM subjects WHERE name=%s", (subject_name,))
+                result = await cur.fetchone()
+                if not result:
+                    await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
+                    await state.clear()
+                    return
+                    
+                subject_id, is_rk = result
+        
+        if is_rk:
+            # Если предмет с rK - спрашиваем кабинет
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+            ])
+            await callback.message.edit_text(
+                f"📚 Предмет: {subject_name}\n"
+                f"🔢 Тип: с запросом кабинета\n\n"
+                "Введите кабинет для этой пары:",
+                reply_markup=kb
+            )
+            await state.set_state(AddLessonState.cabinet)
+        else:
+            # Если предмет без rK - пытаемся извлечь кабинет из названия
+            import re
+            cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+            
+            if cabinet_match:
+                cabinet = cabinet_match.group(2)
+                clean_subject_name = subject_name.replace(cabinet_match.group(0), '').strip()
+            else:
+                cabinet = "Не указан"
+                clean_subject_name = subject_name
+            
+            await state.update_data(cabinet=cabinet)
+            
+            # Добавляем урок в расписание для ВСЕХ чатов
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    # Добавляем урок в расписание для ВСЕХ чатов
+                    for chat_id in ALLOWED_CHAT_IDS:
+                        await cur.execute("""
+                            INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet))
+            
+            display_name = clean_subject_name
+            
+            # Автоматическая синхронизация
+            source_chat_id = ALLOWED_CHAT_IDS[0]
+            await sync_rasp_to_all_chats(source_chat_id)
+            
+            await callback.message.edit_text(
+                f"✅ Урок '{display_name}' добавлен во все чаты!\n"
+                f"📅 День: {DAYS[data['day']-1]}\n"
+                f"🔢 Пара: {pair_number}\n"
+                f"🏫 Кабинет: {cabinet}\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+            await state.clear()
+    
+    except Exception as e:
+        print(f"❌ Ошибка в choose_pair: {e}")
+        await callback.message.edit_text(f"❌ Ошибка при добавлении урока: {e}")
+        await state.clear()
+
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
     data = await state.get_data()
