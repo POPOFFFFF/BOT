@@ -2183,7 +2183,6 @@ async def process_confirm_delete_homework(callback: types.CallbackQuery):
     await callback.answer()
 
 
-
 @dp.callback_query(F.data == "admin_add_lesson")
 async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -2192,23 +2191,23 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT name FROM subjects")
+            await cur.execute("SELECT id, name FROM subjects ORDER BY name")
             subjects = await cur.fetchall()
     
+    if not subjects:
+        await callback.message.edit_text("❌ В базе нет предметов. Сначала добавьте предметы.")
+        await callback.answer()
+        return
+    
     buttons = []
-    for subject in subjects:
-        subject_name = subject[0]
-        
+    for subject_id, subject_name in subjects:
         # Обрезаем название для отображения
         display_name = subject_name[:30] + "..." if len(subject_name) > 30 else subject_name
         
-        # Для callback_data обрезаем до 50 символов и заменяем пробелы
-        callback_name = re.sub(r'[^a-zA-Z0-9_]', '_', subject_name[:50])
-        callback_data = f"choose_subject_{callback_name}"
-        
+        # Используем ID предмета для callback_data чтобы избежать проблем с названиями
         buttons.append([InlineKeyboardButton(
             text=display_name, 
-            callback_data=callback_data
+            callback_data=f"choose_subject_id_{subject_id}"
         )])
     
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
@@ -2218,15 +2217,27 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
     await callback.message.edit_text("Выберите предмет:", reply_markup=kb)
     await state.set_state(AddLessonState.subject)
 
-@dp.callback_query(F.data.startswith("choose_subject_"))
-async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
-    # Получаем название предмета из callback_data (без префикса)
-    callback_name = callback.data[len("choose_subject_"):]
+@dp.callback_query(F.data.startswith("choose_subject_id_"))
+async def choose_subject_by_id(callback: types.CallbackQuery, state: FSMContext):
+    subject_id = int(callback.data[len("choose_subject_id_"):])
     
-    # Восстанавливаем оригинальное название (заменяем _ обратно на пробелы)
-    original_name = callback_name.replace('_', ' ')
+    # Получаем полную информацию о предмете из базы
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name, rK FROM subjects WHERE id=%s", (subject_id,))
+            result = await cur.fetchone()
+            
+            if not result:
+                await callback.answer("❌ Предмет не найден в базе данных", show_alert=True)
+                return
+            
+            subject_name, is_rk = result
     
-    await state.update_data(subject=original_name)
+    await state.update_data(
+        subject=subject_name,
+        subject_id=subject_id,
+        is_rk=is_rk
+    )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
@@ -2235,13 +2246,49 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
     ])
     
     await callback.message.edit_text(
-        f"📚 Выбран предмет: {original_name}\n\n"
+        f"📚 Выбран предмет: {subject_name}\n"
+        f"🔧 Тип: {'с запросом кабинета (rK)' if is_rk else 'с фиксированным кабинетом'}\n\n"
         "Выберите четность недели:",
         reply_markup=kb
     )
     await state.set_state(AddLessonState.week_type)
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("choose_subject_"))
+async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
+    # Получаем название предмета из callback_data (без префикса)
+    callback_name = callback.data[len("choose_subject_"):]
+    
+    # Восстанавливаем оригинальное название (заменяем _ обратно на пробелы)
+    original_name = callback_name.replace('_', ' ')
+    
+    # Находим точное название предмета в базе данных
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT name FROM subjects WHERE name LIKE %s", (f"%{original_name}%",))
+            result = await cur.fetchone()
+            
+            if not result:
+                await callback.answer("❌ Предмет не найден в базе данных", show_alert=True)
+                return
+            
+            exact_subject_name = result[0]
+    
+    await state.update_data(subject=exact_subject_name)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    await callback.message.edit_text(
+        f"📚 Выбран предмет: {exact_subject_name}\n\n"
+        "Выберите четность недели:",
+        reply_markup=kb
+    )
+    await state.set_state(AddLessonState.week_type)
+    await callback.answer()
 @dp.callback_query(F.data.startswith("week_"))
 async def choose_week(callback: types.CallbackQuery, state: FSMContext):
     week_type = int(callback.data[-1])
@@ -2609,28 +2656,17 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
         await state.clear()
         await callback.answer()
 
-
 @dp.callback_query(F.data.startswith("pair_"))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("pair_"):])
     await state.update_data(pair_number=pair_number)
     
     data = await state.get_data()
-    subject_name = data["subject"]  # Используем subject вместо subject_id
+    subject_name = data["subject"]
+    subject_id = data["subject_id"]
+    is_rk = data["is_rk"]
     
     try:
-        # Проверяем, есть ли у предмета фиксированный кабинет (rK)
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT id, rK FROM subjects WHERE name=%s", (subject_name,))
-                result = await cur.fetchone()
-                if not result:
-                    await callback.message.edit_text("❌ Ошибка: предмет не найден в базе")
-                    await state.clear()
-                    return
-                    
-                subject_id, is_rk = result
-        
         if is_rk:
             # Если предмет с rK - спрашиваем кабинет
             kb = InlineKeyboardMarkup(inline_keyboard=[
