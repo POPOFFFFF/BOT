@@ -3293,6 +3293,70 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
         result += "\n\n📚 Есть заданное домашнее задание"
     
     return result
+@dp.callback_query(F.data == "today_rasp")
+async def today_rasp_handler(callback: types.CallbackQuery):
+    is_private = callback.message.chat.type == "private"
+    is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
+    
+    if not (is_private or is_allowed_chat):
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
+    chat_id = callback.message.chat.id
+    now = datetime.datetime.now(TZ)
+    today = now.date()
+    current_weekday = today.isoweekday()
+    
+    # Если сегодня воскресенье, показываем понедельник
+    if current_weekday == 7:
+        target_date = today + datetime.timedelta(days=1)
+        day_to_show = 1
+        day_name = "понедельник"
+    else:
+        target_date = today
+        day_to_show = current_weekday
+        day_name = "сегодня"
+    
+    # Получаем актуальную четность недели
+    week_type = await get_current_week_type(pool)
+    
+    # ВАЖНО: ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - МЕНЯЕМ ЧЕТНОСТЬ
+    if day_to_show == 1 and current_weekday == 7:
+        week_type = 2 if week_type == 1 else 1
+        print(f"🔁 Смена четности для понедельника в today_rasp: {'нечетная' if week_type == 1 else 'четная'}")
+    
+    # Получаем расписание с информацией о домашних заданиях на target_date
+    text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
+    
+    # Формируем сообщение
+    day_names = {
+        1: "Понедельник",
+        2: "Вторник", 
+        3: "Среда",
+        4: "Четверг",
+        5: "Пятница",
+        6: "Суббота"
+    }
+    
+    week_name = "нечетная" if week_type == 1 else "четная"
+    
+    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
+    
+    # Добавляем анекдот
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+            row = await cur.fetchone()
+            if row:
+                message += f"\n\n😂 Анекдот:\n{row[0]}"
+    
+    # Отправляем сообщение с кнопкой "Назад"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await callback.message.edit_text(message, reply_markup=kb)
+    await callback.answer()
 
 async def send_today_rasp():
     for chat_id in ALLOWED_CHAT_IDS:
