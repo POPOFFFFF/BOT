@@ -3307,15 +3307,26 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     today = now.date()
     current_weekday = today.isoweekday()
     
-    # Если сегодня воскресенье, показываем понедельник
-    if current_weekday == 7:
+    # Определяем день для показа
+    if current_weekday == 7:  # Воскресенье
         target_date = today + datetime.timedelta(days=1)
         day_to_show = 1
         day_name = "понедельник"
+        display_name = "понедельник"
     else:
         target_date = today
         day_to_show = current_weekday
         day_name = "сегодня"
+        # Получаем название дня недели для отображения
+        day_names = {
+            1: "Понедельник",
+            2: "Вторник", 
+            3: "Среда",
+            4: "Четверг",
+            5: "Пятница",
+            6: "Суббота"
+        }
+        display_name = day_names[current_weekday]
     
     # Получаем актуальную четность недели
     week_type = await get_current_week_type(pool)
@@ -3323,24 +3334,17 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     # ВАЖНО: ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - МЕНЯЕМ ЧЕТНОСТЬ
     if day_to_show == 1 and current_weekday == 7:
         week_type = 2 if week_type == 1 else 1
-        print(f"🔁 Смена четности для понедельника в today_rasp: {'нечетная' if week_type == 1 else 'четная'}")
     
     # Получаем расписание с информацией о домашних заданиях на target_date
     text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
     
-    # Формируем сообщение
-    day_names = {
-        1: "Понедельник",
-        2: "Вторник", 
-        3: "Среда",
-        4: "Четверг",
-        5: "Пятница",
-        6: "Суббота"
-    }
-    
     week_name = "нечетная" if week_type == 1 else "четная"
     
-    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
+    # Формируем сообщение без дублирования
+    if day_name == "сегодня":
+        message = f"📅 Расписание на {day_name} ({display_name}) | Неделя: {week_name}\n\n{text}"
+    else:
+        message = f"📅 Расписание на {day_name} | Неделя: {week_name}\n\n{text}"
     
     # Добавляем анекдот
     async with pool.acquire() as conn:
@@ -3540,36 +3544,38 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     if day_to_show == 7:
         target_date += datetime.timedelta(days=1)
         day_to_show = 1
-        day_name = "послезавтра (Понедельник)"
+        day_name = "послезавтра"
+        display_name = "Понедельник"
     else:
         day_name = "завтра"
+        # Получаем название дня недели для отображения
+        day_names = {
+            1: "Понедельник",
+            2: "Вторник", 
+            3: "Среда",
+            4: "Четверг",
+            5: "Пятница",
+            6: "Суббота"
+        }
+        display_name = day_names[day_to_show]
     
     # Получаем актуальную четность недели
-    week_type = await get_current_week_type(pool, chat_id)
+    week_type = await get_current_week_type(pool)
     
     # ВАЖНО: ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ ИЛИ СУББОТА - МЕНЯЕМ ЧЕТНОСТЬ
-    if day_to_show == 1:
-        # Если сегодня воскресенье ИЛИ сегодня суббота
-        if current_weekday == 7 or current_weekday == 6:
-            week_type = 2 if week_type == 1 else 1
-            print(f"🔁 Смена четности для понедельника в tomorrow_rasp: {'нечетная' if week_type == 1 else 'четная'}")
+    if day_to_show == 1 and (current_weekday == 7 or current_weekday == 6):
+        week_type = 2 if week_type == 1 else 1
     
     # Получаем расписание с информацией о домашних заданиях на target_date
     text = await get_rasp_formatted(day_to_show, week_type, chat_id, target_date)
     
-    # Формируем сообщение
-    day_names = {
-        1: "Понедельник",
-        2: "Вторник", 
-        3: "Среда",
-        4: "Четверг",
-        5: "Пятница",
-        6: "Суббота"
-    }
-    
     week_name = "нечетная" if week_type == 1 else "четная"
     
-    message = f"📅 Расписание на {day_name} ({day_names[day_to_show]}) | Неделя: {week_name}\n\n{text}"
+    # Формируем сообщение без дублирования
+    if day_name == "завтра":
+        message = f"📅 Расписание на {day_name} ({display_name}) | Неделя: {week_name}\n\n{text}"
+    else:
+        message = f"📅 Расписание на {day_name} | Неделя: {week_name}\n\n{text}"
     
     # Добавляем анекдот
     async with pool.acquire() as conn:
