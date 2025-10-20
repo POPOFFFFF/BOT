@@ -1003,9 +1003,21 @@ async def check_birthdays():
             # Детальное логирование
             print(f"🎂 Обрабатываем: {user_name}, дата: {birth_date}")
             
+            # ОБРАБАТЫВАЕМ РАЗНЫЕ ФОРМАТЫ ДАТЫ ИЗ БАЗЫ
+            if isinstance(birth_date, datetime.datetime):
+                birth_date_obj = birth_date.date()
+            elif isinstance(birth_date, datetime.date):
+                birth_date_obj = birth_date
+            else:
+                # Если это строка, парсим её
+                try:
+                    birth_date_obj = datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
+                except ValueError:
+                    print(f"❌ Неверный формат даты для {user_name}: {birth_date}")
+                    continue
+            
             # Вычисляем возраст
             today = datetime.datetime.now(TZ).date()
-            birth_date_obj = birth_date if isinstance(birth_date, datetime.date) else datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
             age = today.year - birth_date_obj.year
             
             # Если день рождения еще не наступил в этом году, корректируем возраст
@@ -1687,25 +1699,48 @@ async def menu_homework_handler(callback: types.CallbackQuery):
         )
         return
     
-    # Форматируем список домашних заданий
+    # Форматируем список домашних заданий - УБИРАЕМ ОБРЕЗАНИЕ
     homework_text = "📚 Домашнее задание:\n\n"
     for hw_id, subject_name, due_date, task_text, created_at in homework_list:
         # Форматируем дату
         due_date_obj = due_date if isinstance(due_date, datetime.date) else datetime.datetime.strptime(str(due_date), '%Y-%m-%d').date()
         due_date_str = due_date_obj.strftime("%d.%m.%Y")
         
-        # Обрезаем длинный текст задания
-        short_task = task_text[:100] + "..." if len(task_text) > 100 else task_text
-        
+        # УБИРАЕМ ОБРЕЗАНИЕ - показываем полный текст
         homework_text += f"📅 {due_date_str} | {subject_name}\n"
-        homework_text += f"📝 {short_task}\n"
+        homework_text += f"📝 {task_text}\n"
         homework_text += "─" * 30 + "\n"
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
-    ])
+    # Если текст слишком длинный, разбиваем на несколько сообщений
+    if len(homework_text) > 4000:
+        parts = []
+        current_part = ""
+        
+        for line in homework_text.split('\n'):
+            if len(current_part + line + '\n') > 4000:
+                parts.append(current_part)
+                current_part = line + '\n'
+            else:
+                current_part += line + '\n'
+        
+        if current_part:
+            parts.append(current_part)
+        
+        # Отправляем первое сообщение с кнопкой
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        ])
+        await callback.message.edit_text(parts[0], reply_markup=kb)
+        
+        # Отправляем остальные части как отдельные сообщения
+        for part in parts[1:]:
+            await callback.message.answer(part)
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        ])
+        await callback.message.edit_text(homework_text, reply_markup=kb)
     
-    await callback.message.edit_text(homework_text, reply_markup=kb)
     await callback.answer()
 
 # Админские обработчики для домашних заданий
@@ -3977,7 +4012,7 @@ async def send_today_rasp():
             if day_to_post == 1 and (today.isoweekday() == 7 or (hour >= 18 and (today + datetime.timedelta(days=1)).isoweekday() == 7)):
                 week_type = 2 if base_week_type == 1 else 1
                 week_name = "нечетная" if week_type == 1 else "четная"
-                day_note = " (неделя сменилась)"
+                day_note = ""
             else:
                 week_type = base_week_type
                 week_name = "нечетная" if week_type == 1 else "четная"
