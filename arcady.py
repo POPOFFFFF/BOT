@@ -987,66 +987,100 @@ async def cmd_add_birthday(message: types.Message):
 
 async def check_birthdays():
     """Проверяет дни рождения и отправляет поздравления во все беседы"""
+    success_count = 0
+    total_birthdays = 0
+    
     try:
         print(f"🎂 [{datetime.datetime.now(TZ)}] Запуск проверки дней рождения...")
         
+        # Проверяем что бот инициализирован
         if not bot:
             print("❌ Бот не инициализирован")
-            return
+            return False
             
         birthdays = await get_today_birthdays(pool)
-        print(f"🎂 Найдено дней рождений: {len(birthdays)}")
+        total_birthdays = len(birthdays)
+        
+        print(f"🎂 Найдено дней рождений: {total_birthdays}")
         
         if not birthdays:
             print("🎂 Сегодня нет дней рождения")
-            return
+            return True  # Это не ошибка, просто нет дней рождений
         
         for birthday in birthdays:
             try:
                 birthday_id, user_name, birth_date = birthday
                 
-                # Обработка даты...
+                print(f"🎂 Обрабатываем: {user_name}, дата из базы: {birth_date}")
+                
+                # ОБРАБАТЫВАЕМ РАЗНЫЕ ФОРМАТЫ ДАТЫ ИЗ БАЗЫ
                 if isinstance(birth_date, datetime.datetime):
                     birth_date_obj = birth_date.date()
                 elif isinstance(birth_date, datetime.date):
                     birth_date_obj = birth_date
                 elif isinstance(birth_date, str):
-                    birth_date_obj = datetime.datetime.strptime(birth_date, '%Y-%m-%d').date()
+                    try:
+                        birth_date_obj = datetime.datetime.strptime(birth_date, '%Y-%m-%d').date()
+                    except ValueError:
+                        print(f"❌ Неверный формат даты для {user_name}: {birth_date}")
+                        continue
                 else:
+                    print(f"❌ Неизвестный формат даты для {user_name}: {birth_date}")
                     continue
                 
-                # Вычисление возраста...
+                print(f"🎂 Дата после обработки: {birth_date_obj}")
+                
+                # Вычисляем возраст
                 today = datetime.datetime.now(TZ).date()
+                print(f"🎂 Сегодня: {today}")
+                
                 age = today.year - birth_date_obj.year
+                
+                # Если день рождения еще не наступил в этом году, корректируем возраст
                 if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
                     age -= 1
                 
-                # Безопасный текст поздравления
+                print(f"🎂 {user_name} исполняется {age} лет")
+                
+                # Создаем текст поздравления
                 message_text = (
                     f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
-                    f"В этом году тебе исполнилось {age} лет!\n\n"
-                    f"Поздравляю! 🎂"
+                    f"В этом году тебе исполнилось целых {age} лет!\n\n"
+                    f"От сердца и почек дарю тебе цветочек 💐"
                 )
                 
-                # Отправка в чаты...
-                success_count = 0
+                # Отправляем поздравление во ВСЕ беседы из конфига
+                user_success_count = 0
                 for chat_id in ALLOWED_CHAT_IDS:
                     try:
+                        print(f"🎂 Отправляем в чат {chat_id}...")
                         await bot.send_message(chat_id, message_text)
+                        user_success_count += 1
                         success_count += 1
+                        print(f"✅ Отправлено поздравление для {user_name} в чат {chat_id}")
                     except Exception as e:
-                        print(f"❌ Ошибка отправки в чат {chat_id}: {e}")
+                        print(f"❌ Ошибка отправки поздравления для {user_name} в чат {chat_id}: {e}")
                 
-                print(f"✅ Успешно отправлено {success_count} поздравлений для {user_name}")
+                print(f"✅ Успешно отправлено {user_success_count} поздравлений для {user_name}")
                 
             except Exception as e:
                 print(f"❌ Ошибка обработки дня рождения {birthday}: {e}")
                 continue
+        
+        # Возвращаем результат
+        total_messages_attempted = total_birthdays * len(ALLOWED_CHAT_IDS)
+        if success_count > 0:
+            print(f"✅ Успешно отправлено {success_count} из {total_messages_attempted} сообщений")
+            return True
+        else:
+            print(f"❌ Не отправлено ни одного сообщения")
+            return False
                 
     except Exception as e:
         print(f"❌ Критическая ошибка проверки дней рождения: {e}")
         import traceback
         print(f"❌ Трассировка: {traceback.format_exc()}")
+        return False
 
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
@@ -4304,6 +4338,8 @@ async def cmd_debug_birthday(message: types.Message):
                 await message.answer("✅ Тестовая отправка завершена успешно")
             else:
                 await message.answer("❌ Тестовая отправка завершена с ошибками")
+        else:
+            await message.answer("✅ Нет дней рождений для отправки - это нормально")
                 
     except Exception as e:
         error_msg = f"❌ Критическая ошибка отладки: {str(e)}"
