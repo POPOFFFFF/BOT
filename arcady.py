@@ -1002,6 +1002,7 @@ async def check_birthdays():
         total_birthdays = len(birthdays)
         
         print(f"🎂 Найдено дней рождений: {total_birthdays}")
+        print(f"🎂 Данные из базы: {birthdays}")
         
         if not birthdays:
             print("🎂 Сегодня нет дней рождения")
@@ -1011,7 +1012,8 @@ async def check_birthdays():
             try:
                 birthday_id, user_name, birth_date = birthday
                 
-                print(f"🎂 Обрабатываем: {user_name}, дата из базы: {birth_date}")
+                print(f"🎂 Обрабатываем: ID={birthday_id}, Имя='{user_name}', Дата='{birth_date}'")
+                print(f"🎂 Тип даты: {type(birth_date)}")
                 
                 # ОБРАБАТЫВАЕМ РАЗНЫЕ ФОРМАТЫ ДАТЫ ИЗ БАЗЫ
                 if isinstance(birth_date, datetime.datetime):
@@ -1049,26 +1051,33 @@ async def check_birthdays():
                     f"От сердца и почек дарю тебе цветочек 💐"
                 )
                 
+                print(f"🎂 Текст поздравления: {message_text}")
+                
                 # Отправляем поздравление во ВСЕ беседы из конфига
                 user_success_count = 0
                 for chat_id in ALLOWED_CHAT_IDS:
                     try:
-                        print(f"🎂 Отправляем в чат {chat_id}...")
+                        print(f"🎂 Пытаюсь отправить в чат {chat_id}...")
                         await bot.send_message(chat_id, message_text)
                         user_success_count += 1
                         success_count += 1
-                        print(f"✅ Отправлено поздравление для {user_name} в чат {chat_id}")
+                        print(f"✅ УСПЕХ: Отправлено поздравление для {user_name} в чат {chat_id}")
                     except Exception as e:
-                        print(f"❌ Ошибка отправки поздравления для {user_name} в чат {chat_id}: {e}")
+                        print(f"❌ ОШИБКА отправки в чат {chat_id}: {str(e)}")
+                        print(f"❌ Тип ошибки: {type(e).__name__}")
                 
-                print(f"✅ Успешно отправлено {user_success_count} поздравлений для {user_name}")
+                print(f"🎂 Итог для {user_name}: {user_success_count}/{len(ALLOWED_CHAT_IDS)} успешных отправок")
                 
             except Exception as e:
                 print(f"❌ Ошибка обработки дня рождения {birthday}: {e}")
+                import traceback
+                print(f"❌ Трассировка: {traceback.format_exc()}")
                 continue
         
         # Возвращаем результат
         total_messages_attempted = total_birthdays * len(ALLOWED_CHAT_IDS)
+        print(f"🎂 ФИНАЛЬНЫЙ ИТОГ: {success_count} из {total_messages_attempted} сообщений отправлено")
+        
         if success_count > 0:
             print(f"✅ Успешно отправлено {success_count} из {total_messages_attempted} сообщений")
             return True
