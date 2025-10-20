@@ -4246,57 +4246,69 @@ async def cmd_debug_birthday(message: types.Message):
     if message.from_user.id not in ALLOWED_USERS:
         return
     
-    await message.answer("🔍 Запускаю подробную отладку...")
-    
     try:
-        # Проверяем планировщик
+        await message.answer("🔍 Запускаю подробную отладку...")
+        
+        # Построчно собираем статус для избежания проблем с форматированием
+        status_parts = []
+        
+        # 1. Проверяем планировщик
+        status_parts.append("📋 **Проверка планировщика:**")
         jobs = scheduler.get_jobs()
-        birthday_job = None
-        for job in jobs:
-            if "birthday" in job.id:
-                birthday_job = job
-                break
+        birthday_jobs = [job for job in jobs if "birthday" in job.id]
         
-        if birthday_job:
-            status = f"✅ Задание найдено: {birthday_job.id}\n"
-            status += f"📅 Следующий запуск: {birthday_job.next_run_time}\n"
+        if birthday_jobs:
+            for job in birthday_jobs:
+                status_parts.append(f"✅ {job.id} - след. запуск: {job.next_run_time}")
         else:
-            status = "❌ Задание дней рождения не найдено в планировщике\n"
+            status_parts.append("❌ Задания дней рождения не найдены")
         
-        # Проверяем базу данных
+        # 2. Проверяем базу данных
+        status_parts.append("\n📊 **Проверка базы данных:**")
+        
         today = datetime.datetime.now(TZ).date()
-        today_str = today.strftime('%m-%d')
+        today_str = today.strftime('%d.%m.%Y')  # Формат для отображения
         
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("""
-                    SELECT COUNT(*) as total_count FROM birthdays
-                """)
+                await cur.execute("SELECT COUNT(*) FROM birthdays")
                 total = (await cur.fetchone())[0]
+                status_parts.append(f"Всего записей: {total}")
                 
                 await cur.execute("""
                     SELECT user_name, birth_date 
                     FROM birthdays 
-                    WHERE DATE_FORMAT(birth_date, '%m-%d') = %s
-                """, (today_str,))
+                    WHERE DATE_FORMAT(birth_date, '%m-%d') = DATE_FORMAT(CURDATE(), '%m-%d')
+                """)
                 today_birthdays = await cur.fetchall()
+                
+                status_parts.append(f"Дней рождений сегодня: {len(today_birthdays)}")
+                
+                for name, date in today_birthdays:
+                    status_parts.append(f"  - {name}: {date}")
         
-        status += f"📊 Всего дней рождений в базе: {total}\n"
-        # ИСПРАВЛЕННАЯ СТРОКА - убраны скобки вокруг today
-        status += f"🎂 Сегодня {today} дней рождений: {len(today_birthdays)}\n"
+        # 3. Проверяем настройки бота
+        status_parts.append(f"\n🤖 **Настройки бота:**")
+        status_parts.append(f"Разрешенные чаты: {len(ALLOWED_CHAT_IDS)}")
+        status_parts.append(f"Текущее время: {datetime.datetime.now(TZ)}")
         
-        for name, date in today_birthdays:
-            status += f"  - {name}: {date}\n"
+        # Отправляем результат
+        status_text = "\n".join(status_parts)
+        await message.answer(status_text)
         
-        await message.answer(status)
-        
-        # Тестируем отправку
+        # Тестируем отправку если есть дни рождения
         if today_birthdays:
-            await message.answer("🔄 Тестирую отправку...")
-            await check_birthdays()
-        
+            await message.answer("\n🔄 **Тестирую отправку...**")
+            success = await check_birthdays()
+            if success:
+                await message.answer("✅ Тестовая отправка завершена успешно")
+            else:
+                await message.answer("❌ Тестовая отправка завершена с ошибками")
+                
     except Exception as e:
-        await message.answer(f"❌ Ошибка отладки: {e}")
+        error_msg = f"❌ Критическая ошибка отладки: {str(e)}"
+        await message.answer(error_msg)
+        print(f"Ошибка в debug_birthday: {e}")
 
 
 async def main():
