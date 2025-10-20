@@ -4256,7 +4256,7 @@ async def main():
     # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
     scheduler.add_job(
         check_birthdays, 
-        CronTrigger(hour=7, minute=0, timezone=TZ),  # 9:00 утра по Омску
+        CronTrigger(hour=21, minute=0, timezone=TZ),  # 9:00 утра по Омску
         id="birthday_check"
     )
         
