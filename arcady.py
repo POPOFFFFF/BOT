@@ -990,13 +990,11 @@ async def check_birthdays():
     try:
         print(f"🎂 [{datetime.datetime.now(TZ)}] Запуск проверки дней рождения...")
         
-        # Проверяем что бот инициализирован
         if not bot:
             print("❌ Бот не инициализирован")
             return
             
         birthdays = await get_today_birthdays(pool)
-        
         print(f"🎂 Найдено дней рождений: {len(birthdays)}")
         
         if not birthdays:
@@ -1004,58 +1002,46 @@ async def check_birthdays():
             return
         
         for birthday in birthdays:
-            birthday_id, user_name, birth_date = birthday
-            
-            print(f"🎂 Обрабатываем: {user_name}, дата из базы: {birth_date} (тип: {type(birth_date)})")
-            
-            # ОБРАБАТЫВАЕМ РАЗНЫЕ ФОРМАТЫ ДАТЫ ИЗ БАЗЫ
-            if isinstance(birth_date, datetime.datetime):
-                birth_date_obj = birth_date.date()
-            elif isinstance(birth_date, datetime.date):
-                birth_date_obj = birth_date
-            elif isinstance(birth_date, str):
-                try:
+            try:
+                birthday_id, user_name, birth_date = birthday
+                
+                # Обработка даты...
+                if isinstance(birth_date, datetime.datetime):
+                    birth_date_obj = birth_date.date()
+                elif isinstance(birth_date, datetime.date):
+                    birth_date_obj = birth_date
+                elif isinstance(birth_date, str):
                     birth_date_obj = datetime.datetime.strptime(birth_date, '%Y-%m-%d').date()
-                except ValueError:
-                    print(f"❌ Неверный формат даты для {user_name}: {birth_date}")
+                else:
                     continue
-            else:
-                print(f"❌ Неизвестный формат даты для {user_name}: {birth_date}")
+                
+                # Вычисление возраста...
+                today = datetime.datetime.now(TZ).date()
+                age = today.year - birth_date_obj.year
+                if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
+                    age -= 1
+                
+                # Безопасный текст поздравления
+                message_text = (
+                    f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
+                    f"В этом году тебе исполнилось {age} лет!\n\n"
+                    f"Поздравляю! 🎂"
+                )
+                
+                # Отправка в чаты...
+                success_count = 0
+                for chat_id in ALLOWED_CHAT_IDS:
+                    try:
+                        await bot.send_message(chat_id, message_text)
+                        success_count += 1
+                    except Exception as e:
+                        print(f"❌ Ошибка отправки в чат {chat_id}: {e}")
+                
+                print(f"✅ Успешно отправлено {success_count} поздравлений для {user_name}")
+                
+            except Exception as e:
+                print(f"❌ Ошибка обработки дня рождения {birthday}: {e}")
                 continue
-            
-            print(f"🎂 Дата после обработки: {birth_date_obj}")
-            
-            # Вычисляем возраст
-            today = datetime.datetime.now(TZ).date()
-            print(f"🎂 Сегодня: {today}")
-            
-            age = today.year - birth_date_obj.year
-            
-            # Если день рождения еще не наступил в этом году, корректируем возраст
-            if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
-                age -= 1
-            
-            print(f"🎂 {user_name} исполняется {age} лет")
-            
-            # Создаем текст поздравления - ИСПРАВЛЕННАЯ СТРОКА
-            message_text = (
-                f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\n"
-                f"В этом году тебе исполнилось целых {age} лет!\n\n"
-                f"От сердца и почек дарю тебе цветочек 💐"
-            )
-            
-            # Отправляем поздравление во ВСЕ беседы из конфига
-            success_count = 0
-            for chat_id in ALLOWED_CHAT_IDS:
-                try:
-                    print(f"🎂 Отправляем в чат {chat_id}...")
-                    await bot.send_message(chat_id, message_text)
-                    success_count += 1
-                    print(f"✅ Отправлено поздравление для {user_name} в чат {chat_id}")
-                except Exception as e:
-                    print(f"❌ Ошибка отправки поздравления для {user_name} в чат {chat_id}: {e}")
-            
-            print(f"✅ Успешно отправлено {success_count} поздравлений для {user_name}")
                 
     except Exception as e:
         print(f"❌ Критическая ошибка проверки дней рождения: {e}")
@@ -4296,7 +4282,8 @@ async def cmd_debug_birthday(message: types.Message):
                 today_birthdays = await cur.fetchall()
         
         status += f"📊 Всего дней рождений в базе: {total}\n"
-        status += f"🎂 Сегодня ({today}) дней рождений: {len(today_birthdays)}\n"
+        # ИСПРАВЛЕННАЯ СТРОКА - убраны скобки вокруг today
+        status += f"🎂 Сегодня {today} дней рождений: {len(today_birthdays)}\n"
         
         for name, date in today_birthdays:
             status += f"  - {name}: {date}\n"
