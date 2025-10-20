@@ -988,36 +988,47 @@ async def cmd_add_birthday(message: types.Message):
 async def check_birthdays():
     """Проверяет дни рождения и отправляет поздравления во все беседы"""
     try:
-        print("🎂 Запуск проверки дней рождения...")
+        print(f"🎂 [{datetime.datetime.now(TZ)}] Запуск проверки дней рождения...")
+        
+        # Проверяем что бот инициализирован
+        if not bot:
+            print("❌ Бот не инициализирован")
+            return
+            
         birthdays = await get_today_birthdays(pool)
+        
+        print(f"🎂 Найдено дней рождений: {len(birthdays)}")
         
         if not birthdays:
             print("🎂 Сегодня нет дней рождения")
             return
         
-        print(f"🎂 Найдено {len(birthdays)} дней рождений для поздравления")
-        
         for birthday in birthdays:
             birthday_id, user_name, birth_date = birthday
             
-            # Детальное логирование
-            print(f"🎂 Обрабатываем: {user_name}, дата: {birth_date}")
+            print(f"🎂 Обрабатываем: {user_name}, дата из базы: {birth_date} (тип: {type(birth_date)})")
             
             # ОБРАБАТЫВАЕМ РАЗНЫЕ ФОРМАТЫ ДАТЫ ИЗ БАЗЫ
             if isinstance(birth_date, datetime.datetime):
                 birth_date_obj = birth_date.date()
             elif isinstance(birth_date, datetime.date):
                 birth_date_obj = birth_date
-            else:
-                # Если это строка, парсим её
+            elif isinstance(birth_date, str):
                 try:
-                    birth_date_obj = datetime.datetime.strptime(str(birth_date), '%Y-%m-%d').date()
+                    birth_date_obj = datetime.datetime.strptime(birth_date, '%Y-%m-%d').date()
                 except ValueError:
                     print(f"❌ Неверный формат даты для {user_name}: {birth_date}")
                     continue
+            else:
+                print(f"❌ Неизвестный формат даты для {user_name}: {birth_date}")
+                continue
+            
+            print(f"🎂 Дата после обработки: {birth_date_obj}")
             
             # Вычисляем возраст
             today = datetime.datetime.now(TZ).date()
+            print(f"🎂 Сегодня: {today}")
+            
             age = today.year - birth_date_obj.year
             
             # Если день рождения еще не наступил в этом году, корректируем возраст
@@ -1037,6 +1048,7 @@ async def check_birthdays():
             success_count = 0
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
+                    print(f"🎂 Отправляем в чат {chat_id}...")
                     await bot.send_message(chat_id, message_text)
                     success_count += 1
                     print(f"✅ Отправлено поздравление для {user_name} в чат {chat_id}")
@@ -1047,6 +1059,8 @@ async def check_birthdays():
                 
     except Exception as e:
         print(f"❌ Критическая ошибка проверки дней рождения: {e}")
+        import traceback
+        print(f"❌ Трассировка: {traceback.format_exc()}")
 
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
@@ -4240,6 +4254,64 @@ async def cmd_force_birthday_check(message: types.Message):
     await message.answer("✅ Проверка завершена")
 
 
+@dp.message(Command("debug_birthday"))
+async def cmd_debug_birthday(message: types.Message):
+    """Подробная отладка дней рождения"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    await message.answer("🔍 Запускаю подробную отладку...")
+    
+    try:
+        # Проверяем планировщик
+        jobs = scheduler.get_jobs()
+        birthday_job = None
+        for job in jobs:
+            if "birthday" in job.id:
+                birthday_job = job
+                break
+        
+        if birthday_job:
+            status = f"✅ Задание найдено: {birthday_job.id}\n"
+            status += f"📅 Следующий запуск: {birthday_job.next_run_time}\n"
+        else:
+            status = "❌ Задание дней рождения не найдено в планировщике\n"
+        
+        # Проверяем базу данных
+        today = datetime.datetime.now(TZ).date()
+        today_str = today.strftime('%m-%d')
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT COUNT(*) as total_count FROM birthdays
+                """)
+                total = (await cur.fetchone())[0]
+                
+                await cur.execute("""
+                    SELECT user_name, birth_date 
+                    FROM birthdays 
+                    WHERE DATE_FORMAT(birth_date, '%m-%d') = %s
+                """, (today_str,))
+                today_birthdays = await cur.fetchall()
+        
+        status += f"📊 Всего дней рождений в базе: {total}\n"
+        status += f"🎂 Сегодня ({today}) дней рождений: {len(today_birthdays)}\n"
+        
+        for name, date in today_birthdays:
+            status += f"  - {name}: {date}\n"
+        
+        await message.answer(status)
+        
+        # Тестируем отправку
+        if today_birthdays:
+            await message.answer("🔄 Тестирую отправку...")
+            await check_birthdays()
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отладки: {e}")
+
+
 async def main():
     global pool
     pool = await get_pool()
@@ -4253,22 +4325,31 @@ async def main():
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
-    # ДОБАВЬТЕ ЭТУ СТРОКУ - проверка дней рождения каждый день в 9:00 утра
-    scheduler.add_job(
-        check_birthdays, 
-        CronTrigger(hour=21, minute=0, timezone=TZ),  # 9:00 утра по Омску
-        id="birthday_check"
-    )
-        
-    scheduler.start()
-    print("Планировщик запущен")
+    # ДОБАВЛЯЕМ ПРОВЕРКУ ДНЕЙ РОЖДЕНИЯ
+    try:
+        scheduler.add_job(
+            check_birthdays, 
+            CronTrigger(hour=21, minute=10, timezone=TZ),
+            id="birthday_check_daily"
+        )
+        print("✅ Задание проверки дней рождения добавлено в планировщик")
+    except Exception as e:
+        print(f"❌ Ошибка добавления задания дней рождения: {e}")
     
     # Проверяем текущие задания
     jobs = scheduler.get_jobs()
-    print(f"Активные задания: {len(jobs)}")
+    print(f"🎯 Активные задания в планировщике: {len(jobs)}")
     for job in jobs:
-        print(f"Задание: {job.id}, следующий запуск: {job.next_run_time}")
+        print(f"🎯 Задание: {job.id}, следующий запуск: {job.next_run_time}")
+    
+    # ТЕСТИРУЕМ СРАЗУ ПРИ ЗАПУСКЕ
+    print("🔄 Тестируем проверку дней рождения при запуске...")
+    await check_birthdays()
+    
+    scheduler.start()
+    print("✅ Планировщик запущен")
     
     await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
