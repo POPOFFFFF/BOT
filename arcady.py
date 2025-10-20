@@ -4229,23 +4229,32 @@ async def cmd_force_birthday_check(message: types.Message):
 
 @dp.message(Command("debug_birthday"))
 async def cmd_debug_birthday(message: types.Message):
-    """Подробная отладка дней рождения"""
+    """Тест ручной проверки и отправки поздравлений (только для админов)."""
     if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("⛔ У вас нет прав на эту команду.")
         return
-    
+
+    await message.answer("🔍 Проверяем дни рождения...")
+
     try:
-        await message.answer("🔍 Запускаю проверку дней рождения...")
-        
-        # Просто запускаем проверку
-        success = await check_birthdays()
-        
-        if success:
-            await message.answer("✅ Проверка завершена")
-        else:
-            await message.answer("❌ Проверка завершена с ошибками")
-                
+        birthdays = await get_today_birthdays(pool)
+        if not birthdays:
+            await message.answer("🎂 Сегодня нет дней рождений.")
+            return
+
+        text = "🎉 Найдены дни рождения:\n"
+        for _, user_name, birth_date in birthdays:
+            if isinstance(birth_date, (datetime.datetime, datetime.date)):
+                birth_date = birth_date.strftime("%d.%m.%Y")
+            text += f"• {user_name} — {birth_date}\n"
+
+        await message.answer(text)
+        await check_birthdays()
+        await message.answer("✅ Проверка и рассылка поздравлений завершена.")
+
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+        await message.answer(f"❌ Ошибка при тесте: {e}")
+
 
 async def main():
     global pool
@@ -4260,13 +4269,7 @@ async def main():
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
-    # ДОБАВЛЯЕМ ПРОВЕРКУ ДНЕЙ РОЖДЕНИЯ - УПРОЩЕННЫЙ ВАРИАНТ
-    scheduler.add_job(
-        check_birthdays, 
-        CronTrigger(hour=21, minute=15, timezone=TZ),
-        id="birthday_check_daily"
-    )
-    print("✅ Задание проверки дней рождения добавлено в планировщик")
+    scheduler.add_job(check_birthdays, CronTrigger(hour=9, minute=0))
     
     # УБИРАЕМ ПРОБЛЕМНУЮ ПРОВЕРКУ (для начала)
     jobs = scheduler.get_jobs()
