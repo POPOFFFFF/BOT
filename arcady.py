@@ -4242,18 +4242,21 @@ async def cmd_debug_birthday(message: types.Message):
             await message.answer("🎂 Сегодня нет дней рождений.")
             return
 
-        text = "🎉 Найдены дни рождения:\n"
+        lines = ["🎉 Найдены дни рождения:\n"]
         for _, user_name, birth_date in birthdays:
             if isinstance(birth_date, (datetime.datetime, datetime.date)):
-                birth_date = birth_date.strftime("%d.%m.%Y")
-            text += f"• {user_name} — {birth_date}\n"
+                date_str = birth_date.strftime("%d.%m.%Y")
+            else:
+                date_str = str(birth_date)
+            lines.append(f"• {user_name} — {date_str}")
 
-        await message.answer(text)
+        await message.answer("\n".join(lines))
         await check_birthdays()
         await message.answer("✅ Проверка и рассылка поздравлений завершена.")
 
     except Exception as e:
         await message.answer(f"❌ Ошибка при тесте: {e}")
+
 
 
 async def main():
