@@ -3546,24 +3546,25 @@ async def send_today_rasp():
             else:
                 msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
             
-        try:
-            # Добавляем анекдот
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-                    row = await cur.fetchone()
-                    if row:
-                        msg += f"\n\n😂 Анекдот:\n{row[0]}"
+            try:
+                # Добавляем анекдот
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+                        row = await cur.fetchone()
+                        if row:
+                            msg += f"\n\n😂 Анекдот:\n{row[0]}"
 
-            # Добавляем поздравления с ДР (если есть)
-            birthday_footer = await format_birthday_footer(pool)
-            if birthday_footer:
-                msg += birthday_footer
+                # Добавляем поздравления с ДР (если есть)
+                birthday_footer = await format_birthday_footer(pool)
+                if birthday_footer:
+                    msg += birthday_footer
 
-            await bot.send_message(chat_id, msg)
+                await bot.send_message(chat_id, msg)
 
-        except Exception as e:
-            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
+            except Exception as e:
+                print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
+
 
 
 def _job_id_for_time(hour: int, minute: int) -> str:
