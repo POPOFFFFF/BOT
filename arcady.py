@@ -3447,6 +3447,11 @@ async def today_rasp_handler(callback: types.CallbackQuery):
             if row:
                 message += f"\n\n😂 Анекдот:\n{row[0]}"
     
+    # ДОБАВЛЯЕМ ПРОВЕРКУ ДНЕЙ РОЖДЕНИЯ
+    birthday_footer = await format_birthday_footer(pool)
+    if birthday_footer:
+        message += birthday_footer
+    
     # Отправляем сообщение с кнопкой "Назад"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
@@ -3512,6 +3517,11 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
             row = await cur.fetchone()
             if row:
                 message += f"\n\n😂 Анекдот:\n{row[0]}"
+    
+    # ДОБАВЛЯЕМ ПРОВЕРКУ ДНЕЙ РОЖДЕНИЯ
+    birthday_footer = await format_birthday_footer(pool)
+    if birthday_footer:
+        message += birthday_footer
     
     # Отправляем сообщение с кнопкой "Назад"
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3787,10 +3797,14 @@ async def on_rasp_show(callback: types.CallbackQuery):
     
     week_name = "нечетная" if week_type == 1 else "четная"
     
-    await callback.message.edit_text(
-        f"📅 {day_names[day]} | Неделя: {week_name}\n\n{text}", 
-        reply_markup=kb
-    )
+    message = f"📅 {day_names[day]} | Неделя: {week_name}\n\n{text}"
+    
+    # ДОБАВЛЯЕМ ПРОВЕРКУ ДНЕЙ РОЖДЕНИЯ
+    birthday_footer = await format_birthday_footer(pool)
+    if birthday_footer:
+        message += birthday_footer
+    
+    await callback.message.edit_text(message, reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("zvonki_"))
