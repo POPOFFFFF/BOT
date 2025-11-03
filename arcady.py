@@ -1057,29 +1057,6 @@ async def check_birthdays():
         print(f"❌ Ошибка проверки дней рождения: {e}")
         return False
 
-@dp.message(Command("test_birthday_today"))
-async def cmd_test_birthday_today(message: types.Message):
-    """Тест сегодняшних дней рождения"""
-    if message.from_user.id not in ALLOWED_USERS:
-        return
-    
-    today = datetime.datetime.now(TZ).date()
-    await message.answer(f"🔍 Тестируем дни рождения на {today.strftime('%d.%m.%Y')}")
-    
-    # Проверяем функцию get_today_birthdays
-    birthdays = await get_today_birthdays(pool)
-    await message.answer(f"📅 Найдено дней рождений: {len(birthdays)}")
-    
-    # Проверяем функцию format_birthday_footer
-    footer = await format_birthday_footer(pool)
-    if footer:
-        await message.answer(f"✅ Подпись с ДР:{footer}")
-    else:
-        await message.answer("❌ Нет подписи с ДР")
-    
-    # Проверяем отправку
-    await check_birthdays()
-    await message.answer("✅ Тест завершен")
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
     async with pool.acquire() as conn:
@@ -4325,36 +4302,6 @@ async def cmd_force_birthday_check(message: types.Message):
     await check_birthdays()
     await message.answer("✅ Проверка завершена")
 
-
-@dp.message(Command("debug_birthday"))
-async def cmd_debug_birthday(message: types.Message):
-    """Тест ручной проверки и отправки поздравлений (только для админов)."""
-    if message.from_user.id not in ALLOWED_USERS:
-        await message.answer("⛔ У вас нет прав на эту команду.")
-        return
-
-    await message.answer("🔍 Проверяем дни рождения...")
-
-    try:
-        birthdays = await get_today_birthdays(pool)
-        if not birthdays:
-            await message.answer("🎂 Сегодня нет дней рождений.")
-            return
-
-        lines = ["🎉 Найдены дни рождения:\n"]
-        for _, user_name, birth_date in birthdays:
-            if isinstance(birth_date, (datetime.datetime, datetime.date)):
-                date_str = birth_date.strftime("%d.%m.%Y")
-            else:
-                date_str = str(birth_date)
-            lines.append(f"• {user_name} — {date_str}")
-
-        await message.answer("\n".join(lines))
-        await check_birthdays()
-        await message.answer("✅ Проверка и рассылка поздравлений завершена.")
-
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при тесте: {e}")
 
 @dp.message(Command("jobs"))
 async def cmd_show_jobs(message: types.Message):
