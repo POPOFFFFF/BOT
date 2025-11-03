@@ -917,8 +917,12 @@ async def get_all_birthdays(pool):
 async def format_birthday_footer(pool):
     """Формирует подпись с именами именинников на сегодня"""
     birthdays = await get_today_birthdays(pool)
+    
+    print(f"🎂 format_birthday_footer: найдено {len(birthdays)} дней рождений")
+    
     if not birthdays:
         return ""
+    
     names = [b[1] for b in birthdays]
     count = len(names)
     if count == 1:
@@ -1015,7 +1019,7 @@ async def check_birthdays():
         for birthday in birthdays:
             birthday_id, user_name, birth_date = birthday
             
-            # Обрабатываем дату как в рабочем коде
+            # Обрабатываем дату
             if isinstance(birth_date, datetime.datetime):
                 birth_date_obj = birth_date.date()
             elif isinstance(birth_date, datetime.date):
@@ -1023,6 +1027,7 @@ async def check_birthdays():
             elif isinstance(birth_date, str):
                 birth_date_obj = datetime.datetime.strptime(birth_date, '%Y-%m-%d').date()
             else:
+                print(f"❌ Неизвестный формат даты: {type(birth_date)}")
                 continue
             
             # Вычисляем возраст
@@ -1031,10 +1036,12 @@ async def check_birthdays():
             if today.month < birth_date_obj.month or (today.month == birth_date_obj.month and today.day < birth_date_obj.day):
                 age -= 1
             
-            # Создаем текст поздравления (простой, без сложного форматирования)
+            print(f"🎂 Поздравляем {user_name}, возраст: {age}")
+            
+            # Создаем текст поздравления
             message_text = f"🎉 С ДНЕМ РОЖДЕНИЯ, {user_name.upper()}! 🎉\n\nВ этом году тебе исполнилось {age} лет!\n\nПоздравляю! 🎂"
             
-            # ОТПРАВЛЯЕМ ТОЧНО ТАК ЖЕ КАК В send_today_rasp()
+            # Отправляем во все чаты
             for chat_id in ALLOWED_CHAT_IDS:
                 try:
                     await bot.send_message(chat_id, message_text)
@@ -1049,6 +1056,29 @@ async def check_birthdays():
         print(f"❌ Ошибка проверки дней рождения: {e}")
         return False
 
+@dp.message(Command("test_birthday_today"))
+async def cmd_test_birthday_today(message: types.Message):
+    """Тест сегодняшних дней рождения"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    today = datetime.datetime.now(TZ).date()
+    await message.answer(f"🔍 Тестируем дни рождения на {today.strftime('%d.%m.%Y')}")
+    
+    # Проверяем функцию get_today_birthdays
+    birthdays = await get_today_birthdays(pool)
+    await message.answer(f"📅 Найдено дней рождений: {len(birthdays)}")
+    
+    # Проверяем функцию format_birthday_footer
+    footer = await format_birthday_footer(pool)
+    if footer:
+        await message.answer(f"✅ Подпись с ДР:{footer}")
+    else:
+        await message.answer("❌ Нет подписи с ДР")
+    
+    # Проверяем отправку
+    await check_birthdays()
+    await message.answer("✅ Тест завершен")
 
 async def get_special_user_signature(pool, user_id: int) -> str | None:
     async with pool.acquire() as conn:
