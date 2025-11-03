@@ -3565,6 +3565,10 @@ async def send_today_rasp():
             except Exception as e:
                 print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
 
+        except Exception as e:
+            print(f"❌ Ошибка в send_today_rasp для чата {chat_id}: {e}")
+
+
 
 
 def _job_id_for_time(hour: int, minute: int) -> str:
