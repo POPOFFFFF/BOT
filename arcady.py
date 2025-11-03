@@ -4397,7 +4397,7 @@ async def main():
     # ДОБАВЛЯЕМ проверку дней рождения в 9:00 с уникальным ID
     scheduler.add_job(
         check_birthdays, 
-        CronTrigger(hour=9, minute=0, timezone=TZ), 
+        CronTrigger(hour=7, minute=0, timezone=TZ), 
         id='daily_birthday_check'
     )
     
