@@ -890,10 +890,11 @@ async def get_today_birthdays(pool):
     
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+            # Экранируем % в SQL запросе - используем %% вместо %
             await cur.execute("""
                 SELECT id, user_name, birth_date
                 FROM birthdays 
-                WHERE DATE_FORMAT(birth_date, '%m-%d') = %s
+                WHERE DATE_FORMAT(birth_date, '%%m-%%d') = %s
             """, (today_str,))
             results = await cur.fetchall()
             
