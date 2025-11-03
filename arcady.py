@@ -4356,7 +4356,25 @@ async def cmd_debug_birthday(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при тесте: {e}")
 
-
+@dp.message(Command("jobs"))
+async def cmd_show_jobs(message: types.Message):
+    """Показывает активные задания планировщика"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    jobs = scheduler.get_jobs()
+    if not jobs:
+        await message.answer("📋 Нет активных заданий в планировщике")
+        return
+    
+    text = "📋 Активные задания в планировщике:\n\n"
+    for job in jobs:
+        next_run = job.next_run_time.strftime("%d.%m.%Y %H:%M:%S") if job.next_run_time else "Не запланировано"
+        text += f"• **{job.id}**\n"
+        text += f"  Следующий запуск: {next_run}\n"
+        text += f"  Триггер: {job.trigger}\n\n"
+    
+    await message.answer(text)
 
 async def main():
     global pool
@@ -4371,19 +4389,28 @@ async def main():
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
-    scheduler.add_job(check_birthdays, CronTrigger(hour=9, minute=0))
+    # УДАЛЯЕМ все существующие задания check_birthdays чтобы избежать дублирования
+    for job in scheduler.get_jobs():
+        if job.id == 'check_birthdays' or 'birthday' in job.id:
+            scheduler.remove_job(job.id)
     
-    # УБИРАЕМ ПРОБЛЕМНУЮ ПРОВЕРКУ (для начала)
-    jobs = scheduler.get_jobs()
-    print(f"🎯 Активные задания в планировщике: {len(jobs)}")
-    
-    # ТЕСТИРУЕМ СРАЗУ ПРИ ЗАПУСКЕ
-    print("🔄 Тестируем проверку дней рождения при запуске...")
-    await check_birthdays()
+    # ДОБАВЛЯЕМ проверку дней рождения в 9:00 с уникальным ID
+    scheduler.add_job(
+        check_birthdays, 
+        CronTrigger(hour=9, minute=0, timezone=TZ), 
+        id='daily_birthday_check'
+    )
     
     scheduler.start()
     print("✅ Планировщик запущен")
     
+    # Выводим информацию о заданиях для отладки
+    jobs = scheduler.get_jobs()
+    print(f"🎯 Активные задания в планировщике: {len(jobs)}")
+    for job in jobs:
+        print(f"  - {job.id}: следующее выполнение в {job.next_run_time}")
+    
     await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
