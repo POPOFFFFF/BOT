@@ -914,6 +914,20 @@ async def get_all_birthdays(pool):
             """)
             return await cur.fetchall()
 
+async def format_birthday_footer(pool):
+    """Формирует подпись с именами именинников на сегодня"""
+    birthdays = await get_today_birthdays(pool)
+    if not birthdays:
+        return ""
+    names = [b[1] for b in birthdays]
+    count = len(names)
+    if count == 1:
+        return f"\n\n🎉 Сегодня у 1 человека День рождения\nСчастливчик: {names[0]}"
+    else:
+        names_str = ", ".join(names)
+        return f"\n\n🎉 Сегодня у {count} человек День рождения\nСчастливчики: {names_str}"
+
+
 async def delete_birthday(pool, birthday_id: int):
     """Удаляет день рождения"""
     async with pool.acquire() as conn:
@@ -1630,6 +1644,8 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
         buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
         buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
+        buttons.append([InlineKeyboardButton(text="🎂 Дни рожденья", callback_data="menu_birthdays")])
+
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     if is_special_user:
@@ -1729,6 +1745,40 @@ async def menu_homework_handler(callback: types.CallbackQuery):
         await callback.message.edit_text(homework_text, reply_markup=kb)
     
     await callback.answer()
+
+@dp.callback_query(F.data == "menu_birthdays")
+async def menu_birthdays_handler(callback: types.CallbackQuery):
+    """Показывает список всех дней рождений"""
+    if not is_allowed_chat(callback.message.chat.id):
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
+    birthdays = await get_all_birthdays(pool)
+    if not birthdays:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        ])
+        await callback.message.edit_text(
+            "🎂 Список дней рождений пуст.",
+            reply_markup=kb
+        )
+        return
+
+    text = "🎂 Дни рожденья:\n\n"
+    for _, name, date, *_ in birthdays:
+        if isinstance(date, datetime.date):
+            date_str = date.strftime("%d.%m.%Y")
+        else:
+            date_str = datetime.datetime.strptime(str(date), "%Y-%m-%d").strftime("%d.%m.%Y")
+        text += f"👤 {name}: {date_str}\n"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
 
 # Админские обработчики для домашних заданий
 @dp.callback_query(F.data == "admin_add_homework")
@@ -2950,39 +3000,32 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("clr_pair_"):])
     data = await state.get_data()
 
-    # Очищаем пару для ВСЕХ чатов
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            for chat_id in ALLOWED_CHAT_IDS:
-                # проверяем, есть ли запись для этой пары
-                await cur.execute("""
-                    SELECT id FROM rasp_detailed
-                    WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
-                """, (chat_id, data["day"], data["week_type"], pair_number))
-                row = await cur.fetchone()
-
-                if row:
-                    # обновляем предмет на NULL и кабинет на NULL
+    try:
+        # Очищаем пару для ВСЕХ чатов
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                for chat_id in ALLOWED_CHAT_IDS:
+                    # УДАЛЯЕМ запись вместо обновления на NULL
                     await cur.execute("""
-                        UPDATE rasp_detailed
-                        SET subject_id=NULL, cabinet=NULL
-                        WHERE id=%s
-                    """, (row[0],))
-                else:
-                    # создаём пустую запись
-                    await cur.execute("""
-                        INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                        VALUES (%s, %s, %s, %s, NULL, NULL)
+                        DELETE FROM rasp_detailed
+                        WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
                     """, (chat_id, data["day"], data["week_type"], pair_number))
 
-    # Автоматическая синхронизация
-    source_chat_id = ALLOWED_CHAT_IDS[0]
-    await sync_rasp_to_all_chats(source_chat_id)
+        # Автоматическая синхронизация
+        source_chat_id = ALLOWED_CHAT_IDS[0]
+        await sync_rasp_to_all_chats(source_chat_id)
 
-    await callback.message.edit_text(
-        f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
-        reply_markup=admin_menu()
-    )
+        await callback.message.edit_text(
+            f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при очистке пары: {e}",
+            reply_markup=admin_menu()
+        )
+    
     await state.clear()
     await callback.answer()
 
@@ -3510,11 +3553,14 @@ async def send_today_rasp():
                     row = await cur.fetchone()
                     if row:
                         msg += f"\n\n😂 Анекдот:\n{row[0]}"
-            
+
+            # Добавляем поздравления с ДР (если есть)
+            birthday_footer = await format_birthday_footer(pool)
+            if birthday_footer:
+                msg += birthday_footer
+
             await bot.send_message(chat_id, msg)
-            
-        except Exception as e:
-            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
+
 
 
 
