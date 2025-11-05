@@ -3333,42 +3333,14 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
         signature = await get_special_user_signature(pool, callback.from_user.id)
         is_special_user = signature is not None
     
+    # Проверяем менеджера фонда
+    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+
     try:
         await callback.message.delete()
-    # Замени существующие вызовы main_menu() на:
-    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
-
-    await greet_and_send(
-        callback.from_user, 
-        "Выберите действие:", 
-        chat_id=callback.message.chat.id, 
-        markup=main_menu(
-            is_admin=is_admin, 
-            is_special_user=is_special_user, 
-            is_group_chat=not is_private,
-            is_fund_manager=is_fund_manager
-        )
-    )
     except Exception:
-        try:
-    # Замени существующие вызовы main_menu() на:
-    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
-
-    await greet_and_send(
-        callback.from_user, 
-        "Выберите действие:", 
-        chat_id=callback.message.chat.id, 
-        markup=main_menu(
-            is_admin=is_admin, 
-            is_special_user=is_special_user, 
-            is_group_chat=not is_private,
-            is_fund_manager=is_fund_manager
-        )
-    )
-        except Exception:
-# Замени существующие вызовы main_menu() на:
-    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
-
+        pass  # Игнорируем ошибку удаления сообщения
+    
     await greet_and_send(
         callback.from_user, 
         "Выберите действие:", 
@@ -4332,20 +4304,20 @@ async def trigger_handler(message: types.Message):
     # В ЛС используем ID ЛС чата для получения четности, в беседах - ID беседы
     current_chat_id = message.chat.id
 
-    # Замени существующие вызовы main_menu() на:
-    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+# Проверяем менеджера фонда
+is_fund_manager = (message.from_user.id == FUND_MANAGER_USER_ID) and is_private
 
-    await greet_and_send(
-        callback.from_user, 
-        "Выберите действие:", 
-        chat_id=callback.message.chat.id, 
-        markup=main_menu(
-            is_admin=is_admin, 
-            is_special_user=is_special_user, 
-            is_group_chat=not is_private,
-            is_fund_manager=is_fund_manager
-        )
+await greet_and_send(
+    message.from_user, 
+    "Выберите действие:", 
+    message=message, 
+    markup=main_menu(
+        is_admin=is_admin, 
+        is_special_user=is_special_user, 
+        is_group_chat=not is_private,
+        is_fund_manager=is_fund_manager
     )
+)
 
 @dp.callback_query(F.data.startswith("menu_"))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
