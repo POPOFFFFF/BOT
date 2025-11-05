@@ -24,6 +24,7 @@ CHAT_IDS_STR = os.getenv("CHAT_ID", "")
 ALLOWED_CHAT_IDS = [int(x.strip()) for x in CHAT_IDS_STR.split(",") if x.strip()]
 DEFAULT_CHAT_ID = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else 0
 ALLOWED_USERS = [5228681344, 7620086223, 1422286970]
+FUND_MANAGER_USER_ID = [5228681344]
 SPECIAL_USER_ID = []
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
@@ -126,6 +127,31 @@ async def init_db(pool):
                 message_type VARCHAR(50),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )""")
+            # После существующих таблиц
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS group_fund_balance (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                current_balance DECIMAL(10, 2) DEFAULT 0.00,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""")
+
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS group_fund_members (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                full_name VARCHAR(255) NOT NULL,
+                balance DECIMAL(10, 2) DEFAULT 0.00,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""")
+
+            await cur.execute("""
+            CREATE TABLE IF NOT EXISTS group_fund_purchases (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                item_name VARCHAR(255) NOT NULL,
+                item_url VARCHAR(500),
+                price DECIMAL(10, 2) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE
+            )""")
             # Новая таблица для домашних заданий (без chat_id - общие для всех)
             await cur.execute("""
             CREATE TABLE IF NOT EXISTS homework (
@@ -191,7 +217,77 @@ async def sync_rasp_to_all_chats(source_chat_id: int):
         print(f"❌ Ошибка синхронизации расписания: {e}")
         return False
 
-# Остальной код продолжается...
+# Функции для работы с балансом фонда
+async def get_fund_balance(pool) -> float:
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT current_balance FROM group_fund_balance ORDER BY id DESC LIMIT 1")
+            row = await cur.fetchone()
+            if row:
+                return float(row[0])
+            else:
+                # Инициализируем баланс
+                await cur.execute("INSERT INTO group_fund_balance (current_balance) VALUES (0)")
+                return 0.0
+
+async def update_fund_balance(pool, amount: float):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            current_balance = await get_fund_balance(pool)
+            new_balance = current_balance + amount
+            await cur.execute("INSERT INTO group_fund_balance (current_balance) VALUES (%s)", (new_balance,))
+
+# Функции для работы с участниками
+async def add_fund_member(pool, full_name: str):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("INSERT INTO group_fund_members (full_name) VALUES (%s)", (full_name,))
+
+async def get_all_fund_members(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id, full_name, balance FROM group_fund_members ORDER BY full_name")
+            return await cur.fetchall()
+
+async def delete_fund_member(pool, member_id: int):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM group_fund_members WHERE id = %s", (member_id,))
+
+async def update_member_balance(pool, member_id: int, amount: float):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("UPDATE group_fund_members SET balance = balance + %s WHERE id = %s", (amount, member_id))
+
+# Функции для работы с покупками
+async def add_purchase(pool, item_name: str, item_url: str, price: float):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "INSERT INTO group_fund_purchases (item_name, item_url, price) VALUES (%s, %s, %s)",
+                (item_name, item_url, price)
+            )
+            # Обновляем баланс фонда
+            await update_fund_balance(pool, -price)
+
+async def get_all_purchases(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id, item_name, item_url, price FROM group_fund_purchases WHERE is_active = TRUE ORDER BY created_at DESC")
+            return await cur.fetchall()
+
+async def delete_purchase(pool, purchase_id: int):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Получаем цену покупки для возврата в фонд
+            await cur.execute("SELECT price FROM group_fund_purchases WHERE id = %s", (purchase_id,))
+            row = await cur.fetchone()
+            if row:
+                price = float(row[0])
+                # Возвращаем деньги в фонд
+                await update_fund_balance(pool, price)
+                # Помечаем покупку как неактивную
+                await cur.execute("UPDATE group_fund_purchases SET is_active = FALSE WHERE id = %s", (purchase_id,))
 
 # Функции для работы с домашними заданиями
 async def add_homework(pool, subject_id: int, due_date: str, task_text: str):
@@ -864,8 +960,19 @@ class EditHomeworkState(StatesGroup):
     task_text = State()
 class DeleteHomeworkState(StatesGroup):
     homework_id = State()
-
-
+# Добавь в существующие StatesGroup
+class GroupFundStates(StatesGroup):
+    # Для управления участниками
+    add_member_name = State()
+    delete_member_confirm = State()
+    # Для изменения баланса
+    select_member_for_balance = State()
+    enter_balance_change = State()
+    # Для управления покупками
+    add_purchase_name = State()
+    add_purchase_url = State()
+    add_purchase_price = State()
+    delete_purchase_confirm = State()
 async def add_birthday(pool, user_name: str, birth_date: str, added_by_user_id: int):
     """Добавляет день рождения в базу (без привязки к чату)"""
     try:
@@ -1641,23 +1748,26 @@ async def process_special_user_signature(message: types.Message, state: FSMConte
 def get_zvonki(is_saturday: bool):
     return "\n".join(ZVONKI_SATURDAY if is_saturday else ZVONKI_DEFAULT)
 
-def main_menu(is_admin=False, is_special_user=False, is_group_chat=False):
+def main_menu(is_admin=False, is_special_user=False, is_group_chat=False, is_fund_manager=False):
     buttons = []
     
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
         buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
-        buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data="menu_homework")]),  # Новая кнопка
+        buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data="menu_homework")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),
         buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
         buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
-        buttons.append([InlineKeyboardButton(text="🎂 Дни рожденья", callback_data="menu_birthdays")])
+        buttons.append([InlineKeyboardButton(text="🎂 Дни рожденья", callback_data="menu_birthdays")]),
+        buttons.append([InlineKeyboardButton(text="💰 Фонд Группы", callback_data="menu_group_fund")])  # Новая кнопка
 
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
     if is_special_user:
         buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
+    if is_fund_manager:
+        buttons.append([InlineKeyboardButton(text="💰 Управление Фондом", callback_data="menu_fund_management")])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -1688,6 +1798,572 @@ def admin_menu():
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+# Меню фонда группы (для всех в беседе)
+@dp.callback_query(F.data == "menu_group_fund")
+async def menu_group_fund_handler(callback: types.CallbackQuery):
+    if not is_allowed_chat(callback.message.chat.id):
+        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        return
+
+    balance = await get_fund_balance(pool)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛍️ Покупки", callback_data="fund_purchases")],
+        [InlineKeyboardButton(text="👥 Список Пожертвований", callback_data="fund_donations")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await callback.message.edit_text(
+        f"💰 Фонд Группы\n\n"
+        f"💵 Текущий баланс: {balance:.2f} руб.\n\n"
+        f"Выберите действие:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Список покупок
+@dp.callback_query(F.data == "fund_purchases")
+async def fund_purchases_handler(callback: types.CallbackQuery):
+    purchases = await get_all_purchases(pool)
+    
+    if not purchases:
+        text = "🛍️ Список покупок пуст."
+    else:
+        text = "🛍️ Список покупок:\n\n"
+        for purchase_id, item_name, item_url, price in purchases:
+            if item_url and item_url.strip():
+                text += f"• {item_name} ({item_url}) - {price:.2f} руб.\n"
+            else:
+                text += f"• {item_name} - {price:.2f} руб.\n"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_group_fund")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+# Список пожертвований
+@dp.callback_query(F.data == "fund_donations")
+async def fund_donations_handler(callback: types.CallbackQuery):
+    members = await get_all_fund_members(pool)
+    
+    if not members:
+        text = "👥 Список пожертвований пуст."
+    else:
+        text = "👥 Список пожертвований:\n\n"
+        for member_id, full_name, balance in members:
+            if balance > 0:
+                text += f"• {full_name} = {balance:.2f} руб.\n"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_group_fund")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+# Меню управления фондом (только для спец-пользователя)
+@dp.callback_query(F.data == "menu_fund_management")
+async def menu_fund_management_handler(callback: types.CallbackQuery):
+    if callback.from_user.id != FUND_MANAGER_USER_ID:
+        await callback.answer("⛔ У вас нет прав для управления фондом", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Добавить/убрать человека", callback_data="fund_manage_members")],
+        [InlineKeyboardButton(text="💰 Изменить баланс человека", callback_data="fund_manage_balance")],
+        [InlineKeyboardButton(text="🛍️ Добавить/удалить покупку", callback_data="fund_manage_purchases")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+    ])
+    
+    await callback.message.edit_text(
+        "💰 Управление Фондом Группы\n\n"
+        "Выберите действие:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Управление участниками
+@dp.callback_query(F.data == "fund_manage_members")
+async def fund_manage_members_handler(callback: types.CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить человека", callback_data="fund_add_member")],
+        [InlineKeyboardButton(text="➖ Удалить человека", callback_data="fund_delete_member")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+    ])
+    
+    await callback.message.edit_text(
+        "👥 Управление участниками фонда\n\n"
+        "Выберите действие:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Добавление участника
+@dp.callback_query(F.data == "fund_add_member")
+async def fund_add_member_start(callback: types.CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_members")]
+    ])
+    
+    await callback.message.edit_text(
+        "👤 Добавление участника\n\n"
+        "Введите Фамилию И.О. нового участника:",
+        reply_markup=kb
+    )
+    await state.set_state(GroupFundStates.add_member_name)
+    await callback.answer()
+
+@dp.message(GroupFundStates.add_member_name)
+async def fund_add_member_process(message: types.Message, state: FSMContext):
+    full_name = message.text.strip()
+    
+    if not full_name:
+        await message.answer("❌ Имя не может быть пустым. Введите Фамилию И.О.:")
+        return
+    
+    try:
+        await add_fund_member(pool, full_name)
+        await message.answer(f"✅ Участник '{full_name}' добавлен!")
+        
+        # Возвращаем в меню управления
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        ])
+        await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении участника: {e}")
+    
+    await state.clear()
+
+# Удаление участника с пагинацией
+@dp.callback_query(F.data == "fund_delete_member")
+async def fund_delete_member_start(callback: types.CallbackQuery, state: FSMContext):
+    members = await get_all_fund_members(pool)
+    
+    if not members:
+        await callback.message.edit_text("❌ В базе нет участников для удаления.")
+        await callback.answer()
+        return
+    
+    await show_members_page(callback, members, page=0, action="delete")
+    await callback.answer()
+
+async def show_members_page(callback: types.CallbackQuery, members: list, page: int = 0, action: str = "delete"):
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_members = members[start_idx:end_idx]
+    
+    keyboard = []
+    for member_id, full_name, balance in page_members:
+        if action == "delete":
+            callback_data = f"confirm_delete_member_{member_id}"
+        else:  # balance
+            callback_data = f"select_member_balance_{member_id}"
+        
+        keyboard.append([InlineKeyboardButton(
+            text=f"{full_name} ({balance:.2f} руб.)", 
+            callback_data=callback_data
+        )])
+    
+    # Остальной код остается таким же...
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"members_page_{page-1}_{action}"))
+    
+    nav_buttons.append(InlineKeyboardButton(text="🔙 Отмена", callback_data="fund_manage_members"))
+    
+    if end_idx < len(members):
+        nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"members_page_{page+1}_{action}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    action_text = "удаления" if action == "delete" else "изменения баланса"
+    await callback.message.edit_text(
+        f"👥 Выберите участника для {action_text} (страница {page + 1}):",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data.startswith("members_page_"))
+async def members_page_handler(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    page = int(parts[2])
+    action = parts[3]
+    
+    members = await get_all_fund_members(pool)
+    await show_members_page(callback, members, page, action)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_delete_member_"))
+async def confirm_delete_member_handler(callback: types.CallbackQuery):
+    member_id = int(callback.data.split("_")[3])
+    
+    # Получаем информацию об участнике
+    members = await get_all_fund_members(pool)
+    member_info = None
+    for m_id, full_name, balance in members:
+        if m_id == member_id:
+            member_info = (full_name, balance)
+            break
+    
+    if not member_info:
+        await callback.answer("❌ Участник не найден", show_alert=True)
+        return
+    
+    full_name, balance = member_info
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"final_delete_member_{member_id}")],
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="fund_delete_member")]
+    ])
+    
+    await callback.message.edit_text(
+        f"🗑️ Подтвердите удаление участника:\n\n"
+        f"👤 {full_name}\n"
+        f"💰 Баланс: {balance:.2f} руб.\n\n"
+        f"Вы уверены, что хотите удалить этого участника?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("final_delete_member_"))
+async def final_delete_member_handler(callback: types.CallbackQuery):
+    member_id = int(callback.data.split("_")[3])
+    
+    try:
+        await delete_fund_member(pool, member_id)
+        await callback.message.edit_text("✅ Участник удален!")
+        
+        # Возвращаем в меню управления
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        ])
+        await callback.message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка при удалении участника: {e}")
+    
+    await callback.answer()
+
+# Управление балансом участников
+@dp.callback_query(F.data == "fund_manage_balance")
+async def fund_manage_balance_start(callback: types.CallbackQuery, state: FSMContext):
+    members = await get_all_fund_members(pool)
+    
+    if not members:
+        await callback.message.edit_text("❌ В базе нет участников.")
+        await callback.answer()
+        return
+    
+    await show_members_page(callback, members, page=0, action="balance")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("select_member_balance_"))
+async def select_member_balance_callback(callback: types.CallbackQuery, state: FSMContext):
+    # Этот обработчик уже был добавлен выше в разделе "Управление балансом участников"
+    pass
+async def select_member_balance_handler(callback: types.CallbackQuery, state: FSMContext):
+    member_id = int(callback.data.split("_")[3])
+    
+    # Получаем информацию об участнике
+    members = await get_all_fund_members(pool)
+    member_name = None
+    for m_id, full_name, balance in members:
+        if m_id == member_id:
+            member_name = full_name
+            break
+    
+    if not member_name:
+        await callback.answer("❌ Участник не найден", show_alert=True)
+        return
+    
+    await state.update_data(selected_member_id=member_id, selected_member_name=member_name)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_balance")]
+    ])
+    
+    await callback.message.edit_text(
+        f"💰 Изменение баланса для: {member_name}\n\n"
+        f"Введите сумму:\n"
+        f"• Положительное число (например: 300) - добавить\n"
+        f"• Отрицательное число (например: -300) - убрать",
+        reply_markup=kb
+    )
+    await state.set_state(GroupFundStates.enter_balance_change)
+    await callback.answer()
+
+@dp.message(GroupFundStates.enter_balance_change)
+async def process_balance_change(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        
+        data = await state.get_data()
+        member_id = data['selected_member_id']
+        member_name = data['selected_member_name']
+        
+        # Обновляем баланс участника
+        await update_member_balance(pool, member_id, amount)
+        
+        # Обновляем общий баланс фонда
+        await update_fund_balance(pool, amount)
+        
+        await message.answer(
+            f"✅ Баланс обновлен!\n\n"
+            f"👤 Участник: {member_name}\n"
+            f"💰 Изменение: {amount:+.2f} руб."
+        )
+        
+        # Возвращаем в меню управления
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        ])
+        await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат суммы. Введите число:")
+        return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при обновлении баланса: {e}")
+    
+    await state.clear()
+
+# Управление покупками
+@dp.callback_query(F.data == "fund_manage_purchases")
+async def fund_manage_purchases_handler(callback: types.CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить покупку", callback_data="fund_add_purchase")],
+        [InlineKeyboardButton(text="➖ Удалить покупку", callback_data="fund_delete_purchase")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+    ])
+    
+    await callback.message.edit_text(
+        "🛍️ Управление покупками\n\n"
+        "Выберите действие:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Добавление покупки
+@dp.callback_query(F.data == "fund_add_purchase")
+async def fund_add_purchase_start(callback: types.CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_purchases")]
+    ])
+    
+    await callback.message.edit_text(
+        "🛍️ Добавление покупки\n\n"
+        "Введите название товара:",
+        reply_markup=kb
+    )
+    await state.set_state(GroupFundStates.add_purchase_name)
+    await callback.answer()
+
+@dp.message(GroupFundStates.add_purchase_name)
+async def fund_add_purchase_name(message: types.Message, state: FSMContext):
+    item_name = message.text.strip()
+    
+    if not item_name:
+        await message.answer("❌ Название товара не может быть пустым. Введите название:")
+        return
+    
+    await state.update_data(item_name=item_name)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_purchases")]
+    ])
+    
+    await message.answer(
+        "Введите ссылку на товар (если есть) или отправьте /skip чтобы пропустить:",
+        reply_markup=kb
+    )
+    await state.set_state(GroupFundStates.add_purchase_url)
+
+@dp.message(GroupFundStates.add_purchase_url)
+async def fund_add_purchase_url(message: types.Message, state: FSMContext):
+    item_url = message.text.strip()
+    
+    if item_url.lower() == '/skip':
+        item_url = ""
+    
+    await state.update_data(item_url=item_url)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_purchases")]
+    ])
+    
+    await message.answer(
+        "Введите цену товара в рублях:",
+        reply_markup=kb
+    )
+    await state.set_state(GroupFundStates.add_purchase_price)
+
+@dp.message(GroupFundStates.add_purchase_price)
+async def fund_add_purchase_price(message: types.Message, state: FSMContext):
+    try:
+        price = float(message.text.strip())
+        
+        if price <= 0:
+            await message.answer("❌ Цена должна быть положительным числом. Введите цену:")
+            return
+        
+        data = await state.get_data()
+        item_name = data['item_name']
+        item_url = data.get('item_url', '')
+        
+        # Добавляем покупку
+        await add_purchase(pool, item_name, item_url, price)
+        
+        balance = await get_fund_balance(pool)
+        
+        await message.answer(
+            f"✅ Покупка добавлена!\n\n"
+            f"🛍️ Товар: {item_name}\n"
+            f"🔗 Ссылка: {item_url if item_url else 'нет'}\n"
+            f"💰 Цена: {price:.2f} руб.\n\n"
+            f"💵 Новый баланс фонда: {balance:.2f} руб."
+        )
+        
+        # Возвращаем в меню управления
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        ])
+        await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат цены. Введите число:")
+        return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении покупки: {e}")
+    
+    await state.clear()
+
+# Удаление покупки с пагинацией
+@dp.callback_query(F.data == "fund_delete_purchase")
+async def fund_delete_purchase_start(callback: types.CallbackQuery):
+    purchases = await get_all_purchases(pool)
+    
+    if not purchases:
+        await callback.message.edit_text("❌ В базе нет активных покупок.")
+        await callback.answer()
+        return
+    
+    await show_purchases_page(callback, purchases, page=0)
+    await callback.answer()
+
+async def show_purchases_page(callback: types.CallbackQuery, purchases: list, page: int = 0):
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_purchases = purchases[start_idx:end_idx]
+    
+    keyboard = []
+    for purchase_id, item_name, item_url, price in page_purchases:
+        display_text = f"{item_name} - {price:.2f} руб."
+        if len(display_text) > 30:
+            display_text = display_text[:27] + "..."
+        
+        keyboard.append([InlineKeyboardButton(
+            text=display_text, 
+            callback_data=f"confirm_delete_purchase_{purchase_id}"
+        )])
+    
+    # Навигация
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"purchases_page_{page-1}"))
+    
+    nav_buttons.append(InlineKeyboardButton(text="🔙 Отмена", callback_data="fund_manage_purchases"))
+    
+    if end_idx < len(purchases):
+        nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"purchases_page_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback.message.edit_text(
+        f"🗑️ Выберите покупку для удаления (страница {page + 1}):",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data.startswith("purchases_page_"))
+async def purchases_page_handler(callback: types.CallbackQuery):
+    page = int(callback.data.split("_")[2])
+    
+    purchases = await get_all_purchases(pool)
+    await show_purchases_page(callback, purchases, page)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_delete_purchase_"))
+async def confirm_delete_purchase_handler(callback: types.CallbackQuery):
+    purchase_id = int(callback.data.split("_")[3])
+    
+    # Получаем информацию о покупке
+    purchases = await get_all_purchases(pool)
+    purchase_info = None
+    for p_id, item_name, item_url, price in purchases:
+        if p_id == purchase_id:
+            purchase_info = (item_name, item_url, price)
+            break
+    
+    if not purchase_info:
+        await callback.answer("❌ Покупка не найдена", show_alert=True)
+        return
+    
+    item_name, item_url, price = purchase_info
+    current_balance = await get_fund_balance(pool)
+    new_balance = current_balance + price
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"final_delete_purchase_{purchase_id}")],
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="fund_delete_purchase")]
+    ])
+    
+    await callback.message.edit_text(
+        f"🗑️ Подтвердите удаление покупки:\n\n"
+        f"🛍️ Товар: {item_name}\n"
+        f"🔗 Ссылка: {item_url if item_url else 'нет'}\n"
+        f"💰 Цена: {price:.2f} руб.\n\n"
+        f"💵 Баланс до удаления: {current_balance:.2f} руб.\n"
+        f"💵 Баланс после удаления: {new_balance:.2f} руб.\n\n"
+        f"Вы уверены, что хотите удалить эту покупку?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("final_delete_purchase_"))
+async def final_delete_purchase_handler(callback: types.CallbackQuery):
+    purchase_id = int(callback.data.split("_")[3])
+    
+    try:
+        await delete_purchase(pool, purchase_id)
+        current_balance = await get_fund_balance(pool)
+        
+        await callback.message.edit_text(
+            f"✅ Покупка удалена!\n\n"
+            f"💵 Текущий баланс фонда: {current_balance:.2f} руб."
+        )
+        
+        # Возвращаем в меню управления
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        ])
+        await callback.message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка при удалении покупки: {e}")
+    
+    await callback.answer()
 
 # Обработчики для домашних заданий в беседах
 @dp.callback_query(F.data == "menu_homework")
@@ -2659,28 +3335,51 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     
     try:
         await callback.message.delete()
-        await greet_and_send(
-            callback.from_user, 
-            "Выберите действие:", 
-            chat_id=callback.message.chat.id, 
-            markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private)
-        )
+# Замени существующие вызовы main_menu() на:
+is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+
+await greet_and_send(
+    callback.from_user, 
+    "Выберите действие:", 
+    chat_id=callback.message.chat.id, 
+    markup=main_menu(
+        is_admin=is_admin, 
+        is_special_user=is_special_user, 
+        is_group_chat=not is_private,
+        is_fund_manager=is_fund_manager
+    )
+)
     except Exception:
         try:
-            await greet_and_send(
-                callback.from_user, 
-                "Выберите действие:", 
-                callback=callback, 
-                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private)
-            )
-        except Exception:
-            await greet_and_send(
-                callback.from_user, 
-                "Выберите действие:", 
-                chat_id=callback.message.chat.id, 
-                markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private)
-            )
+# Замени существующие вызовы main_menu() на:
+is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
 
+await greet_and_send(
+    callback.from_user, 
+    "Выберите действие:", 
+    chat_id=callback.message.chat.id, 
+    markup=main_menu(
+        is_admin=is_admin, 
+        is_special_user=is_special_user, 
+        is_group_chat=not is_private,
+        is_fund_manager=is_fund_manager
+    )
+)
+        except Exception:
+# Замени существующие вызовы main_menu() на:
+is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+
+await greet_and_send(
+    callback.from_user, 
+    "Выберите действие:", 
+    chat_id=callback.message.chat.id, 
+    markup=main_menu(
+        is_admin=is_admin, 
+        is_special_user=is_special_user, 
+        is_group_chat=not is_private,
+        is_fund_manager=is_fund_manager
+    )
+)
     await callback.answer()
 
 
@@ -3633,13 +4332,19 @@ async def trigger_handler(message: types.Message):
     # В ЛС используем ID ЛС чата для получения четности, в беседах - ID беседы
     current_chat_id = message.chat.id
 
+    # Замени существующие вызовы main_menu() на:
+    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+
     await greet_and_send(
-        message.from_user,
-        "Выберите действие:",
-        message=message,
-        markup=main_menu(is_admin=is_admin, is_special_user=is_special_user, is_group_chat=not is_private),
-        include_week_info=True,
-        chat_id=current_chat_id  # Передаем правильный chat_id для получения четности
+        callback.from_user, 
+        "Выберите действие:", 
+        chat_id=callback.message.chat.id, 
+        markup=main_menu(
+            is_admin=is_admin, 
+            is_special_user=is_special_user, 
+            is_group_chat=not is_private,
+            is_fund_manager=is_fund_manager
+        )
     )
 
 @dp.callback_query(F.data.startswith("menu_"))
