@@ -3335,51 +3335,51 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     
     try:
         await callback.message.delete()
-# Замени существующие вызовы main_menu() на:
-is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+    # Замени существующие вызовы main_menu() на:
+    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
 
-await greet_and_send(
-    callback.from_user, 
-    "Выберите действие:", 
-    chat_id=callback.message.chat.id, 
-    markup=main_menu(
-        is_admin=is_admin, 
-        is_special_user=is_special_user, 
-        is_group_chat=not is_private,
-        is_fund_manager=is_fund_manager
+    await greet_and_send(
+        callback.from_user, 
+        "Выберите действие:", 
+        chat_id=callback.message.chat.id, 
+        markup=main_menu(
+            is_admin=is_admin, 
+            is_special_user=is_special_user, 
+            is_group_chat=not is_private,
+            is_fund_manager=is_fund_manager
+        )
     )
-)
     except Exception:
         try:
-# Замени существующие вызовы main_menu() на:
-is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+    # Замени существующие вызовы main_menu() на:
+    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
 
-await greet_and_send(
-    callback.from_user, 
-    "Выберите действие:", 
-    chat_id=callback.message.chat.id, 
-    markup=main_menu(
-        is_admin=is_admin, 
-        is_special_user=is_special_user, 
-        is_group_chat=not is_private,
-        is_fund_manager=is_fund_manager
+    await greet_and_send(
+        callback.from_user, 
+        "Выберите действие:", 
+        chat_id=callback.message.chat.id, 
+        markup=main_menu(
+            is_admin=is_admin, 
+            is_special_user=is_special_user, 
+            is_group_chat=not is_private,
+            is_fund_manager=is_fund_manager
+        )
     )
-)
         except Exception:
 # Замени существующие вызовы main_menu() на:
-is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
+    is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
 
-await greet_and_send(
-    callback.from_user, 
-    "Выберите действие:", 
-    chat_id=callback.message.chat.id, 
-    markup=main_menu(
-        is_admin=is_admin, 
-        is_special_user=is_special_user, 
-        is_group_chat=not is_private,
-        is_fund_manager=is_fund_manager
+    await greet_and_send(
+        callback.from_user, 
+        "Выберите действие:", 
+        chat_id=callback.message.chat.id, 
+        markup=main_menu(
+            is_admin=is_admin, 
+            is_special_user=is_special_user, 
+            is_group_chat=not is_private,
+            is_fund_manager=is_fund_manager
+        )
     )
-)
     await callback.answer()
 
 
