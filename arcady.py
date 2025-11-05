@@ -1926,13 +1926,20 @@ async def fund_add_member_process(message: types.Message, state: FSMContext):
     
     try:
         await add_fund_member(pool, full_name)
+        
+        # Отправляем сообщение об успешном добавлении
         await message.answer(f"✅ Участник '{full_name}' добавлен!")
         
-        # Возвращаем в меню управления
+        # Возвращаем в меню управления фондом с ОДНИМ сообщением
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
         ])
-        await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+        # Используем edit_text если это callback, или отправляем новое сообщение
+        try:
+            await message.edit_text("💰 Управление Фондом Группы:", reply_markup=kb)
+        except:
+            await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
         
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении участника: {e}")
@@ -2040,13 +2047,16 @@ async def final_delete_member_handler(callback: types.CallbackQuery):
     
     try:
         await delete_fund_member(pool, member_id)
-        await callback.message.edit_text("✅ Участник удален!")
         
-        # Возвращаем в меню управления
+        # Редактируем текущее сообщение вместо отправки нового
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
         ])
-        await callback.message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+        await callback.message.edit_text(
+            "✅ Участник удален!\n\n💰 Управление Фондом Группы:",
+            reply_markup=kb
+        )
         
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка при удалении участника: {e}")
@@ -2224,19 +2234,31 @@ async def fund_add_purchase_price(message: types.Message, state: FSMContext):
         
         balance = await get_fund_balance(pool)
         
-        await message.answer(
-            f"✅ Покупка добавлена!\n\n"
-            f"🛍️ Товар: {item_name}\n"
-            f"🔗 Ссылка: {item_url if item_url else 'нет'}\n"
-            f"💰 Цена: {price:.2f} руб.\n\n"
-            f"💵 Новый баланс фонда: {balance:.2f} руб."
-        )
-        
-        # Возвращаем в меню управления
+        # Возвращаем в меню управления одним сообщением
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
         ])
-        await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+        try:
+            await message.edit_text(
+                f"✅ Покупка добавлена!\n\n"
+                f"🛍️ Товар: {item_name}\n"
+                f"🔗 Ссылка: {item_url if item_url else 'нет'}\n"
+                f"💰 Цена: {price:.2f} руб.\n\n"
+                f"💵 Новый баланс фонда: {balance:.2f} руб.\n\n"
+                f"💰 Управление Фондом Группы:",
+                reply_markup=kb
+            )
+        except:
+            await message.answer(
+                f"✅ Покупка добавлена!\n\n"
+                f"🛍️ Товар: {item_name}\n"
+                f"🔗 Ссылка: {item_url if item_url else 'нет'}\n"
+                f"💰 Цена: {price:.2f} руб.\n\n"
+                f"💵 Новый баланс фонда: {balance:.2f} руб.\n\n"
+                f"💰 Управление Фондом Группы:",
+                reply_markup=kb
+            )
         
     except ValueError:
         await message.answer("❌ Неверный формат цены. Введите число:")
