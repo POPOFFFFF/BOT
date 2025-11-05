@@ -1901,13 +1901,13 @@ async def fund_manage_members_handler(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-# Добавление участника
 @dp.callback_query(F.data == "fund_add_member")
 async def fund_add_member_start(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_members")]
     ])
     
+    # Редактируем существующее сообщение
     await callback.message.edit_text(
         "👤 Добавление участника\n\n"
         "Введите Фамилию И.О. нового участника:",
@@ -1927,19 +1927,23 @@ async def fund_add_member_process(message: types.Message, state: FSMContext):
     try:
         await add_fund_member(pool, full_name)
         
-        # Отправляем сообщение об успешном добавлении
-        await message.answer(f"✅ Участник '{full_name}' добавлен!")
+        # Удаляем сообщение с запросом имени (если возможно)
+        try:
+            await message.delete()
+        except:
+            pass
         
-        # Возвращаем в меню управления фондом с ОДНИМ сообщением
+        # Создаем клавиатуру для возврата
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
         ])
         
-        # Используем edit_text если это callback, или отправляем новое сообщение
-        try:
-            await message.edit_text("💰 Управление Фондом Группы:", reply_markup=kb)
-        except:
-            await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        # Отправляем новое сообщение с результатом
+        await message.answer(
+            f"✅ Участник '{full_name}' добавлен!\n\n"
+            f"💰 Управление Фондом Группы:",
+            reply_markup=kb
+        )
         
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении участника: {e}")
