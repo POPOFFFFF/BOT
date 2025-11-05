@@ -1844,7 +1844,6 @@ async def fund_purchases_handler(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
-# Список пожертвований
 @dp.callback_query(F.data == "fund_donations")
 async def fund_donations_handler(callback: types.CallbackQuery):
     members = await get_all_fund_members(pool)
@@ -1852,10 +1851,14 @@ async def fund_donations_handler(callback: types.CallbackQuery):
     if not members:
         text = "👥 Список пожертвований пуст."
     else:
-        text = "👥 Список пожертвований:\n\n"
+        text = "👥 Список участников и их балансов:\n\n"
+        total_balance = 0
+        
         for member_id, full_name, balance in members:
-            if balance > 0:
-                text += f"• {full_name} = {balance:.2f} руб.\n"
+            text += f"• {full_name} = {balance:.2f} руб.\n"
+            total_balance += balance
+        
+        text += f"\n💵 Общая сумма пожертвований: {total_balance:.2f} руб."
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_group_fund")]
