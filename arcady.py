@@ -252,15 +252,19 @@ async def get_all_fund_members(pool):
         async with conn.cursor() as cur:
             await cur.execute("SELECT id, full_name, balance FROM group_fund_members ORDER BY full_name")
             rows = await cur.fetchall()
-            # Конвертируем decimal в float
+            # Конвертируем decimal в float правильно
             result = []
             for row in rows:
                 member_id, full_name, balance = row
                 if isinstance(balance, decimal.Decimal):
                     balance = float(balance)
+                elif hasattr(balance, '__float__'):
+                    balance = float(balance)
+                else:
+                    balance = float(str(balance))  # Последний вариант
                 result.append((member_id, full_name, balance))
             return result
-
+            
 async def delete_fund_member(pool, member_id: int):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -269,7 +273,9 @@ async def delete_fund_member(pool, member_id: int):
 async def update_member_balance(pool, member_id: int, amount: float):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("UPDATE group_fund_members SET balance = balance + %s WHERE id = %s", (amount, member_id))
+            # Конвертируем amount в Decimal для точных вычислений
+            amount_decimal = decimal.Decimal(str(amount))
+            await cur.execute("UPDATE group_fund_members SET balance = balance + %s WHERE id = %s", (amount_decimal, member_id))
 
 # Функции для работы с покупками
 async def add_purchase(pool, item_name: str, item_url: str, price: float):
@@ -2146,13 +2152,8 @@ async def process_balance_change(message: types.Message, state: FSMContext):
         member_name = data['selected_member_name']
         current_balance = data.get('current_balance', 0)
         
-        # Гарантируем что current_balance - это float
-        if hasattr(current_balance, '__float__'):
-            current_balance = float(current_balance)
-        elif isinstance(current_balance, (int, decimal.Decimal)):
-            current_balance = float(current_balance)
-        
         print(f"🔍 DEBUG: amount={amount}, current_balance={current_balance}, type_current={type(current_balance)}")
+        print(f"🔍 DEBUG: member_id={member_id}, member_name={member_name}")
         
         # Обновляем баланс участника
         await update_member_balance(pool, member_id, amount)
@@ -2160,19 +2161,14 @@ async def process_balance_change(message: types.Message, state: FSMContext):
         # Обновляем общий баланс фонда
         await update_fund_balance(pool, amount)
         
-        # Получаем новый баланс участника (запросим из базы)
-        members = await get_all_fund_members(pool)
-        new_balance = current_balance + amount  # Временное значение
+        # Получаем обновленный баланс участника напрямую из базы
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT balance FROM group_fund_members WHERE id = %s", (member_id,))
+                result = await cur.fetchone()
+                new_balance = float(result[0]) if result else current_balance + amount
         
-        for m_id, full_name, balance in members:
-            if m_id == member_id:
-                if hasattr(balance, '__float__'):
-                    new_balance = float(balance)
-                elif isinstance(balance, (int, decimal.Decimal)):
-                    new_balance = float(balance)
-                else:
-                    new_balance = balance
-                break
+        print(f"🔍 DEBUG: Новый баланс участника: {new_balance}")
         
         # Создаем клавиатуру для возврата
         kb = InlineKeyboardMarkup(inline_keyboard=[
