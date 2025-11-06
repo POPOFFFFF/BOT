@@ -17,6 +17,7 @@ import ssl
 import re
 import aiohttp
 import io
+import decimal
 from bs4 import BeautifulSoup
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -217,13 +218,13 @@ async def sync_rasp_to_all_chats(source_chat_id: int):
         print(f"❌ Ошибка синхронизации расписания: {e}")
         return False
 
-# Функции для работы с балансом фонда
 async def get_fund_balance(pool) -> float:
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT current_balance FROM group_fund_balance ORDER BY id DESC LIMIT 1")
             row = await cur.fetchone()
             if row:
+                # Конвертируем decimal.Decimal в float
                 return float(row[0])
             else:
                 # Инициализируем баланс
@@ -233,8 +234,10 @@ async def get_fund_balance(pool) -> float:
 async def update_fund_balance(pool, amount: float):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+            # Конвертируем float в decimal
+            amount_decimal = decimal.Decimal(str(amount))
             current_balance = await get_fund_balance(pool)
-            new_balance = current_balance + amount
+            new_balance = current_balance + amount_decimal
             await cur.execute("INSERT INTO group_fund_balance (current_balance) VALUES (%s)", (new_balance,))
 
 # Функции для работы с участниками
@@ -257,7 +260,9 @@ async def delete_fund_member(pool, member_id: int):
 async def update_member_balance(pool, member_id: int, amount: float):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("UPDATE group_fund_members SET balance = balance + %s WHERE id = %s", (amount, member_id))
+            # Конвертируем float в decimal
+            amount_decimal = decimal.Decimal(str(amount))
+            await cur.execute("UPDATE group_fund_members SET balance = balance + %s WHERE id = %s", (amount_decimal, member_id))
 
 # Функции для работы с покупками
 async def add_purchase(pool, item_name: str, item_url: str, price: float):
@@ -2133,6 +2138,10 @@ async def process_balance_change(message: types.Message, state: FSMContext):
         member_id = data['selected_member_id']
         member_name = data['selected_member_name']
         current_balance = data.get('current_balance', 0)
+        
+        # Конвертируем current_balance в float если это decimal
+        if isinstance(current_balance, decimal.Decimal):
+            current_balance = float(current_balance)
         
         # Обновляем баланс участника
         await update_member_balance(pool, member_id, amount)
