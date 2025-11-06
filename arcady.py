@@ -2083,33 +2083,39 @@ async def fund_manage_balance_start(callback: types.CallbackQuery, state: FSMCon
     await show_members_page(callback, members, page=0, action="balance")
     await callback.answer()
 
+
 @dp.callback_query(F.data.startswith("select_member_balance_"))
-async def select_member_balance_callback(callback: types.CallbackQuery, state: FSMContext):
-    # Этот обработчик уже был добавлен выше в разделе "Управление балансом участников"
-    pass
 async def select_member_balance_handler(callback: types.CallbackQuery, state: FSMContext):
     member_id = int(callback.data.split("_")[3])
     
     # Получаем информацию об участнике
     members = await get_all_fund_members(pool)
     member_name = None
+    current_balance = 0
+    
     for m_id, full_name, balance in members:
         if m_id == member_id:
             member_name = full_name
+            current_balance = balance
             break
     
     if not member_name:
         await callback.answer("❌ Участник не найден", show_alert=True)
         return
     
-    await state.update_data(selected_member_id=member_id, selected_member_name=member_name)
+    await state.update_data(
+        selected_member_id=member_id, 
+        selected_member_name=member_name,
+        current_balance=current_balance
+    )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_balance")]
     ])
     
     await callback.message.edit_text(
-        f"💰 Изменение баланса для: {member_name}\n\n"
+        f"💰 Изменение баланса для: {member_name}\n"
+        f"💵 Текущий баланс: {current_balance:.2f} руб.\n\n"
         f"Введите сумму:\n"
         f"• Положительное число (например: 300) - добавить\n"
         f"• Отрицательное число (например: -300) - убрать",
@@ -2126,6 +2132,7 @@ async def process_balance_change(message: types.Message, state: FSMContext):
         data = await state.get_data()
         member_id = data['selected_member_id']
         member_name = data['selected_member_name']
+        current_balance = data.get('current_balance', 0)
         
         # Обновляем баланс участника
         await update_member_balance(pool, member_id, amount)
@@ -2133,17 +2140,22 @@ async def process_balance_change(message: types.Message, state: FSMContext):
         # Обновляем общий баланс фонда
         await update_fund_balance(pool, amount)
         
-        await message.answer(
-            f"✅ Баланс обновлен!\n\n"
-            f"👤 Участник: {member_name}\n"
-            f"💰 Изменение: {amount:+.2f} руб."
-        )
+        # Получаем новый баланс
+        new_balance = current_balance + amount
         
-        # Возвращаем в меню управления
+        # Создаем клавиатуру для возврата
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
         ])
-        await message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
+        
+        # Отправляем сообщение с результатом
+        await message.answer(
+            f"✅ Баланс обновлен!\n\n"
+            f"👤 Участник: {member_name}\n"
+            f"💰 Изменение: {amount:+.2f} руб.\n"
+            f"💵 Новый баланс: {new_balance:.2f} руб.",
+            reply_markup=kb
+        )
         
     except ValueError:
         await message.answer("❌ Неверный формат суммы. Введите число:")
