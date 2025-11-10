@@ -5213,6 +5213,132 @@ async def cmd_debug_monday(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка отладки: {e}")
 
+@dp.message(Command("fix_static_ghost"))
+async def cmd_fix_static_ghost(message: types.Message):
+    """Удаляет призрачный дистант из статичного расписания"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        day = 1  # Понедельник
+        week_type = 1  # Нечетная
+        
+        # Удаляем первую пару из статичного расписания
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    DELETE FROM static_rasp 
+                    WHERE day=%s AND week_type=%s AND pair_number=1
+                """, (day, week_type))
+                deleted_count = cur.rowcount
+        
+        await message.answer(f"✅ Удалено {deleted_count} записей из статичного расписания")
+        
+        # Проверяем результат
+        await cmd_debug_monday(message)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("clean_duplicates"))
+async def cmd_clean_duplicates(message: types.Message):
+    """Очищает дубликаты в основном расписании"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        day = 1  # Понедельник
+        week_type = 1  # Нечетная
+        
+        for chat_id in ALLOWED_CHAT_IDS:
+            # Сначала удаляем ВСЕ записи для этого дня
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        DELETE FROM rasp_detailed 
+                        WHERE chat_id=%s AND day=%s AND week_type=%s
+                    """, (chat_id, day, week_type))
+            
+            # Затем создаем чистые записи (только 6 пар)
+            for pair_num in range(1, 7):
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        # subject_id = NULL означает "Свободно"
+                        await cur.execute("""
+                            INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                            VALUES (%s, %s, %s, %s, NULL, '')
+                        """, (chat_id, day, week_type, pair_num))
+        
+        await message.answer("✅ Дубликаты очищены, создано чистое расписание")
+        
+        # Переинициализируем статичное расписание
+        success = await initialize_static_rasp_from_current(pool, week_type)
+        if success:
+            await message.answer("✅ Статичное расписание обновлено")
+        else:
+            await message.answer("⚠ Ошибка обновления статичного расписания")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка очистки: {e}")
+
+@dp.message(Command("restore_correct_schedule"))
+async def cmd_restore_correct_schedule(message: types.Message):
+    """Восстанавливает правильное расписание на понедельник"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        day = 1  # Понедельник
+        week_type = 1  # Нечетная
+        
+        # Правильное расписание (пары, которые должны быть)
+        correct_schedule = {
+            1: (50, "328"),  # Классный час 328
+            2: (35, "303"),  # Информатика 303
+            3: (46, "сп/з"), # Физ. культура сп/з
+            4: (53, "404.2") # История 404.2
+            # Пары 5-6 остаются свободными
+        }
+        
+        for chat_id in ALLOWED_CHAT_IDS:
+            # Очищаем старые записи
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        DELETE FROM rasp_detailed 
+                        WHERE chat_id=%s AND day=%s AND week_type=%s
+                    """, (chat_id, day, week_type))
+            
+            # Создаем правильное расписание
+            for pair_num in range(1, 7):
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        if pair_num in correct_schedule:
+                            subject_id, cabinet = correct_schedule[pair_num]
+                            await cur.execute("""
+                                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                            """, (chat_id, day, week_type, pair_num, subject_id, cabinet))
+                        else:
+                            # Свободные пары
+                            await cur.execute("""
+                                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                                VALUES (%s, %s, %s, %s, NULL, '')
+                            """, (chat_id, day, week_type, pair_num))
+        
+        await message.answer("✅ Правильное расписание восстановлено")
+        
+        # Обновляем статичное расписание
+        success = await initialize_static_rasp_from_current(pool, week_type)
+        if success:
+            await message.answer("✅ Статичное расписание обновлено")
+        else:
+            await message.answer("⚠ Ошибка обновления статичного расписания")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка восстановления: {e}")
+
 @dp.message(Command("mf_clear_modifications"))
 async def cmd_clear_modifications(message: types.Message):
     """Очищает все модификации"""
