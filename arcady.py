@@ -246,21 +246,53 @@ async def ensure_birthday_columns(pool):
 
 
 async def save_static_rasp(pool, day: int, week_type: int, pair_number: int, subject_id: int, cabinet: str):
-    """Сохраняет пару в статичное расписание"""
+    """Сохраняет пару в статичное расписание с проверкой на дубликаты"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+            # Сначала удаляем существующую запись для этой пары (если есть)
+            await cur.execute("""
+                DELETE FROM static_rasp 
+                WHERE day=%s AND week_type=%s AND pair_number=%s
+            """, (day, week_type, pair_number))
+            
+            # Затем добавляем новую
             await cur.execute("""
                 INSERT INTO static_rasp (day, week_type, pair_number, subject_id, cabinet)
                 VALUES (%s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE subject_id=%s, cabinet=%s
-            """, (day, week_type, pair_number, subject_id, cabinet, subject_id, cabinet))
+            """, (day, week_type, pair_number, subject_id, cabinet))
+
+@dp.message(Command("fix_static_rasp"))
+async def cmd_fix_static_rasp(message: types.Message):
+    """Исправляет дублирование в статичном расписании"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        await message.answer("🔄 Исправление статичного расписания...")
+        
+        # Очищаем ВСЕ статичное расписание
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM static_rasp")
+        
+        # Переинициализируем для обеих недель
+        success1 = await initialize_static_rasp_from_current(pool, 1)
+        success2 = await initialize_static_rasp_from_current(pool, 2)
+        
+        if success1 and success2:
+            await message.answer("✅ Статичное расписание исправлено! Дубликаты удалены.")
+        else:
+            await message.answer("❌ Частичная ошибка при исправлении")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка исправления: {e}")
 
 async def get_static_rasp(pool, day: int, week_type: int):
-    """Получает статичное расписание для дня и недели"""
+    """Получает статичное расписание для дня и недели БЕЗ ДУБЛИКАТОВ"""
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
-                SELECT sr.pair_number, s.name, sr.cabinet, sr.subject_id
+                SELECT DISTINCT sr.pair_number, s.name, sr.cabinet, sr.subject_id
                 FROM static_rasp sr
                 JOIN subjects s ON sr.subject_id = s.id
                 WHERE sr.day=%s AND sr.week_type=%s
@@ -3791,8 +3823,8 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
                     """, (chat_id, day, week_type, pair_number, cabinet))
     
     # Автоматическая синхронизация
-    source_chat_id = ALLOWED_CHAT_IDS[0]
-    await sync_rasp_to_all_chats(source_chat_id)
+   # source_chat_id = ALLOWED_CHAT_IDS[0]
+    # await sync_rasp_to_all_chats(source_chat_id)
     
     await message.answer(
         f"✅ Кабинет установлен для всех чатов!\n"
@@ -4367,7 +4399,7 @@ async def today_rasp_handler(callback: types.CallbackQuery):
 
 
 async def initialize_static_rasp_from_current(pool, week_type: int):
-    """Инициализирует статичное расписание из текущих данных"""
+    """Инициализирует статичное расписание из текущих данных БЕЗ ДУБЛИРОВАНИЯ"""
     try:
         print(f"🔄 Инициализация статичного расписания для недели {week_type}...")
         
@@ -4376,25 +4408,27 @@ async def initialize_static_rasp_from_current(pool, week_type: int):
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM static_rasp WHERE week_type=%s", (week_type,))
         
-        # Для каждого чата берем текущее расписание и сохраняем как статичное
-        for chat_id in ALLOWED_CHAT_IDS:
-            for day in range(1, 7):  # Пн-Сб
-                # Получаем текущее расписание из rasp_detailed
-                async with pool.acquire() as conn:
-                    async with conn.cursor() as cur:
-                        await cur.execute("""
-                            SELECT pair_number, subject_id, cabinet 
-                            FROM rasp_detailed 
-                            WHERE chat_id=%s AND day=%s AND week_type=%s
-                        """, (chat_id, day, week_type))
-                        current_rasp = await cur.fetchall()
-                
-                # Сохраняем в статичное расписание
-                for pair_number, subject_id, cabinet in current_rasp:
-                    if subject_id:  # Если есть предмет (не свободно)
-                        await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
+        # Берем расписание только из ПЕРВОГО чата чтобы избежать дублирования
+        main_chat_id = ALLOWED_CHAT_IDS[0]
         
-        print(f"✅ Статичное расписание для недели {week_type} инициализировано")
+        for day in range(1, 7):  # Пн-Сб
+            # Получаем текущее расписание из rasp_detailed только из основного чата
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        SELECT pair_number, subject_id, cabinet 
+                        FROM rasp_detailed 
+                        WHERE chat_id=%s AND day=%s AND week_type=%s
+                        ORDER BY pair_number
+                    """, (main_chat_id, day, week_type))
+                    current_rasp = await cur.fetchall()
+            
+            # Сохраняем в статичное расписание
+            for pair_number, subject_id, cabinet in current_rasp:
+                if subject_id:  # Если есть предмет (не свободно)
+                    await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
+        
+        print(f"✅ Статичное расписание для недели {week_type} инициализировано из чата {main_chat_id}")
         return True
         
     except Exception as e:
