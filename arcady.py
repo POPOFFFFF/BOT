@@ -5134,6 +5134,79 @@ async def cmd_status_rasp(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
+
+@dp.message(Command("find_ghost_lesson"))
+async def cmd_find_ghost_lesson(message: types.Message):
+    """Находит источник 'Днивкик.ру Дистант' в расписании"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        day = 1  # Понедельник
+        week_type = 1  # Нечетная неделя
+        
+        result_text = "🔍 Поиск источника 'Днивкик.ру Дистант':\n\n"
+        
+        # Ищем в статичном расписании
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT sr.id, sr.pair_number, s.name, sr.cabinet 
+                    FROM static_rasp sr 
+                    JOIN subjects s ON sr.subject_id = s.id 
+                    WHERE sr.day=%s AND sr.week_type=%s AND s.name LIKE %s
+                """, (day, week_type, '%Днивкик%'))
+                static_results = await cur.fetchall()
+                
+                result_text += f"📋 В статичном расписании: {len(static_results)} записей\n"
+                for rid, pair_num, name, cabinet in static_results:
+                    result_text += f"  ID: {rid}, Пара: {pair_num}, Предмет: {name}, Каб: {cabinet}\n"
+        
+        # Ищем в модификациях для всех чатов
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT rm.id, rm.chat_id, rm.pair_number, s.name, rm.cabinet 
+                    FROM rasp_modifications rm 
+                    JOIN subjects s ON rm.subject_id = s.id 
+                    WHERE rm.day=%s AND rm.week_type=%s AND s.name LIKE %s
+                """, (day, week_type, '%Днивкик%'))
+                mod_results = await cur.fetchall()
+                
+                result_text += f"\n🔄 В модификациях: {len(mod_results)} записей\n"
+                for rid, chat_id, pair_num, name, cabinet in mod_results:
+                    result_text += f"  ID: {rid}, Чат: {chat_id}, Пара: {pair_num}, Предмет: {name}, Каб: {cabinet}\n"
+        
+        # Ищем в основном расписании
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT rd.id, rd.chat_id, rd.pair_number, s.name, rd.cabinet 
+                    FROM rasp_detailed rd 
+                    JOIN subjects s ON rd.subject_id = s.id 
+                    WHERE rd.day=%s AND rd.week_type=%s AND s.name LIKE %s
+                """, (day, week_type, '%Днивкик%'))
+                detailed_results = await cur.fetchall()
+                
+                result_text += f"\n📊 В основном расписании: {len(detailed_results)} записей\n"
+                for rid, chat_id, pair_num, name, cabinet in detailed_results:
+                    result_text += f"  ID: {rid}, Чат: {chat_id}, Пара: {pair_num}, Предмет: {name}, Каб: {cabinet}\n"
+        
+        # Ищем сам предмет в таблице subjects
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, name FROM subjects WHERE name LIKE %s", ('%Днивкик%',))
+                subject_results = await cur.fetchall()
+                
+                result_text += f"\n📚 В таблице subjects: {len(subject_results)} записей\n"
+                for subj_id, name in subject_results:
+                    result_text += f"  ID предмета: {subj_id}, Название: {name}\n"
+        
+        await message.answer(result_text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка поиска: {e}")
+
 @dp.message(Command("mf_clear_modifications"))
 async def cmd_clear_modifications(message: types.Message):
     """Очищает все модификации"""
