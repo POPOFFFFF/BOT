@@ -19,6 +19,7 @@ import aiohttp
 import io
 import decimal
 from bs4 import BeautifulSoup
+from aiogram.utils.rate_limiter import RateLimiter, DefaultRateLimiter
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_IDS_STR = os.getenv("CHAT_ID", "")
@@ -40,7 +41,19 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
+# Добавляем в начало, после создания dp
+rate_limiter = DefaultRateLimiter()  # Стандартный лимитер: 3 сообщения в секунду
 
+# Или кастомный лимитер если нужно больше контроля
+custom_limiter = RateLimiter(
+    calls_limit=20,  # 20 сообщений
+    period=60,       # в 60 секунд
+    retry_after=30   # ждать 30 секунд при превышении
+)
+
+# Применяем ко всем хендлерам
+dp.message.middleware(rate_limiter)
+dp.callback_query.middleware(rate_limiter)
 
 def is_allowed_chat(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
@@ -3462,7 +3475,10 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
     
     if not (is_private or is_allowed_chat):
-        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        try:
+            await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        except:
+            pass
         return
 
     try:
@@ -3477,27 +3493,33 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     if is_private:
         signature = await get_special_user_signature(pool, callback.from_user.id)
         is_special_user = signature is not None
-    
+
     # Проверяем менеджера фонда
     is_fund_manager = (callback.from_user.id == FUND_MANAGER_USER_ID) and is_private
 
     try:
+        # Удаляем старое сообщение если возможно
         await callback.message.delete()
     except Exception:
         pass  # Игнорируем ошибку удаления сообщения
     
-    await greet_and_send(
-        callback.from_user, 
-        "Выберите действие:", 
-        chat_id=callback.message.chat.id, 
-        markup=main_menu(
+    # Используем безопасную отправку
+    await safe_send_message(
+        callback.message.chat.id,
+        "Выберите действие:",
+        reply_markup=main_menu(
             is_admin=is_admin, 
             is_special_user=is_special_user, 
             is_group_chat=not is_private,
             is_fund_manager=is_fund_manager
-        )
+        ),
+        delay=0.2
     )
-    await callback.answer()
+    
+    try:
+        await callback.answer()
+    except:
+        pass
 
 
 
@@ -4072,47 +4094,83 @@ async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False, include_week_info: bool = False):
-    if include_joke:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-                row = await cur.fetchone()
-                if row:
-                    text += f"\n\n😂 Анекдот:\n{row[0]}"
-    
-    # Добавляем информацию о неделе если нужно
-    week_info = ""
-    if include_week_info:
-        try:
-            # Используем общую четность для всех
-            current_week = await get_current_week_type(pool)
-            week_name = "Нечетная" if current_week == 1 else "Четная"
-            week_info = f"\n\n📅 Сейчас неделя: {week_name}"
-        except Exception as e:
-            print(f"Ошибка получения четности: {e}")
-            week_info = f"\n\n📅 Информация о неделе временно недоступна"
-    
-    nickname = await get_nickname(pool, user.id)
-    greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
-    full_text = greet + text + week_info
-    
-    if callback:
-        try:
-            await callback.message.edit_text(full_text, reply_markup=markup)
-        except:
-            await callback.message.answer(full_text, reply_markup=markup)
-    elif message:
-        try:
-            await message.answer(full_text, reply_markup=markup)
-        except:
-            await bot.send_message(chat_id=message.chat.id, text=full_text, reply_markup=markup)
-    elif chat_id is not None:
-        await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
-    else:
-        # Если не указан chat_id, отправляем пользователю в ЛС
-        await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
+    try:
+        if include_joke:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+                    row = await cur.fetchone()
+                    if row:
+                        text += f"\n\n😂 Анекдот:\n{row[0]}"
+        
+        # Добавляем информацию о неделе если нужно
+        week_info = ""
+        if include_week_info:
+            try:
+                current_week = await get_current_week_type(pool)
+                week_name = "Нечетная" if current_week == 1 else "Четная"
+                week_info = f"\n\n📅 Сейчас неделя: {week_name}"
+            except Exception as e:
+                print(f"Ошибка получения четности: {e}")
+                week_info = f"\n\n📅 Информация о неделе временно недоступна"
+        
+        nickname = await get_nickname(pool, user.id)
+        greet = f"👋 Салам, {nickname}!\n\n" if nickname else "👋 Салам!\n\n"
+        full_text = greet + text + week_info
+        
+        # Ограничиваем длину текста для Telegram (4096 символов)
+        if len(full_text) > 4000:
+            full_text = full_text[:3990] + "\n\n... (сообщение обрезано)"
+        
+        if callback:
+            try:
+                # Сначала пробуем редактировать
+                await callback.message.edit_text(full_text, reply_markup=markup)
+            except Exception as edit_error:
+                print(f"Не удалось редактировать сообщение: {edit_error}")
+                try:
+                    # Если не получилось редактировать, отправляем новое
+                    await callback.message.answer(full_text, reply_markup=markup)
+                except Exception as answer_error:
+                    print(f"Не удалось отправить сообщение: {answer_error}")
+                    # Последняя попытка - без разметки
+                    try:
+                        await callback.message.answer(full_text[:4000])
+                    except Exception as final_error:
+                        print(f"Критическая ошибка отправки: {final_error}")
+                        
+        elif message:
+            try:
+                await message.answer(full_text, reply_markup=markup)
+            except Exception as e:
+                print(f"Ошибка отправки сообщения: {e}")
+                try:
+                    await message.answer(full_text[:4000])
+                except:
+                    pass
+        elif chat_id is not None:
+            try:
+                await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
+            except Exception as e:
+                print(f"Ошибка отправки в чат {chat_id}: {e}")
+        else:
+            try:
+                await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
+            except Exception as e:
+                print(f"Ошибка отправки в ЛС: {e}")
+                
+    except Exception as e:
+        print(f"Общая ошибка в greet_and_send: {e}")
 
-
+async def safe_send_message(chat_id: int, text: str, reply_markup=None, delay: float = 0.1):
+    """Безопасная отправка сообщения с задержкой"""
+    try:
+        await asyncio.sleep(delay)  # Задержка между сообщениями
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        return True
+    except Exception as e:
+        print(f"Ошибка отправки в чат {chat_id}: {e}")
+        return False
 
 async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: datetime.date = None):
     """Получаем расписание с учетом статичного и модификаций"""
