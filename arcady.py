@@ -5135,77 +5135,83 @@ async def cmd_status_rasp(message: types.Message):
         await message.answer(f"❌ Ошибка: {e}")
 
 
-@dp.message(Command("find_ghost_lesson"))
-async def cmd_find_ghost_lesson(message: types.Message):
-    """Находит источник 'Днивкик.ру Дистант' в расписании"""
+@dp.message(Command("debug_monday"))
+async def cmd_debug_monday(message: types.Message):
+    """Полная отладка расписания на понедельник"""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
     try:
         day = 1  # Понедельник
-        week_type = 1  # Нечетная неделя
+        week_type = 1  # Нечетная
+        chat_id = ALLOWED_CHAT_IDS[0]  # Основной чат
         
-        result_text = "🔍 Поиск источника 'Днивкик.ру Дистант':\n\n"
+        debug_text = "🔍 ПОЛНАЯ ОТЛАДКА ПОНЕДЕЛЬНИКА:\n\n"
         
-        # Ищем в статичном расписании
+        # 1. Смотрим ВСЕ статичное расписание на понедельник
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("""
-                    SELECT sr.id, sr.pair_number, s.name, sr.cabinet 
-                    FROM static_rasp sr 
-                    JOIN subjects s ON sr.subject_id = s.id 
-                    WHERE sr.day=%s AND sr.week_type=%s AND s.name LIKE %s
-                """, (day, week_type, '%Днивкик%'))
-                static_results = await cur.fetchall()
+                    SELECT sr.pair_number, s.name, sr.cabinet, sr.subject_id
+                    FROM static_rasp sr
+                    LEFT JOIN subjects s ON sr.subject_id = s.id
+                    WHERE sr.day=%s AND sr.week_type=%s
+                    ORDER BY sr.pair_number
+                """, (day, week_type))
+                static_all = await cur.fetchall()
                 
-                result_text += f"📋 В статичном расписании: {len(static_results)} записей\n"
-                for rid, pair_num, name, cabinet in static_results:
-                    result_text += f"  ID: {rid}, Пара: {pair_num}, Предмет: {name}, Каб: {cabinet}\n"
+                debug_text += f"📋 ВСЕ статичное расписание ({len(static_all)} записей):\n"
+                for pair_num, name, cabinet, subject_id in static_all:
+                    debug_text += f"  Пара {pair_num}: ID={subject_id}, '{name}', каб: {cabinet}\n"
         
-        # Ищем в модификациях для всех чатов
+        # 2. Смотрим ВСЕ модификации
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("""
-                    SELECT rm.id, rm.chat_id, rm.pair_number, s.name, rm.cabinet 
-                    FROM rasp_modifications rm 
-                    JOIN subjects s ON rm.subject_id = s.id 
-                    WHERE rm.day=%s AND rm.week_type=%s AND s.name LIKE %s
-                """, (day, week_type, '%Днивкик%'))
-                mod_results = await cur.fetchall()
+                    SELECT pair_number, subject_id, cabinet
+                    FROM rasp_modifications 
+                    WHERE chat_id=%s AND day=%s AND week_type=%s
+                    ORDER BY pair_number
+                """, (chat_id, day, week_type))
+                mod_all = await cur.fetchall()
                 
-                result_text += f"\n🔄 В модификациях: {len(mod_results)} записей\n"
-                for rid, chat_id, pair_num, name, cabinet in mod_results:
-                    result_text += f"  ID: {rid}, Чат: {chat_id}, Пара: {pair_num}, Предмет: {name}, Каб: {cabinet}\n"
+                debug_text += f"\n🔄 ВСЕ модификации ({len(mod_all)} записей):\n"
+                for pair_num, subject_id, cabinet in mod_all:
+                    # Получаем название предмета
+                    await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                    subject_name = (await cur.fetchone())[0] if await cur.fetchone() else "Свободно"
+                    debug_text += f"  Пара {pair_num}: ID={subject_id}, '{subject_name}', каб: {cabinet}\n"
         
-        # Ищем в основном расписании
+        # 3. Смотрим ВСЕ основное расписание
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("""
-                    SELECT rd.id, rd.chat_id, rd.pair_number, s.name, rd.cabinet 
-                    FROM rasp_detailed rd 
-                    JOIN subjects s ON rd.subject_id = s.id 
-                    WHERE rd.day=%s AND rd.week_type=%s AND s.name LIKE %s
-                """, (day, week_type, '%Днивкик%'))
-                detailed_results = await cur.fetchall()
+                    SELECT pair_number, subject_id, cabinet
+                    FROM rasp_detailed 
+                    WHERE chat_id=%s AND day=%s AND week_type=%s
+                    ORDER BY pair_number
+                """, (chat_id, day, week_type))
+                detailed_all = await cur.fetchall()
                 
-                result_text += f"\n📊 В основном расписании: {len(detailed_results)} записей\n"
-                for rid, chat_id, pair_num, name, cabinet in detailed_results:
-                    result_text += f"  ID: {rid}, Чат: {chat_id}, Пара: {pair_num}, Предмет: {name}, Каб: {cabinet}\n"
+                debug_text += f"\n📊 ВСЕ основное расписание ({len(detailed_all)} записей):\n"
+                for pair_num, subject_id, cabinet in detailed_all:
+                    if subject_id:
+                        await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                        subject_row = await cur.fetchone()
+                        subject_name = subject_row[0] if subject_row else "Неизвестный предмет"
+                    else:
+                        subject_name = "Свободно"
+                    debug_text += f"  Пара {pair_num}: ID={subject_id}, '{subject_name}', каб: {cabinet}\n"
         
-        # Ищем сам предмет в таблице subjects
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT id, name FROM subjects WHERE name LIKE %s", ('%Днивкик%',))
-                subject_results = await cur.fetchall()
-                
-                result_text += f"\n📚 В таблице subjects: {len(subject_results)} записей\n"
-                for subj_id, name in subject_results:
-                    result_text += f"  ID предмета: {subj_id}, Название: {name}\n"
+        # 4. Тестируем функцию get_rasp_formatted
+        debug_text += f"\n🎯 РЕЗУЛЬТАТ get_rasp_formatted:\n"
+        test_result = await get_rasp_formatted(day, week_type, chat_id)
+        debug_text += test_result
         
-        await message.answer(result_text)
+        await message.answer(debug_text)
         
     except Exception as e:
-        await message.answer(f"❌ Ошибка поиска: {e}")
+        await message.answer(f"❌ Ошибка отладки: {e}")
 
 @dp.message(Command("mf_clear_modifications"))
 async def cmd_clear_modifications(message: types.Message):
