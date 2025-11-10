@@ -19,7 +19,9 @@ import aiohttp
 import io
 import decimal
 from bs4 import BeautifulSoup
-from aiogram.utils.rate_limiter import RateLimiter, DefaultRateLimiter
+import time
+from collections import defaultdict
+from aiogram.exceptions import TelegramRetryAfter
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_IDS_STR = os.getenv("CHAT_ID", "")
@@ -41,14 +43,16 @@ ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
-# Добавляем в начало, после создания dp
-rate_limiter = DefaultRateLimiter()  # Стандартный лимитер: 3 сообщения в секунду
+user_last_action = defaultdict(float)
+FLOOD_DELAY = 1.0  # 1 секунда между действиями
 
-
-
-# Применяем ко всем хендлерам
-dp.message.middleware(rate_limiter)
-dp.callback_query.middleware(rate_limiter)
+def check_flood(user_id: int) -> bool:
+    """Проверяет флуд, возвращает True если нужно блокировать"""
+    current_time = time.time()
+    if current_time - user_last_action[user_id] < FLOOD_DELAY:
+        return True
+    user_last_action[user_id] = current_time
+    return False
 
 def is_allowed_chat(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
@@ -197,6 +201,29 @@ async def init_db(pool):
             )""")
 
             await conn.commit()
+
+
+async def safe_edit_message(callback: types.CallbackQuery, text: str, markup=None):
+    """Безопасное редактирование сообщения с обработкой RetryAfter"""
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except TelegramRetryAfter as e:
+        # Если Telegram просит подождать
+        wait_time = e.retry_after
+        print(f"⏳ Telegram просит подождать {wait_time} секунд")
+        await asyncio.sleep(wait_time)
+        # Пробуем еще раз после ожидания
+        try:
+            await callback.message.edit_text(text, reply_markup=markup)
+        except Exception as retry_error:
+            print(f"Ошибка при повторной попытке: {retry_error}")
+    except Exception as e:
+        print(f"Ошибка редактирования: {e}")
+        # Пробуем отправить новое сообщение
+        try:
+            await callback.message.answer(text, reply_markup=markup)
+        except Exception as answer_error:
+            print(f"Ошибка отправки нового сообщения: {answer_error}")
 
 async def ensure_columns(pool):
     async with pool.acquire() as conn:
@@ -3465,6 +3492,13 @@ async def confirm_delete_subject(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_back")
 async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
+    # Проверка флуда
+    if check_flood(callback.from_user.id):
+        try:
+            await callback.answer("⏳ Подождите немного...", show_alert=False)
+        except:
+            pass
+        return
     # Разрешаем в ЛС и разрешенных чатах
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -4089,6 +4123,9 @@ async def admin_edit_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 async def greet_and_send(user: types.User, text: str, message: types.Message = None, callback: types.CallbackQuery = None, markup=None, chat_id: int | None = None, include_joke: bool = False, include_week_info: bool = False):
+    # Добавляем небольшую задержку для избежания флуда
+    await asyncio.sleep(0.1)
+    
     try:
         if include_joke:
             async with pool.acquire() as conn:
@@ -4125,24 +4162,16 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                 print(f"Не удалось редактировать сообщение: {edit_error}")
                 try:
                     # Если не получилось редактировать, отправляем новое
+                    await asyncio.sleep(0.1)
                     await callback.message.answer(full_text, reply_markup=markup)
                 except Exception as answer_error:
                     print(f"Не удалось отправить сообщение: {answer_error}")
-                    # Последняя попытка - без разметки
-                    try:
-                        await callback.message.answer(full_text[:4000])
-                    except Exception as final_error:
-                        print(f"Критическая ошибка отправки: {final_error}")
                         
         elif message:
             try:
                 await message.answer(full_text, reply_markup=markup)
             except Exception as e:
                 print(f"Ошибка отправки сообщения: {e}")
-                try:
-                    await message.answer(full_text[:4000])
-                except:
-                    pass
         elif chat_id is not None:
             try:
                 await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
@@ -4620,27 +4649,50 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("rasp_day_"))
 async def on_rasp_day(callback: types.CallbackQuery):
+    if check_flood(callback.from_user.id):
+        try:
+            await callback.answer("⏳ Подождите немного...", show_alert=False)
+        except:
+            pass
+        return
 
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
     
     if not (is_private or is_allowed_chat):
-        await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        try:
+            await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
+        except:
+            pass
         return
 
     parts = callback.data.split("_")
     try:
         day = int(parts[-1])
     except Exception:
-        await callback.answer("Ошибка выбора дня", show_alert=True)
+        try:
+            await callback.answer("Ошибка выбора дня", show_alert=True)
+        except:
+            pass
         return
+        
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=f"rasp_show_{day}_1")],
         [InlineKeyboardButton(text="2️⃣ Четная", callback_data=f"rasp_show_{day}_2")],
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")]
     ])
-    await greet_and_send(callback.from_user, f"📅 {DAYS[day-1]} — выберите неделю:", callback=callback, markup=kb)
-    await callback.answer()
+    
+    # Используем безопасную функцию
+    await safe_edit_message(
+        callback, 
+        f"📅 {DAYS[day-1]} — выберите неделю:", 
+        markup=kb
+    )
+    
+    try:
+        await callback.answer()
+    except:
+        pass
 
 @dp.message(Command("никнейм"))
 async def cmd_set_nickname(message: types.Message):
