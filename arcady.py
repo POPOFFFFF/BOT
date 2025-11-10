@@ -44,12 +44,7 @@ ssl_ctx.verify_mode = ssl.CERT_NONE
 # Добавляем в начало, после создания dp
 rate_limiter = DefaultRateLimiter()  # Стандартный лимитер: 3 сообщения в секунду
 
-# Или кастомный лимитер если нужно больше контроля
-custom_limiter = RateLimiter(
-    calls_limit=20,  # 20 сообщений
-    period=60,       # в 60 секунд
-    retry_after=30   # ждать 30 секунд при превышении
-)
+
 
 # Применяем ко всем хендлерам
 dp.message.middleware(rate_limiter)
