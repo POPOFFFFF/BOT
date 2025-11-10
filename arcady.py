@@ -4952,6 +4952,70 @@ async def process_save_static_rasp(callback: types.CallbackQuery):
     
     await callback.answer()
 
+@dp.message(Command("mf_status_rasp"))
+async def cmd_status_rasp(message: types.Message):
+    """Показывает статус расписания"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        now = datetime.datetime.now(TZ)
+        today = now.date()
+        current_weekday = today.isoweekday()
+        
+        # Для теста - посмотрим на завтра
+        target_date = today + datetime.timedelta(days=1)
+        day_to_show = target_date.isoweekday()
+        week_type = await get_current_week_type(pool)
+        
+        status_text = f"📊 Статус расписания на завтра:\n"
+        status_text += f"📅 Дата: {target_date.strftime('%d.%m.%Y')}\n"
+        status_text += f"📅 День недели: {day_to_show} ({DAYS[day_to_show-1]})\n"
+        status_text += f"🔢 Неделя: {week_type} ({'нечетная' if week_type == 1 else 'четная'})\n\n"
+        
+        # Статичное расписание
+        static_rasp = await get_static_rasp(pool, day_to_show, week_type)
+        status_text += f"📋 Статичное расписание ({len(static_rasp)} пар):\n"
+        for pair_num, subject, cabinet, subject_id in static_rasp:
+            status_text += f"  {pair_num}. {cabinet} {subject}\n"
+        
+        # Модификации
+        modifications = await get_rasp_modifications(pool, ALLOWED_CHAT_IDS[0], day_to_show, week_type)
+        status_text += f"\n🔄 Модификации ({len(modifications)} пар):\n"
+        for pair_num, subject_id, cabinet in modifications:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                    subject_row = await cur.fetchone()
+                    subject_name = subject_row[0] if subject_row else "Свободно"
+            status_text += f"  {pair_num}. {cabinet} {subject_name}\n"
+        
+        await message.answer(status_text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+@dp.message(Command("mf_clear_modifications"))
+async def cmd_clear_modifications(message: types.Message):
+    """Очищает все модификации"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("⚠ Использование: /mf_clear_modifications <week_type>\n1 - нечетная, 2 - четная")
+            return
+        
+        week_type = int(parts[1])
+        await clear_rasp_modifications(pool, week_type)
+        
+        week_name = "нечетной" if week_type == 1 else "четной"
+        await message.answer(f"✅ Модификации для {week_name} недели очищены!")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
 @dp.message(Command("init_static_rasp"))
 async def cmd_init_static_rasp(message: types.Message):
     """Принудительная инициализация статичного расписания из текущего"""
