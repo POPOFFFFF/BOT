@@ -4121,79 +4121,94 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
     
     msg_lines = []
     
-    # Получаем статичное расписание
+    # Получаем статичное расписание как основу
     static_rasp = await get_static_rasp(pool, day, week_type)
     static_pairs = {row[0]: (row[1], row[2], row[3]) for row in static_rasp}
     
-    # Получаем модификации
+    # Получаем модификации (перезаписывают статичное)
     modifications = await get_rasp_modifications(pool, chat_id, day, week_type)
     modified_pairs = {row[0]: (row[1], row[2]) for row in modifications}
     
-    max_pair = 6  # Максимум 6 пар в день
+    # Определяем максимальную пару (обрезаем свободные в конце)
+    max_pair = 0
+    all_pairs = set(static_pairs.keys()) | set(modified_pairs.keys())
+    if all_pairs:
+        max_pair = max(all_pairs)
     
-    for i in range(1, max_pair + 1):
-        if i in modified_pairs:
-            # Используем модифицированную пару
-            subject_id, cabinet = modified_pairs[i]
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
-                    subject_row = await cur.fetchone()
-                    subject_name = subject_row[0] if subject_row else "Свободно"
+    # Если нет пар вообще, показываем сообщение
+    if max_pair == 0:
+        result = "Расписание пустое."
+    else:
+        has_modifications = False
+        
+        for i in range(1, max_pair + 1):
+            line = ""
             
-            if subject_name == "Свободно":
-                msg_lines.append(f"{i}. Свободно")
-            else:
-                import re
-                clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+            if i in modified_pairs:
+                # Используем модифицированную пару
+                subject_id, cabinet = modified_pairs[i]
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                        subject_row = await cur.fetchone()
+                        subject_name = subject_row[0] if subject_row else "Свободно"
                 
-                if cabinet and cabinet != "Не указан":
-                    msg_lines.append(f"{i}. {cabinet} {clean_subject_name} 🔄")
+                if subject_name == "Свободно":
+                    line = f"{i}. Свободно 🔄"
                 else:
-                    cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
-                    if cabinet_match:
-                        extracted_cabinet = cabinet_match.group(2)
-                        msg_lines.append(f"{i}. {extracted_cabinet} {clean_subject_name} 🔄")
+                    import re
+                    clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                    
+                    if cabinet and cabinet != "Не указан":
+                        line = f"{i}. {cabinet} {clean_subject_name} 🔄"
                     else:
-                        msg_lines.append(f"{i}. {clean_subject_name} 🔄")
-                        
-        elif i in static_pairs:
-            # Используем статичную пару
-            subject_name, cabinet, subject_id = static_pairs[i]
+                        cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+                        if cabinet_match:
+                            extracted_cabinet = cabinet_match.group(2)
+                            line = f"{i}. {extracted_cabinet} {clean_subject_name} 🔄"
+                        else:
+                            line = f"{i}. {clean_subject_name} 🔄"
+                has_modifications = True
+                
+            elif i in static_pairs:
+                # Используем статичную пару
+                subject_name, cabinet, subject_id = static_pairs[i]
+                
+                if subject_name == "Свободно":
+                    line = f"{i}. Свободно"
+                else:
+                    import re
+                    clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                    
+                    if cabinet and cabinet != "Не указан":
+                        line = f"{i}. {cabinet} {clean_subject_name}"
+                    else:
+                        cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+                        if cabinet_match:
+                            extracted_cabinet = cabinet_match.group(2)
+                            line = f"{i}. {extracted_cabinet} {clean_subject_name}"
+                        else:
+                            line = f"{i}. {clean_subject_name}"
+            else:
+                line = f"{i}. Свободно"
             
-            if subject_name == "Свободно":
-                msg_lines.append(f"{i}. Свободно")
-            else:
-                import re
-                clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
-                
-                if cabinet and cabinet != "Не указан":
-                    msg_lines.append(f"{i}. {cabinet} {clean_subject_name}")
-                else:
-                    cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
-                    if cabinet_match:
-                        extracted_cabinet = cabinet_match.group(2)
-                        msg_lines.append(f"{i}. {extracted_cabinet} {clean_subject_name}")
-                    else:
-                        msg_lines.append(f"{i}. {clean_subject_name}")
-        else:
-            msg_lines.append(f"{i}. Свободно")
-    
-    result = "\n".join(msg_lines)
-    
-    # Добавляем информацию о домашних заданиях
-    if target_date is None:
-        target_date = datetime.datetime.now(TZ).date()
-    
-    target_date_str = target_date.strftime("%Y-%m-%d")
-    has_hw = await has_homework_for_date(pool, target_date_str)
-    
-    if has_hw:
-        result += "\n\n📚 Есть заданное домашнее задание"
-    
-    # Добавляем пометку о модификациях
-    if modifications:
-        result += "\n\n🔄 Отмечены измененные пары"
+            msg_lines.append(line)
+        
+        result = "\n".join(msg_lines)
+        
+        # Добавляем информацию о домашних заданиях
+        if target_date is None:
+            target_date = datetime.datetime.now(TZ).date()
+        
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        has_hw = await has_homework_for_date(pool, target_date_str)
+        
+        if has_hw:
+            result += "\n\n📚 Есть заданное домашнее задание"
+        
+        # Добавляем пометку о модификациях
+        if has_modifications:
+            result += "\n\n🔄 Отмечены измененные пары"
     
     return result
 
@@ -4267,6 +4282,42 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     
     await callback.message.edit_text(message, reply_markup=kb)
     await callback.answer()
+
+
+async def initialize_static_rasp_from_current(pool, week_type: int):
+    """Инициализирует статичное расписание из текущих данных"""
+    try:
+        print(f"🔄 Инициализация статичного расписания для недели {week_type}...")
+        
+        # Очищаем старое статичное расписание для этой недели
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM static_rasp WHERE week_type=%s", (week_type,))
+        
+        # Для каждого чата берем текущее расписание и сохраняем как статичное
+        for chat_id in ALLOWED_CHAT_IDS:
+            for day in range(1, 7):  # Пн-Сб
+                # Получаем текущее расписание из rasp_detailed
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("""
+                            SELECT pair_number, subject_id, cabinet 
+                            FROM rasp_detailed 
+                            WHERE chat_id=%s AND day=%s AND week_type=%s
+                        """, (chat_id, day, week_type))
+                        current_rasp = await cur.fetchall()
+                
+                # Сохраняем в статичное расписание
+                for pair_number, subject_id, cabinet in current_rasp:
+                    if subject_id:  # Если есть предмет (не свободно)
+                        await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
+        
+        print(f"✅ Статичное расписание для недели {week_type} инициализировано")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка инициализации статичного расписания: {e}")
+        return False
 
 @dp.callback_query(F.data == "tomorrow_rasp")
 async def tomorrow_rasp_handler(callback: types.CallbackQuery):
@@ -4875,19 +4926,22 @@ async def process_save_static_rasp(callback: types.CallbackQuery):
     week_type = int(callback.data.split("_")[2])
     
     try:
-        # Получаем текущее расписание из модификаций и сохраняем как статичное
-        for chat_id in ALLOWED_CHAT_IDS:
-            for day in range(1, 7):  # Пн-Сб
-                modifications = await get_rasp_modifications(pool, chat_id, day, week_type)
-                for pair_number, subject_id, cabinet in modifications:
-                    await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet)
+        # Используем новую функцию инициализации
+        success = await initialize_static_rasp_from_current(pool, week_type)
         
-        week_name = "нечетную" if week_type == 1 else "четную"
-        await callback.message.edit_text(
-            f"✅ Текущее расписание сохранено как статичное для {week_name} недели!\n\n"
-            f"⚙ Админ-панель:",
-            reply_markup=admin_menu()
-        )
+        if success:
+            week_name = "нечетную" if week_type == 1 else "четную"
+            await callback.message.edit_text(
+                f"✅ Текущее расписание сохранено как статичное для {week_name} недели!\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
+        else:
+            await callback.message.edit_text(
+                f"❌ Ошибка при сохранении статичного расписания\n\n"
+                f"⚙ Админ-панель:",
+                reply_markup=admin_menu()
+            )
         
     except Exception as e:
         await callback.message.edit_text(
@@ -4897,6 +4951,27 @@ async def process_save_static_rasp(callback: types.CallbackQuery):
         )
     
     await callback.answer()
+
+@dp.message(Command("init_static_rasp"))
+async def cmd_init_static_rasp(message: types.Message):
+    """Принудительная инициализация статичного расписания из текущего"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        await message.answer("🔄 Инициализация статичного расписания...")
+        
+        # Инициализируем для обеих недель
+        success1 = await initialize_static_rasp_from_current(pool, 1)
+        success2 = await initialize_static_rasp_from_current(pool, 2)
+        
+        if success1 and success2:
+            await message.answer("✅ Статичное расписание инициализировано для обеих недель!")
+        else:
+            await message.answer("❌ Частичная ошибка при инициализации")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка инициализации: {e}")
 
 @dp.message(Command("check_week"))
 async def check_week_status(message: types.Message):
@@ -5223,6 +5298,18 @@ async def main():
     # Загружаем спец-пользователей из базы данных
     await load_special_users(pool)
     
+    # Инициализируем статичное расписание если его нет
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM static_rasp")
+                count = (await cur.fetchone())[0]
+                if count == 0:
+                    print("🔄 Первоначальная инициализация статичного расписания...")
+                    await initialize_static_rasp_from_current(pool, 1)
+                    await initialize_static_rasp_from_current(pool, 2)
+    except Exception as e:
+        print(f"❌ Ошибка инициализации статичного расписания: {e}")
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
