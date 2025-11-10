@@ -3446,19 +3446,32 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
             
             # Проверяем, используется ли предмет в расписании
             await cur.execute("SELECT COUNT(*) FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
-            usage_count = (await cur.fetchone())[0]
+            usage_count_rasp = (await cur.fetchone())[0]
             
-            if usage_count > 0:
+            # Проверяем, используется ли предмет в домашних заданиях
+            await cur.execute("SELECT COUNT(*) FROM homework WHERE subject_id=%s", (subject_id,))
+            usage_count_homework = (await cur.fetchone())[0]
+            
+            total_usage = usage_count_rasp + usage_count_homework
+            
+            if total_usage > 0:
                 # Предмет используется - предупреждаем
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="✅ Да, удалить вместе с уроками", callback_data=f"confirm_delete_subject_{subject_id}")],
+                    [InlineKeyboardButton(text="✅ Да, удалить ВСЕ связанные данные", callback_data=f"confirm_delete_subject_{subject_id}")],
                     [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete_subject")]
                 ])
                 
+                usage_text = []
+                if usage_count_rasp > 0:
+                    usage_text.append(f"{usage_count_rasp} урок(ов) в расписании")
+                if usage_count_homework > 0:
+                    usage_text.append(f"{usage_count_homework} домашних заданий")
+                
                 await callback.message.edit_text(
                     f"⚠️ Внимание!\n\n"
-                    f"Предмет '{name}' используется в {usage_count} урок(ах) расписания.\n\n"
-                    f"Удалить предмет и все связанные уроки?",
+                    f"Предмет '{name}' используется в:\n"
+                    f"{', '.join(usage_text)}\n\n"
+                    f"Удалить предмет и ВСЕ связанные данные?",
                     reply_markup=kb
                 )
             else:
@@ -3483,20 +3496,146 @@ async def confirm_delete_subject(callback: types.CallbackQuery):
             await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
             subject_name = (await cur.fetchone())[0]
             
-            # Удаляем уроки с этим предметом
+            # 1. Сначала удаляем уроки с этим предметом
             await cur.execute("DELETE FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
             
-            # Удаляем сам предмет
+            # 2. Удаляем модификации с этим предметом
+            await cur.execute("DELETE FROM rasp_modifications WHERE subject_id=%s", (subject_id,))
+            
+            # 3. Удаляем статичное расписание с этим предметом
+            await cur.execute("DELETE FROM static_rasp WHERE subject_id=%s", (subject_id,))
+            
+            # 4. Удаляем домашние задания с этим предметом
+            await cur.execute("DELETE FROM homework WHERE subject_id=%s", (subject_id,))
+            
+            # 5. Теперь удаляем сам предмет
             await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
     
     await callback.message.edit_text(
-        f"✅ Предмет '{subject_name}' и все связанные уроки удалены."
+        f"✅ Предмет '{subject_name}' и все связанные данные удалены."
     )
     
     # Возвращаем в админ-меню
     await callback.message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
     await callback.answer()
 
+@dp.message(Command("safe_delete_subject"))
+async def cmd_safe_delete_subject(message: types.Message):
+    """Безопасное удаление предмета с проверкой всех связей"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer("⚠ Использование: /safe_delete_subject <id_предмета>")
+            return
+        
+        subject_id = int(parts[1])
+        
+        report = "📊 ОТЧЕТ ПО УДАЛЕНИЮ ПРЕДМЕТА:\n\n"
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Получаем информацию о предмете
+                await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                subject_row = await cur.fetchone()
+                
+                if not subject_row:
+                    await message.answer("❌ Предмет не найден")
+                    return
+                
+                subject_name = subject_row[0]
+                report += f"📚 Предмет: {subject_name} (ID: {subject_id})\n\n"
+                
+                # Проверяем связи
+                await cur.execute("SELECT COUNT(*) FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
+                rasp_count = (await cur.fetchone())[0]
+                report += f"📅 Уроков в расписании: {rasp_count}\n"
+                
+                await cur.execute("SELECT COUNT(*) FROM rasp_modifications WHERE subject_id=%s", (subject_id,))
+                mod_count = (await cur.fetchone())[0]
+                report += f"🔄 Модификаций: {mod_count}\n"
+                
+                await cur.execute("SELECT COUNT(*) FROM static_rasp WHERE subject_id=%s", (subject_id,))
+                static_count = (await cur.fetchone())[0]
+                report += f"📋 Статичных записей: {static_count}\n"
+                
+                await cur.execute("SELECT COUNT(*) FROM homework WHERE subject_id=%s", (subject_id,))
+                homework_count = (await cur.fetchone())[0]
+                report += f"📝 Домашних заданий: {homework_count}\n\n"
+                
+                total_records = rasp_count + mod_count + static_count + homework_count
+                
+                if total_records > 0:
+                    report += f"⚠️ Всего связанных записей: {total_records}\n\n"
+                    report += "Для удаления используйте команду:\n"
+                    report += f"/force_delete_subject {subject_id}"
+                else:
+                    report += "✅ Нет связанных записей, можно безопасно удалить"
+        
+        await message.answer(report)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+@dp.message(Command("force_delete_subject"))
+async def cmd_force_delete_subject(message: types.Message):
+    """Принудительное удаление предмета со всеми связями"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer("⚠ Использование: /force_delete_subject <id_предмета>")
+            return
+        
+        subject_id = int(parts[1])
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Получаем название предмета
+                await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                subject_name = (await cur.fetchone())[0]
+                
+                # Удаляем в правильном порядке (от зависимых к основным)
+                deleted_counts = {}
+                
+                # 1. Домашние задания
+                await cur.execute("DELETE FROM homework WHERE subject_id=%s", (subject_id,))
+                deleted_counts['homework'] = cur.rowcount
+                
+                # 2. Статичное расписание
+                await cur.execute("DELETE FROM static_rasp WHERE subject_id=%s", (subject_id,))
+                deleted_counts['static_rasp'] = cur.rowcount
+                
+                # 3. Модификации
+                await cur.execute("DELETE FROM rasp_modifications WHERE subject_id=%s", (subject_id,))
+                deleted_counts['modifications'] = cur.rowcount
+                
+                # 4. Основное расписание
+                await cur.execute("DELETE FROM rasp_detailed WHERE subject_id=%s", (subject_id,))
+                deleted_counts['rasp_detailed'] = cur.rowcount
+                
+                # 5. Сам предмет
+                await cur.execute("DELETE FROM subjects WHERE id=%s", (subject_id,))
+                deleted_counts['subject'] = 1
+                
+                # Формируем отчет
+                report = f"✅ Предмет '{subject_name}' удален!\n\n"
+                report += "Удаленные записи:\n"
+                for table, count in deleted_counts.items():
+                    report += f"• {table}: {count}\n"
+                
+                total_deleted = sum(deleted_counts.values())
+                report += f"\nВсего удалено записей: {total_deleted}"
+                
+                await message.answer(report)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка удаления: {e}")
+    
 @dp.callback_query(F.data == "menu_back")
 async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     # Проверка флуда
