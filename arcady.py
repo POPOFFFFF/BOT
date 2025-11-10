@@ -5250,7 +5250,161 @@ async def cmd_check_all_even_days(message: types.Message):
         await message.answer(f"❌ Ошибка проверки: {e}")
 
 
+@dp.message(Command("save_mods_as_static"))
+async def cmd_save_mods_as_static(message: types.Message):
+    """Сохраняет текущие модификации как статичное расписание"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("⚠ Использование: /save_mods_as_static <week_type>\n1 - нечетная, 2 - четная")
+            return
+        
+        week_type = int(parts[1])
+        main_chat_id = ALLOWED_CHAT_IDS[0]
+        
+        saved_count = 0
+        
+        for day in range(1, 7):  # Все дни недели
+            # Получаем модификации для этого дня
+            modifications = await get_rasp_modifications(pool, main_chat_id, day, week_type)
+            
+            if modifications:
+                # Очищаем статичное расписание для этого дня
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("DELETE FROM static_rasp WHERE day=%s AND week_type=%s", (day, week_type))
+                
+                # Сохраняем модификации как статичное расписание
+                for pair_num, subject_id, cabinet in modifications:
+                    if subject_id:  # Если не "Свободно"
+                        await save_static_rasp(pool, day, week_type, pair_num, subject_id, cabinet)
+                        saved_count += 1
+        
+        week_name = "нечетной" if week_type == 1 else "четной"
+        await message.answer(f"✅ Модификации сохранены как статичное расписание для {week_name} недели! Сохранено {saved_count} пар")
+        
+        # Очищаем модификации после сохранения
+        await clear_rasp_modifications(pool, week_type)
+        await message.answer("🔄 Модификации очищены")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка сохранения: {e}")
 
+@dp.message(Command("force_update_static"))
+async def cmd_force_update_static(message: types.Message):
+    """Принудительно обновляет статичное расписание из текущего (с учетом модификаций)"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("⚠ Использование: /force_update_static <week_type>\n1 - нечетная, 2 - четная")
+            return
+        
+        week_type = int(parts[1])
+        main_chat_id = ALLOWED_CHAT_IDS[0]
+        
+        updated_count = 0
+        
+        for day in range(1, 7):  # Все дни недели
+            # Очищаем статичное расписание для этого дня
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("DELETE FROM static_rasp WHERE day=%s AND week_type=%s", (day, week_type))
+            
+            # Получаем актуальное расписание (статичное + модификации)
+            actual_rasp = []
+            
+            # Сначала берем статичное как основу
+            static_rasp = await get_static_rasp(pool, day, week_type)
+            static_pairs = {row[0]: (row[1], row[2], row[3]) for row in static_rasp}
+            
+            # Затем применяем модификации
+            modifications = await get_rasp_modifications(pool, main_chat_id, day, week_type)
+            modified_pairs = {row[0]: (row[1], row[2]) for row in modifications}
+            
+            # Определяем максимальную пару
+            all_pairs = set(static_pairs.keys()) | set(modified_pairs.keys())
+            max_pair = max(all_pairs) if all_pairs else 0
+            
+            # Формируем актуальное расписание
+            for pair_num in range(1, max_pair + 1):
+                if pair_num in modified_pairs:
+                    # Используем модифицированную пару
+                    subject_id, cabinet = modified_pairs[pair_num]
+                    actual_rasp.append((pair_num, subject_id, cabinet))
+                elif pair_num in static_pairs:
+                    # Используем статичную пару
+                    subject_name, cabinet, subject_id = static_pairs[pair_num]
+                    actual_rasp.append((pair_num, subject_id, cabinet))
+                else:
+                    # Свободно
+                    continue
+            
+            # Сохраняем актуальное расписание как статичное
+            for pair_num, subject_id, cabinet in actual_rasp:
+                if subject_id:  # Если не "Свободно"
+                    await save_static_rasp(pool, day, week_type, pair_num, subject_id, cabinet)
+                    updated_count += 1
+        
+        week_name = "нечетной" if week_type == 1 else "четной"
+        await message.answer(f"✅ Статичное расписание обновлено для {week_name} недели! Обновлено {updated_count} пар")
+        
+        # Очищаем модификации
+        await clear_rasp_modifications(pool, week_type)
+        await message.answer("🔄 Модификации очищены")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка обновления: {e}")
+
+@dp.message(Command("compare_schedules"))
+async def cmd_compare_schedules(message: types.Message):
+    """Показывает разницу между статичным и модифицированным расписанием"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer("⚠ Использование: /compare_schedules <day> <week_type>\nПример: /compare_schedules 1 2")
+            return
+        
+        day = int(parts[1])
+        week_type = int(parts[2])
+        main_chat_id = ALLOWED_CHAT_IDS[0]
+        
+        comparison_text = f"📊 СРАВНЕНИЕ РАСПИСАНИЙ (День {day}, Неделя {week_type}):\n\n"
+        
+        # Статичное расписание
+        static_rasp = await get_static_rasp(pool, day, week_type)
+        comparison_text += "📋 СТАТИЧНОЕ расписание:\n"
+        for pair_num, subject_name, cabinet, subject_id in static_rasp:
+            comparison_text += f"  Пара {pair_num}: {cabinet} {subject_name}\n"
+        
+        # Модификации
+        modifications = await get_rasp_modifications(pool, main_chat_id, day, week_type)
+        comparison_text += f"\n🔄 МОДИФИКАЦИИ ({len(modifications)} записей):\n"
+        for pair_num, subject_id, cabinet in modifications:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                    subject_row = await cur.fetchone()
+                    subject_name = subject_row[0] if subject_row else "Свободно"
+            comparison_text += f"  Пара {pair_num}: {cabinet} {subject_name}\n"
+        
+        # Актуальное расписание (как видит пользователь)
+        actual_schedule = await get_rasp_formatted(day, week_type, main_chat_id)
+        comparison_text += f"\n🎯 АКТУАЛЬНОЕ расписание (что видно):\n{actual_schedule}"
+        
+        await message.answer(comparison_text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка сравнения: {e}")
+        
 @dp.message(Command("check_week"))
 async def check_week_status(message: types.Message):
     """Проверка текущей четности во всех чатах"""
