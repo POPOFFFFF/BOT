@@ -303,7 +303,153 @@ async def save_rasp_modification(pool, chat_id: int, day: int, week_type: int, p
         print(f"❌ Ошибка сохранения модификации: {e}")
         return False
 
+@dp.message(Command("check_mysql"))
+async def cmd_check_mysql(message: types.Message):
+    """Проверяет модификации напрямую в MySQL"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        now = datetime.datetime.now(TZ)
+        today = now.date()
+        current_weekday = today.isoweekday()
+        week_type = await get_current_week_type(pool)
+        
+        text = "🔍 ПРОВЕРКА MYSQL (прямой запрос):\n\n"
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Проверяем модификации напрямую
+                await cur.execute("""
+                    SELECT chat_id, day, week_type, pair_number, subject_id, cabinet 
+                    FROM rasp_modifications 
+                    WHERE day=%s AND week_type=%s
+                    ORDER BY chat_id, pair_number
+                """, (current_weekday, week_type))
+                
+                mods = await cur.fetchall()
+                
+                if not mods:
+                    text += "❌ В MySQL НЕТ модификаций для сегодня\n"
+                else:
+                    text += f"✅ В MySQL найдено {len(mods)} модификаций:\n"
+                    for chat_id, day, week_type, pair_num, subject_id, cabinet in mods:
+                        subject_info = "ОЧИЩЕНО" if subject_id is None else f"ID:{subject_id}"
+                        text += f"  Чат {chat_id}, пара {pair_num}: {subject_info} ({cabinet})\n"
+                
+                text += "\n"
+                
+                # Проверяем статичное расписание
+                await cur.execute("""
+                    SELECT pair_number, subject_id, cabinet 
+                    FROM static_rasp 
+                    WHERE day=%s AND week_type=%s
+                    ORDER BY pair_number
+                """, (current_weekday, week_type))
+                
+                static = await cur.fetchall()
+                text += f"📋 Статичное расписание: {len(static)} пар\n"
+        
+        await message.answer(text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка проверки MySQL: {e}")
 
+@dp.message(Command("test_add_mod"))
+async def cmd_test_add_mod(message: types.Message):
+    """Тестовая команда для добавления модификации"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        now = datetime.datetime.now(TZ)
+        today = now.date()
+        current_weekday = today.isoweekday()
+        week_type = await get_current_week_type(pool)
+        
+        # Получаем первый предмет из базы для теста
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, name FROM subjects LIMIT 1")
+                subject = await cur.fetchone()
+                
+                if not subject:
+                    await message.answer("❌ Нет предметов в базе")
+                    return
+                
+                subject_id, subject_name = subject
+                
+                # Добавляем тестовую модификацию для 1 пары
+                for chat_id in ALLOWED_CHAT_IDS:
+                    await cur.execute("""
+                        INSERT INTO rasp_modifications (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE subject_id=%s, cabinet=%s
+                    """, (chat_id, current_weekday, week_type, 1, subject_id, "999", subject_id, "999"))
+        
+        await message.answer(f"✅ Тестовая модификация добавлена:\nПредмет: {subject_name}\nПара: 1\nКабинет: 999")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка теста: {e}")
+
+@dp.message(Command("clear_all_mods"))
+async def cmd_clear_all_mods(message: types.Message):
+    """Очищает все модификации для сегодня"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        now = datetime.datetime.now(TZ)
+        today = now.date()
+        current_weekday = today.isoweekday()
+        week_type = await get_current_week_type(pool)
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    DELETE FROM rasp_modifications 
+                    WHERE day=%s AND week_type=%s
+                """, (current_weekday, week_type))
+                
+                deleted_count = cur.rowcount
+        
+        await message.answer(f"✅ Удалено {deleted_count} модификаций для сегодня")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка очистки: {e}")
+
+@dp.message(Command("view_rasp_debug"))
+async def cmd_view_rasp_debug(message: types.Message):
+    """Показывает расписание с детальной отладкой"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        now = datetime.datetime.now(TZ)
+        today = now.date()
+        current_weekday = today.isoweekday()
+        week_type = await get_current_week_type(pool)
+        
+        text = await get_rasp_formatted(current_weekday, week_type, message.chat.id, today)
+        
+        day_names = {
+            1: "Понедельник", 2: "Вторник", 3: "Среда",
+            4: "Четверг", 5: "Пятница", 6: "Суббота"
+        }
+        
+        week_name = "нечетная" if week_type == 1 else "четная"
+        
+        debug_info = f"🔍 ОТЛАДКА РАСПИСАНИЯ:\n"
+        debug_info += f"📅 День: {current_weekday} ({day_names[current_weekday]})\n"
+        debug_info += f"🔢 Неделя: {week_type} ({week_name})\n"
+        debug_info += f"💬 Чат: {message.chat.id}\n\n"
+        
+        message_text = debug_info + f"📅 Расписание:\n{text}"
+        
+        await message.answer(message_text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отладки: {e}")
 @dp.message(Command("force_refresh"))
 async def cmd_force_refresh(message: types.Message):
     """Принудительно обновляет расписание"""
