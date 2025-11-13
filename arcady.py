@@ -303,39 +303,103 @@ async def save_rasp_modification(pool, chat_id: int, day: int, week_type: int, p
         print(f"❌ Ошибка сохранения модификации: {e}")
         return False
 
-@dp.message(Command("check_mysql"))
-async def cmd_check_mysql(message: types.Message):
-    """Проверяет модификации напрямую в MySQL"""
+@dp.message(Command("check_mysql_all"))
+async def cmd_check_mysql_all(message: types.Message):
+    """Проверяет ВСЕ модификации в MySQL"""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
     try:
-        now = datetime.datetime.now(TZ)
-        today = now.date()
-        current_weekday = today.isoweekday()
-        week_type = await get_current_week_type(pool)
-        
-        text = "🔍 ПРОВЕРКА MYSQL (прямой запрос):\n\n"
+        text = "🔍 ВСЕ модификации в MySQL:\n\n"
         
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                # Проверяем модификации напрямую
                 await cur.execute("""
                     SELECT chat_id, day, week_type, pair_number, subject_id, cabinet 
                     FROM rasp_modifications 
-                    WHERE day=%s AND week_type=%s
-                    ORDER BY chat_id, pair_number
-                """, (current_weekday, week_type))
+                    ORDER BY day, week_type, pair_number
+                """)
                 
                 mods = await cur.fetchall()
                 
                 if not mods:
-                    text += "❌ В MySQL НЕТ модификаций для сегодня\n"
+                    text += "❌ В MySQL НЕТ модификаций вообще\n"
                 else:
-                    text += f"✅ В MySQL найдено {len(mods)} модификаций:\n"
+                    text += f"✅ Всего модификаций: {len(mods)}\n\n"
+                    
+                    # Группируем по дню и неделе
+                    grouped = {}
                     for chat_id, day, week_type, pair_num, subject_id, cabinet in mods:
-                        subject_info = "ОЧИЩЕНО" if subject_id is None else f"ID:{subject_id}"
-                        text += f"  Чат {chat_id}, пара {pair_num}: {subject_info} ({cabinet})\n"
+                        key = (day, week_type)
+                        if key not in grouped:
+                            grouped[key] = []
+                        grouped[key].append((pair_num, subject_id, cabinet, chat_id))
+                    
+                    for (day, week_type), pairs in grouped.items():
+                        day_name = DAYS[day-1] if 1 <= day <= 6 else f"День {day}"
+                        week_name = "нечетная" if week_type == 1 else "четная"
+                        text += f"📅 {day_name} | {week_name} неделя:\n"
+                        
+                        for pair_num, subject_id, cabinet, chat_id in sorted(pairs, key=lambda x: x[0]):
+                            subject_info = "🗑️ ОЧИЩЕНО" if subject_id is None else f"📚 ID:{subject_id}"
+                            text += f"   Пара {pair_num}: {subject_info} ({cabinet}) [чат:{chat_id}]\n"
+                        text += "\n"
+        
+        # Если текст слишком длинный, разбиваем на части
+        if len(text) > 4000:
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for part in parts:
+                await message.answer(part)
+        else:
+            await message.answer(text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка проверки MySQL: {e}")
+
+@dp.message(Command("check_day"))
+async def cmd_check_day(message: types.Message):
+    """Проверяет модификации для конкретного дня"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer("⚠ Использование: /check_day <день> <неделя>\nПример: /check_day 5 1 (пятница, нечетная)")
+            return
+        
+        day = int(parts[1])
+        week_type = int(parts[2])
+        
+        if day < 1 or day > 6:
+            await message.answer("❌ День должен быть от 1 до 6")
+            return
+        
+        if week_type not in [1, 2]:
+            await message.answer("❌ Неделя должна быть 1 (нечетная) или 2 (четная)")
+            return
+        
+        text = f"🔍 Модификации для {DAYS[day-1]} | {'нечетная' if week_type == 1 else 'четная'} неделя:\n\n"
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Проверяем модификации
+                await cur.execute("""
+                    SELECT chat_id, pair_number, subject_id, cabinet 
+                    FROM rasp_modifications 
+                    WHERE day=%s AND week_type=%s
+                    ORDER BY pair_number
+                """, (day, week_type))
+                
+                mods = await cur.fetchall()
+                
+                if not mods:
+                    text += "❌ Нет модификаций\n"
+                else:
+                    text += f"✅ Найдено {len(mods)} модификаций:\n"
+                    for chat_id, pair_num, subject_id, cabinet in mods:
+                        subject_info = "🗑️ ОЧИЩЕНО" if subject_id is None else f"📚 ID:{subject_id}"
+                        text += f"  Пара {pair_num}: {subject_info} ({cabinet}) [чат:{chat_id}]\n"
                 
                 text += "\n"
                 
@@ -345,7 +409,7 @@ async def cmd_check_mysql(message: types.Message):
                     FROM static_rasp 
                     WHERE day=%s AND week_type=%s
                     ORDER BY pair_number
-                """, (current_weekday, week_type))
+                """, (day, week_type))
                 
                 static = await cur.fetchall()
                 text += f"📋 Статичное расписание: {len(static)} пар\n"
@@ -353,103 +417,86 @@ async def cmd_check_mysql(message: types.Message):
         await message.answer(text)
         
     except Exception as e:
-        await message.answer(f"❌ Ошибка проверки MySQL: {e}")
+        await message.answer(f"❌ Ошибка проверки: {e}")
 
-@dp.message(Command("test_add_mod"))
-async def cmd_test_add_mod(message: types.Message):
-    """Тестовая команда для добавления модификации"""
+@dp.message(Command("view_rasp_day"))
+async def cmd_view_rasp_day(message: types.Message):
+    """Показывает расписание для конкретного дня"""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
     try:
-        now = datetime.datetime.now(TZ)
-        today = now.date()
-        current_weekday = today.isoweekday()
-        week_type = await get_current_week_type(pool)
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer("⚠ Использование: /view_rasp_day <день> <неделя>\nПример: /view_rasp_day 5 1 (пятница, нечетная)")
+            return
         
-        # Получаем первый предмет из базы для теста
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT id, name FROM subjects LIMIT 1")
-                subject = await cur.fetchone()
-                
-                if not subject:
-                    await message.answer("❌ Нет предметов в базе")
-                    return
-                
-                subject_id, subject_name = subject
-                
-                # Добавляем тестовую модификацию для 1 пары
-                for chat_id in ALLOWED_CHAT_IDS:
-                    await cur.execute("""
-                        INSERT INTO rasp_modifications (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE subject_id=%s, cabinet=%s
-                    """, (chat_id, current_weekday, week_type, 1, subject_id, "999", subject_id, "999"))
+        day = int(parts[1])
+        week_type = int(parts[2])
         
-        await message.answer(f"✅ Тестовая модификация добавлена:\nПредмет: {subject_name}\nПара: 1\nКабинет: 999")
+        if day < 1 or day > 6:
+            await message.answer("❌ День должен быть от 1 до 6")
+            return
+        
+        if week_type not in [1, 2]:
+            await message.answer("❌ Неделя должна быть 1 (нечетная) или 2 (четная)")
+            return
+        
+        text = await get_rasp_formatted(day, week_type, message.chat.id)
+        
+        day_name = DAYS[day-1]
+        week_name = "нечетная" if week_type == 1 else "четная"
+        
+        debug_info = f"🔍 РАСПИСАНИЕ:\n"
+        debug_info += f"📅 {day_name} | {week_name} неделя\n"
+        debug_info += f"💬 Чат: {message.chat.id}\n\n"
+        
+        message_text = debug_info + text
+        
+        await message.answer(message_text)
         
     except Exception as e:
-        await message.answer(f"❌ Ошибка теста: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
 
-@dp.message(Command("clear_all_mods"))
-async def cmd_clear_all_mods(message: types.Message):
-    """Очищает все модификации для сегодня"""
+@dp.message(Command("clear_day_mods"))
+async def cmd_clear_day_mods(message: types.Message):
+    """Очищает модификации для конкретного дня"""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
     try:
-        now = datetime.datetime.now(TZ)
-        today = now.date()
-        current_weekday = today.isoweekday()
-        week_type = await get_current_week_type(pool)
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer("⚠ Использование: /clear_day_mods <день> <неделя>\nПример: /clear_day_mods 5 1 (пятница, нечетная)")
+            return
+        
+        day = int(parts[1])
+        week_type = int(parts[2])
+        
+        if day < 1 or day > 6:
+            await message.answer("❌ День должен быть от 1 до 6")
+            return
+        
+        if week_type not in [1, 2]:
+            await message.answer("❌ Неделя должна быть 1 (нечетная) или 2 (четная)")
+            return
         
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("""
                     DELETE FROM rasp_modifications 
                     WHERE day=%s AND week_type=%s
-                """, (current_weekday, week_type))
+                """, (day, week_type))
                 
                 deleted_count = cur.rowcount
         
-        await message.answer(f"✅ Удалено {deleted_count} модификаций для сегодня")
+        day_name = DAYS[day-1]
+        week_name = "нечетная" if week_type == 1 else "четная"
+        await message.answer(f"✅ Удалено {deleted_count} модификаций для {day_name} ({week_name} неделя)")
         
     except Exception as e:
         await message.answer(f"❌ Ошибка очистки: {e}")
 
-@dp.message(Command("view_rasp_debug"))
-async def cmd_view_rasp_debug(message: types.Message):
-    """Показывает расписание с детальной отладкой"""
-    if message.from_user.id not in ALLOWED_USERS:
-        return
-    
-    try:
-        now = datetime.datetime.now(TZ)
-        today = now.date()
-        current_weekday = today.isoweekday()
-        week_type = await get_current_week_type(pool)
-        
-        text = await get_rasp_formatted(current_weekday, week_type, message.chat.id, today)
-        
-        day_names = {
-            1: "Понедельник", 2: "Вторник", 3: "Среда",
-            4: "Четверг", 5: "Пятница", 6: "Суббота"
-        }
-        
-        week_name = "нечетная" if week_type == 1 else "четная"
-        
-        debug_info = f"🔍 ОТЛАДКА РАСПИСАНИЯ:\n"
-        debug_info += f"📅 День: {current_weekday} ({day_names[current_weekday]})\n"
-        debug_info += f"🔢 Неделя: {week_type} ({week_name})\n"
-        debug_info += f"💬 Чат: {message.chat.id}\n\n"
-        
-        message_text = debug_info + f"📅 Расписание:\n{text}"
-        
-        await message.answer(message_text)
-        
-    except Exception as e:
-        await message.answer(f"❌ Ошибка отладки: {e}")
 @dp.message(Command("force_refresh"))
 async def cmd_force_refresh(message: types.Message):
     """Принудительно обновляет расписание"""
