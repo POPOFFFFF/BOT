@@ -4076,26 +4076,31 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     try:
-        # Очищаем пару для ВСЕХ чатов
+        # Очищаем пару для ВСЕХ чатов через модификации
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 for chat_id in ALLOWED_CHAT_IDS:
-                    # УДАЛЯЕМ запись вместо обновления на NULL
+                    # Удаляем существующую модификацию
                     await cur.execute("""
-                        DELETE FROM rasp_detailed
+                        DELETE FROM rasp_modifications 
                         WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
                     """, (chat_id, data["day"], data["week_type"], pair_number))
+                    
+                    # Добавляем модификацию с subject_id = NULL для очистки
+                    await cur.execute("""
+                        INSERT INTO rasp_modifications (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (chat_id, data["day"], data["week_type"], pair_number, None, "Очищено"))
 
-        # Автоматическая синхронизация
-        source_chat_id = ALLOWED_CHAT_IDS[0]
-        await sync_rasp_to_all_chats(source_chat_id)
-
+        print(f"✅ Пара {pair_number} очищена для всех чатов")
+        
         await callback.message.edit_text(
             f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
             reply_markup=admin_menu()
         )
         
     except Exception as e:
+        print(f"❌ Ошибка при очистке пары: {e}")
         await callback.message.edit_text(
             f"❌ Ошибка при очистке пары: {e}",
             reply_markup=admin_menu()
@@ -4428,6 +4433,115 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
+async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: datetime.date = None):
+    """Получаем расписание с учетом статичного и модификаций - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    if chat_id is None:
+        chat_id = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else DEFAULT_CHAT_ID
+    
+    msg_lines = []
+    
+    # Получаем статичное расписание как основу
+    static_rasp = await get_static_rasp(pool, day, week_type)
+    static_pairs = {row[0]: (row[1], row[2], row[3]) for row in static_rasp}
+    
+    # Получаем модификации (должны ПЕРЕЗАПИСЫВАТЬ статичное)
+    modifications = await get_rasp_modifications(pool, chat_id, day, week_type)
+    modified_pairs = {row[0]: (row[1], row[2]) for row in modifications}
+    
+    print(f"🔍 DEBUG get_rasp_formatted: день={day}, неделя={week_type}, чат={chat_id}")
+    print(f"🔍 DEBUG: статичных пар={len(static_pairs)}, модификаций={len(modified_pairs)}")
+    
+    # Определяем максимальную пару
+    max_pair = 0
+    all_pairs = set(static_pairs.keys()) | set(modified_pairs.keys())
+    if all_pairs:
+        max_pair = max(all_pairs)
+    
+    # Если нет пар вообще, показываем сообщение
+    if max_pair == 0:
+        result = "Расписание пустое."
+    else:
+        has_modifications = False
+        
+        for i in range(1, max_pair + 1):
+            line = ""
+            
+            # ПРИОРИТЕТ: сначала проверяем модификации, потом статичное
+            if i in modified_pairs:
+                # Используем модифицированную пару
+                subject_id, cabinet = modified_pairs[i]
+                
+                # Если subject_id None или 0 - значит пара очищена
+                if subject_id is None or subject_id == 0:
+                    line = f"{i}. Свободно 🔄"
+                    has_modifications = True
+                else:
+                    async with pool.acquire() as conn:
+                        async with conn.cursor() as cur:
+                            await cur.execute("SELECT name FROM subjects WHERE id=%s", (subject_id,))
+                            subject_row = await cur.fetchone()
+                            subject_name = subject_row[0] if subject_row else "Свободно"
+                    
+                    if subject_name == "Свободно":
+                        line = f"{i}. Свободно 🔄"
+                    else:
+                        import re
+                        clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                        
+                        if cabinet and cabinet != "Не указан":
+                            line = f"{i}. {cabinet} {clean_subject_name} 🔄"
+                        else:
+                            cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+                            if cabinet_match:
+                                extracted_cabinet = cabinet_match.group(2)
+                                line = f"{i}. {extracted_cabinet} {clean_subject_name} 🔄"
+                            else:
+                                line = f"{i}. {clean_subject_name} 🔄"
+                    has_modifications = True
+                
+            elif i in static_pairs:
+                # Используем статичную пару (только если нет модификации)
+                subject_name, cabinet, subject_id = static_pairs[i]
+                
+                if subject_name == "Свободно":
+                    line = f"{i}. Свободно"
+                else:
+                    import re
+                    clean_subject_name = re.sub(r'\s+(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', '', subject_name).strip()
+                    
+                    if cabinet and cabinet != "Не указан":
+                        line = f"{i}. {cabinet} {clean_subject_name}"
+                    else:
+                        cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
+                        if cabinet_match:
+                            extracted_cabinet = cabinet_match.group(2)
+                            line = f"{i}. {extracted_cabinet} {clean_subject_name}"
+                        else:
+                            line = f"{i}. {clean_subject_name}"
+            else:
+                line = f"{i}. Свободно"
+            
+            msg_lines.append(line)
+        
+        result = "\n".join(msg_lines)
+        
+        # Добавляем информацию о домашних заданиях
+        if target_date is None:
+            target_date = datetime.datetime.now(TZ).date()
+        
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        has_hw = await has_homework_for_date(pool, target_date_str)
+        
+        if has_hw:
+            result += "\n\n📚 Есть заданное домашнее задание"
+        
+        # Добавляем пометку о модификациях
+        if has_modifications:
+            result += "\n\n🔄 Отмечены измененные пары"
+    
+    return result
+
+
 @dp.message(Command("debug_mods"))
 async def cmd_debug_mods(message: types.Message):
     """Отладочная информация о модификациях"""
@@ -4465,7 +4579,7 @@ async def cmd_debug_mods(message: types.Message):
         
     except Exception as e:
         await message.answer(f"❌ Ошибка отладки: {e}")
-    
+
 @dp.callback_query(F.data == "today_rasp")
 async def today_rasp_handler(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
