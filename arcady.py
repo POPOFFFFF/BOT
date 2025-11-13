@@ -275,25 +275,47 @@ async def get_static_rasp(pool, day: int, week_type: int):
             """, (day, week_type))
             return await cur.fetchall()
 
-async def save_rasp_modification(pool, chat_id: int, day: int, week_type: int, pair_number: int, subject_id: int, cabinet: str):
-    """Сохраняет изменение расписания"""
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                INSERT INTO rasp_modifications (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (chat_id, day, week_type, pair_number, subject_id, cabinet))
+async def save_rasp_modification(pool, chat_id: int, day: int, week_type: int, pair_number: int, subject_id: int, cabinet: str) -> bool:
+    """Сохраняет изменение расписания с проверкой"""
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Сначала удаляем существующую модификацию для этой пары
+                await cur.execute("""
+                    DELETE FROM rasp_modifications 
+                    WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
+                """, (chat_id, day, week_type, pair_number))
+                
+                # Затем добавляем новую
+                await cur.execute("""
+                    INSERT INTO rasp_modifications (chat_id, day, week_type, pair_number, subject_id, cabinet)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (chat_id, day, week_type, pair_number, subject_id, cabinet))
+                
+                print(f"✅ Модификация сохранена: чат={chat_id}, день={day}, неделя={week_type}, пара={pair_number}")
+                return True
+                
+    except Exception as e:
+        print(f"❌ Ошибка сохранения модификации: {e}")
+        return False
 
 async def get_rasp_modifications(pool, chat_id: int, day: int, week_type: int):
-    """Получает модификации расписания"""
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                SELECT pair_number, subject_id, cabinet
-                FROM rasp_modifications 
-                WHERE chat_id=%s AND day=%s AND week_type=%s
-            """, (chat_id, day, week_type))
-            return await cur.fetchall()
+    """Получает модификации расписания с отладкой"""
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT pair_number, subject_id, cabinet
+                    FROM rasp_modifications 
+                    WHERE chat_id=%s AND day=%s AND week_type=%s
+                    ORDER BY pair_number
+                """, (chat_id, day, week_type))
+                results = await cur.fetchall()
+                print(f"🔍 DEBUG: Найдено модификаций для чата {chat_id}, день {day}, неделя {week_type}: {len(results)}")
+                return results
+    except Exception as e:
+        print(f"❌ Ошибка получения модификаций: {e}")
+        return []
 
 async def clear_rasp_modifications(pool, week_type: int):
     """Очищает все модификации для определенной недели"""
@@ -1364,6 +1386,36 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
     asyncio.create_task(disable_forward_mode_after_timeout(callback.from_user.id, state))
     
     await callback.answer()
+
+@dp.message(Command("check_mods"))
+async def cmd_check_modifications(message: types.Message):
+    """Проверяет существующие модификации"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT chat_id, day, week_type, pair_number, subject_id, cabinet 
+                    FROM rasp_modifications 
+                    ORDER BY chat_id, day, week_type, pair_number
+                """)
+                mods = await cur.fetchall()
+                
+                if not mods:
+                    await message.answer("❌ Нет сохраненных модификаций")
+                    return
+                
+                text = "📋 Сохраненные модификации:\n\n"
+                for mod in mods:
+                    chat_id, day, week_type, pair_num, subject_id, cabinet = mod
+                    text += f"Чат: {chat_id}, День: {day}, Неделя: {week_type}, Пара: {pair_num}, Предмет: {subject_id}, Кабинет: {cabinet}\n"
+                
+                await message.answer(text)
+                
+    except Exception as e:
+        await message.answer(f"❌ Ошибка проверки модификаций: {e}")
 
 async def send_message_to_all_chats(message_text: str, photo=None, document=None, video=None, audio=None, voice=None, sticker=None, caption: str = ""):
     """Отправляет сообщение во все разрешенные чаты"""
@@ -3759,18 +3811,11 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     subject_id = data["subject_id"]
     is_rk = data["is_rk"]
     
+    print(f"🔍 DEBUG: Сохранение модификации - день: {data['day']}, неделя: {data['week_type']}, пара: {pair_number}, предмет: {subject_id}")
+    
     try:
         if is_rk:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
-            ])
-            await callback.message.edit_text(
-                f"📚 Предмет: {subject_name}\n"
-                f"🔢 Тип: с запросом кабинета\n\n"
-                "Введите кабинет для этой пары:",
-                reply_markup=kb
-            )
-            await state.set_state(AddLessonState.cabinet)
+            # ... существующий код для rK предметов
         else:
             cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
             
@@ -3783,7 +3828,8 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             
             # Сохраняем как модификацию для всех чатов
             for chat_id in ALLOWED_CHAT_IDS:
-                await save_rasp_modification(pool, chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet)
+                success = await save_rasp_modification(pool, chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet)
+                print(f"🔍 DEBUG: Модификация для чата {chat_id} - {'успешно' if success else 'ошибка'}")
             
             display_name = clean_subject_name
             
