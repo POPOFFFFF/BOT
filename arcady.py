@@ -3463,35 +3463,29 @@ async def choose_subject_by_id(callback: types.CallbackQuery, state: FSMContext)
         is_rk=is_rk
     )
     
+    # ВСЕГДА продолжаем выбор недели, независимо от типа предмета
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
     if is_rk:
-        # Для rK предметов переходим к вводу кабинета
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
-        ])
-        
         await callback.message.edit_text(
             f"📚 Выбран предмет: {subject_name}\n"
             f"🔢 Тип: с запросом кабинета (rK)\n\n"
-            "Введите кабинет для этой пары:",
+            "Выберите четность недели:",
             reply_markup=kb
         )
-        await state.set_state(AddLessonState.cabinet)
     else:
-        # Для обычных предметов продолжаем как обычно
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-            [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
-        ])
-        
         await callback.message.edit_text(
             f"📚 Выбран предмет: {subject_name}\n"
             f"🏫 Тип: с фиксированным кабинетом\n\n"
             "Выберите четность недели:",
             reply_markup=kb
         )
-        await state.set_state(AddLessonState.week_type)
     
+    await state.set_state(AddLessonState.week_type)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("choose_subject_"))
@@ -4056,21 +4050,26 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     subject_id = data["subject_id"]
     is_rk = data["is_rk"]
     
-    print(f"🔍 DEBUG choose_pair: день={data['day']}, неделя={data['week_type']}, пара={pair_number}, предмет={subject_name}, ID={subject_id}")
+    print(f"🔍 DEBUG choose_pair: день={data['day']}, неделя={data['week_type']}, пара={pair_number}, предмет={subject_name}, ID={subject_id}, rK={is_rk}")
     
     try:
         if is_rk:
+            # Для rK предметов запрашиваем кабинет
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
             ])
+            
             await callback.message.edit_text(
                 f"📚 Предмет: {subject_name}\n"
+                f"📅 День: {DAYS[data['day']-1]}\n" 
+                f"🔢 Пара: {pair_number}\n"
                 f"🔢 Тип: с запросом кабинета\n\n"
                 "Введите кабинет для этой пары:",
                 reply_markup=kb
             )
             await state.set_state(AddLessonState.cabinet)
         else:
+            # Для обычных предметов сразу сохраняем
             cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
             
             if cabinet_match:
@@ -4080,11 +4079,14 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                 cabinet = "Не указан"
                 clean_subject_name = subject_name
             
-            print(f"🔍 DEBUG: Сохраняем модификацию - кабинет: {cabinet}, чистый предмет: {clean_subject_name}")
+            print(f"🔍 DEBUG: Сохраняем обычный предмет - кабинет: {cabinet}")
             
             # Сохраняем как модификацию для всех чатов
+            success_count = 0
             for chat_id in ALLOWED_CHAT_IDS:
                 success = await save_rasp_modification(pool, chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet)
+                if success:
+                    success_count += 1
                 print(f"🔍 DEBUG: Модификация для чата {chat_id} - {'успешно' if success else 'ошибка'}")
             
             display_name = clean_subject_name
@@ -4093,7 +4095,8 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                 f"✅ Урок '{display_name}' добавлен как изменение расписания!\n"
                 f"📅 День: {DAYS[data['day']-1]}\n"
                 f"🔢 Пара: {pair_number}\n"
-                f"🏫 Кабинет: {cabinet}\n\n"
+                f"🏫 Кабинет: {cabinet}\n"
+                f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}\n\n"
                 f"⚙ Админ-панель:",
                 reply_markup=admin_menu()
             )
