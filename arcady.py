@@ -3815,7 +3815,16 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     
     try:
         if is_rk:
-            # ... существующий код для rK предметов
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+            ])
+            await callback.message.edit_text(
+                f"📚 Предмет: {subject_name}\n"
+                f"🔢 Тип: с запросом кабинета\n\n"
+                "Введите кабинет для этой пары:",
+                reply_markup=kb
+            )
+            await state.set_state(AddLessonState.cabinet)
         else:
             cabinet_match = re.search(r'(\s+)(\d+\.?\d*[а-я]?|\d+\.?\d*/\d+\.?\d*|сп/з|актовый зал|спортзал)$', subject_name)
             
