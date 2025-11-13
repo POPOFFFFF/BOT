@@ -3455,25 +3455,43 @@ async def choose_subject_by_id(callback: types.CallbackQuery, state: FSMContext)
             
             subject_name, is_rk = result
     
+    print(f"🔍 DEBUG choose_subject_by_id: предмет='{subject_name}', rK={is_rk}, ID={subject_id}")
+    
     await state.update_data(
         subject=subject_name,
         subject_id=subject_id,
         is_rk=is_rk
     )
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
-    ])
+    if is_rk:
+        # Для rK предметов переходим к вводу кабинета
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        ])
+        
+        await callback.message.edit_text(
+            f"📚 Выбран предмет: {subject_name}\n"
+            f"🔢 Тип: с запросом кабинета (rK)\n\n"
+            "Введите кабинет для этой пары:",
+            reply_markup=kb
+        )
+        await state.set_state(AddLessonState.cabinet)
+    else:
+        # Для обычных предметов продолжаем как обычно
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
+            [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        ])
+        
+        await callback.message.edit_text(
+            f"📚 Выбран предмет: {subject_name}\n"
+            f"🏫 Тип: с фиксированным кабинетом\n\n"
+            "Выберите четность недели:",
+            reply_markup=kb
+        )
+        await state.set_state(AddLessonState.week_type)
     
-    await callback.message.edit_text(
-        f"📚 Выбран предмет: {subject_name}\n"
-        f"🔧 Тип: {'с запросом кабинета (rK)' if is_rk else 'с фиксированным кабинетом'}\n\n"
-        "Выберите четность недели:",
-        reply_markup=kb
-    )
-    await state.set_state(AddLessonState.week_type)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("choose_subject_"))
@@ -4101,27 +4119,103 @@ async def reset_rasp_for_new_week():
 
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
+    """Обработчик ввода кабинета для rK предметов - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     data = await state.get_data()
     cabinet = message.text.strip()
     
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT id FROM subjects WHERE name=%s", (data["subject"],))
-            subject_id = (await cur.fetchone())[0]
-            await cur.execute("""
-                INSERT INTO rasp_detailed (chat_id, day, week_type, pair_number, subject_id, cabinet)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (DEFAULT_CHAT_ID, data["day"], data["week_type"], data["pair_number"], subject_id, cabinet))
+    print(f"🔍 DEBUG set_cabinet: получен кабинет '{cabinet}' для rK предмета")
     
-    await message.answer(
-        f"✅ Урок '{data['subject']}' добавлен!\n"
-        f"📅 День: {DAYS[data['day']-1]}\n" 
-        f"🔢 Пара: {data['pair_number']}\n"
-        f"🏫 Кабинет: {cabinet} (вручную)\n\n"
-        f"⚙ Админ-панель:",
-        reply_markup=admin_menu()
-    )
+    try:
+        # Получаем данные из состояния
+        day = data.get("day")
+        week_type = data.get("week_type") 
+        pair_number = data.get("pair_number")
+        subject_id = data.get("subject_id")
+        subject_name = data.get("subject")
+        
+        if not all([day, week_type, pair_number, subject_id]):
+            await message.answer("❌ Ошибка: не найдены данные о паре. Начните заново.")
+            await state.clear()
+            return
+        
+        print(f"🔍 DEBUG: Сохраняем rK предмет - день:{day}, неделя:{week_type}, пара:{pair_number}, предмет:{subject_name}, кабинет:{cabinet}")
+        
+        # Сохраняем модификацию для ВСЕХ чатов
+        success_count = 0
+        for chat_id in ALLOWED_CHAT_IDS:
+            success = await save_rasp_modification(pool, chat_id, day, week_type, pair_number, subject_id, cabinet)
+            if success:
+                success_count += 1
+            print(f"🔍 DEBUG: Модификация для чата {chat_id} - {'успешно' if success else 'ошибка'}")
+        
+        await message.answer(
+            f"✅ Урок '{subject_name}' добавлен как изменение расписания!\n"
+            f"📅 День: {DAYS[day-1]}\n"
+            f"🔢 Пара: {pair_number}\n"
+            f"🏫 Кабинет: {cabinet} (вручную)\n"
+            f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        print(f"❌ Ошибка в set_cabinet: {e}")
+        await message.answer(f"❌ Ошибка при добавлении урока: {e}")
+    
     await state.clear()
+
+@dp.message(Command("test_rk"))
+async def cmd_test_rk(message: types.Message):
+    """Тест добавления rK предмета"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 4:
+            await message.answer("⚠ Использование: /test_rk <день> <неделя> <пара>\nПример: /test_rk 5 1 3")
+            return
+        
+        day = int(parts[1])
+        week_type = int(parts[2])
+        pair_number = int(parts[3])
+        
+        # Находим первый rK предмет
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, name FROM subjects WHERE rK = TRUE LIMIT 1")
+                subject = await cur.fetchone()
+                
+                if not subject:
+                    await message.answer("❌ Нет rK предметов в базе")
+                    return
+                
+                subject_id, subject_name = subject
+                
+                # Добавляем тестовую модификацию
+                cabinet = "999"  # тестовый кабинет
+                success_count = 0
+                for chat_id in ALLOWED_CHAT_IDS:
+                    success = await save_rasp_modification(pool, chat_id, day, week_type, pair_number, subject_id, cabinet)
+                    if success:
+                        success_count += 1
+        
+        day_name = DAYS[day-1] if 1 <= day <= 6 else f"День {day}"
+        week_name = "нечетная" if week_type == 1 else "четная"
+        
+        await message.answer(
+            f"✅ Тестовый rK предмет добавлен!\n"
+            f"📅 {day_name} | {week_name} неделя\n"
+            f"🔢 Пара: {pair_number}\n"
+            f"📚 Предмет: {subject_name}\n"
+            f"🏫 Кабинет: {cabinet}\n"
+            f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}"
+        )
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка теста: {e}")
+
+
 
 @dp.callback_query(F.data.startswith("addlesson_"))
 async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
