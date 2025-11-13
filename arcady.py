@@ -280,11 +280,15 @@ async def save_rasp_modification(pool, chat_id: int, day: int, week_type: int, p
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
+                print(f"🔍 DEBUG save_rasp_modification: чат={chat_id}, день={day}, неделя={week_type}, пара={pair_number}, subject_id={subject_id}, кабинет={cabinet}")
+                
                 # Сначала удаляем существующую модификацию для этой пары
                 await cur.execute("""
                     DELETE FROM rasp_modifications 
                     WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
                 """, (chat_id, day, week_type, pair_number))
+                
+                print(f"🔍 DEBUG: Удалено старых модификаций: {cur.rowcount}")
                 
                 # Затем добавляем новую
                 await cur.execute("""
@@ -298,6 +302,36 @@ async def save_rasp_modification(pool, chat_id: int, day: int, week_type: int, p
     except Exception as e:
         print(f"❌ Ошибка сохранения модификации: {e}")
         return False
+
+
+@dp.message(Command("force_refresh"))
+async def cmd_force_refresh(message: types.Message):
+    """Принудительно обновляет расписание"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    try:
+        now = datetime.datetime.now(TZ)
+        today = now.date()
+        current_weekday = today.isoweekday()
+        week_type = await get_current_week_type(pool)
+        
+        # Показываем расписание на сегодня
+        text = await get_rasp_formatted(current_weekday, week_type, message.chat.id, today)
+        
+        day_names = {
+            1: "Понедельник", 2: "Вторник", 3: "Среда",
+            4: "Четверг", 5: "Пятница", 6: "Суббота"
+        }
+        
+        week_name = "нечетная" if week_type == 1 else "четная"
+        
+        message_text = f"📅 Расписание на сегодня ({day_names[current_weekday]}) | Неделя: {week_name}\n\n{text}"
+        
+        await message.answer(message_text)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка обновления: {e}")
 
 async def get_rasp_modifications(pool, chat_id: int, day: int, week_type: int):
     """Получает модификации расписания с отладкой"""
@@ -3811,7 +3845,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
     subject_id = data["subject_id"]
     is_rk = data["is_rk"]
     
-    print(f"🔍 DEBUG: Сохранение модификации - день: {data['day']}, неделя: {data['week_type']}, пара: {pair_number}, предмет: {subject_id}")
+    print(f"🔍 DEBUG choose_pair: день={data['day']}, неделя={data['week_type']}, пара={pair_number}, предмет={subject_name}, ID={subject_id}")
     
     try:
         if is_rk:
@@ -3834,6 +3868,8 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             else:
                 cabinet = "Не указан"
                 clean_subject_name = subject_name
+            
+            print(f"🔍 DEBUG: Сохраняем модификацию - кабинет: {cabinet}, чистый предмет: {clean_subject_name}")
             
             # Сохраняем как модификацию для всех чатов
             for chat_id in ALLOWED_CHAT_IDS:
