@@ -5163,73 +5163,6 @@ async def process_save_static_rasp(callback: types.CallbackQuery):
     
     await callback.answer()
 
-async def send_today_rasp():
-    for chat_id in ALLOWED_CHAT_IDS:
-        try:
-            now = datetime.datetime.now(TZ)
-            today = now.date()
-            hour = now.hour
-            
-            # Определяем день для публикации
-            if hour >= 18:
-                target_date = today + datetime.timedelta(days=1)
-                day_to_post = target_date.isoweekday()
-                
-                if day_to_post == 7:  # Воскресенье
-                    target_date += datetime.timedelta(days=1)
-                    day_to_post = 1
-                    day_name = "послезавтра (Понедельник)"
-                else:
-                    day_name = "завтра"
-            else:
-                target_date = today
-                day_to_post = today.isoweekday()
-                
-                if day_to_post == 7:  # Воскресенье
-                    target_date += datetime.timedelta(days=1)
-                    day_to_post = 1
-                    day_name = "завтра (Понедельник)"
-                else:
-                    day_name = "сегодня"
-            
-            # Получаем базовую четность
-            base_week_type = await get_current_week_type(pool)
-            
-            # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - МЕНЯЕМ ЧЕТНОСТЬ
-            if day_to_post == 1 and (today.isoweekday() == 7 or (hour >= 18 and (today + datetime.timedelta(days=1)).isoweekday() == 7)):
-                week_type = 2 if base_week_type == 1 else 1
-                week_name = "нечетная" if week_type == 1 else "четная"
-                day_note = ""
-            else:
-                week_type = base_week_type
-                week_name = "нечетная" if week_type == 1 else "четная"
-                day_note = ""
-            
-            # Получаем расписание для конкретного чата
-            text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
-            
-            # Формируем сообщение
-            day_names = {
-                1: "Понедельник", 2: "Вторник", 3: "Среда",
-                4: "Четверг", 5: "Пятница", 6: "Суббота"
-            }
-            
-            if "(" in day_name and ")" in day_name:
-                msg = f"📅 Расписание на {day_name} | Неделя: {week_name}{day_note}\n\n{text}"
-            else:
-                msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}{day_note}\n\n{text}"
-            
-            # Добавляем анекдот
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-                    row = await cur.fetchone()
-                    if row:
-                        msg += f"\n\n😂 Анекдот:\n{row[0]}"
-            
-            await bot.send_message(chat_id, msg)
-            
-        except Exception as e:
 
 
 @dp.message(Command("listdr"))
@@ -5353,7 +5286,8 @@ async def main():
                     await initialize_static_rasp_from_current(pool, 1)
                     await initialize_static_rasp_from_current(pool, 2)
     except Exception as e:
-        print(f"Ошибка инициализации статичного расписания: {e}")  # Добавить обработку ошибки
+        print(f"Ошибка инициализации статичного расписания: {e}")
+    
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
