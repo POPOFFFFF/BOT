@@ -4243,21 +4243,25 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                     await asyncio.sleep(0.1)
                     await callback.message.answer(full_text, reply_markup=markup)
                 except Exception as answer_error:
-                        
+                    print(f"Ошибка отправки сообщения: {answer_error}")
         elif message:
             try:
                 await message.answer(full_text, reply_markup=markup)
             except Exception as e:
+                print(f"Ошибка отправки сообщения: {e}")
         elif chat_id is not None:
             try:
                 await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
             except Exception as e:
+                print(f"Ошибка отправки сообщения: {e}")
         else:
             try:
                 await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
             except Exception as e:
+                print(f"Ошибка отправки сообщения: {e}")
                 
     except Exception as e:
+        print(f"Общая ошибка в greet_and_send: {e}")
 
 async def safe_send_message(chat_id: int, text: str, reply_markup=None, delay: float = 0.1):
     """Безопасная отправка сообщения с задержкой"""
@@ -4273,6 +4277,7 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("clr_pair_"):])
     data = await state.get_data()
 
+    try:  # Убрать лишний отступ перед этим try
         # Очищаем пару для ВСЕХ чатов через модификации
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -4655,7 +4660,7 @@ async def send_today_rasp():
                 await bot.send_message(chat_id, msg)
 
             except Exception as e:
-
+                print(f"Ошибка отправки расписания в чат {chat_id}: {e}")  # Добавить обработку ошибки
 
 
 
@@ -5353,6 +5358,7 @@ async def main():
                     await initialize_static_rasp_from_current(pool, 1)
                     await initialize_static_rasp_from_current(pool, 2)
     except Exception as e:
+        print(f"Ошибка инициализации статичного расписания: {e}")  # Добавить обработку ошибки
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
