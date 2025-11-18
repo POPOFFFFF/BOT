@@ -4655,7 +4655,7 @@ async def send_today_rasp():
             await bot.send_message(chat_id, msg)
             
         except Exception as e:
-            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")  # ЗАКРЫВАЕМ БЛОК TRY И ДОБАВЛЯЕМ EXCEPT
+            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
 
 
 
