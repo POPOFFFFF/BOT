@@ -4273,7 +4273,6 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
     pair_number = int(callback.data[len("clr_pair_"):])
     data = await state.get_data()
 
-    try:
         # Очищаем пару для ВСЕХ чатов через модификации
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
