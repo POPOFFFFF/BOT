@@ -3999,7 +3999,6 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """, (chat_id, data["day"], data["week_type"], pair_number, None, "Очищено"))
 
-        print(f"✅ Пара {pair_number} очищена для всех чатов")
         
         await callback.message.edit_text(
             f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
@@ -4007,7 +4006,6 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
         )
         
     except Exception as e:
-        print(f"❌ Ошибка при очистке пары: {e}")
         await callback.message.edit_text(
             f"❌ Ошибка при очистке пары: {e}",
             reply_markup=admin_menu()
@@ -4225,7 +4223,6 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                 week_name = "Нечетная" if current_week == 1 else "Четная"
                 week_info = f"\n\n📅 Сейчас неделя: {week_name}"
             except Exception as e:
-                print(f"Ошибка получения четности: {e}")
                 week_info = f"\n\n📅 Информация о неделе временно недоступна"
         
         nickname = await get_nickname(pool, user.id)
@@ -4241,32 +4238,26 @@ async def greet_and_send(user: types.User, text: str, message: types.Message = N
                 # Сначала пробуем редактировать
                 await callback.message.edit_text(full_text, reply_markup=markup)
             except Exception as edit_error:
-                print(f"Не удалось редактировать сообщение: {edit_error}")
                 try:
                     # Если не получилось редактировать, отправляем новое
                     await asyncio.sleep(0.1)
                     await callback.message.answer(full_text, reply_markup=markup)
                 except Exception as answer_error:
-                    print(f"Не удалось отправить сообщение: {answer_error}")
                         
         elif message:
             try:
                 await message.answer(full_text, reply_markup=markup)
             except Exception as e:
-                print(f"Ошибка отправки сообщения: {e}")
         elif chat_id is not None:
             try:
                 await bot.send_message(chat_id=chat_id, text=full_text, reply_markup=markup)
             except Exception as e:
-                print(f"Ошибка отправки в чат {chat_id}: {e}")
         else:
             try:
                 await bot.send_message(chat_id=user.id, text=full_text, reply_markup=markup)
             except Exception as e:
-                print(f"Ошибка отправки в ЛС: {e}")
                 
     except Exception as e:
-        print(f"Общая ошибка в greet_and_send: {e}")
 
 async def safe_send_message(chat_id: int, text: str, reply_markup=None, delay: float = 0.1):
     """Безопасная отправка сообщения с задержкой"""
@@ -4275,7 +4266,6 @@ async def safe_send_message(chat_id: int, text: str, reply_markup=None, delay: f
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
         return True
     except Exception as e:
-        print(f"Ошибка отправки в чат {chat_id}: {e}")
         return False
 
 @dp.callback_query(F.data.startswith("clr_pair_"))
@@ -4323,10 +4313,8 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
     # Получаем модификации (должны ПЕРЕЗАПИСЫВАТЬ статичное)
     modifications = await get_rasp_modifications(pool, chat_id, day, week_type)
     modified_pairs = {row[0]: (row[1], row[2]) for row in modifications}
-    
-    print(f"🔍 DEBUG get_rasp_formatted: день={day}, неделя={week_type}, чат={chat_id}")
-    print(f"🔍 DEBUG: статичных пар={len(static_pairs)}, модификаций={len(modified_pairs)}")
-    
+
+
     # Определяем максимальную пару
     max_pair = 0
     all_pairs = set(static_pairs.keys()) | set(modified_pairs.keys())
@@ -4494,7 +4482,6 @@ async def today_rasp_handler(callback: types.CallbackQuery):
 async def initialize_static_rasp_from_current(pool, week_type: int):
     """Инициализирует статичное расписание из текущих данных БЕЗ ДУБЛИРОВАНИЯ"""
     try:
-        print(f"🔄 Инициализация статичного расписания для недели {week_type}...")
         
         # Очищаем старое статичное расписание для этой недели
         async with pool.acquire() as conn:
@@ -4521,11 +4508,9 @@ async def initialize_static_rasp_from_current(pool, week_type: int):
                 if subject_id:  # Если есть предмет (не свободно)
                     await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
         
-        print(f"✅ Статичное расписание для недели {week_type} инициализировано из чата {main_chat_id}")
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка инициализации статичного расписания: {e}")
         return False
 
 @dp.callback_query(F.data == "tomorrow_rasp")
@@ -4637,7 +4622,6 @@ async def send_today_rasp():
                 # Если сегодня воскресенье ИЛИ сегодня суббота после 18:00
                 if current_weekday == 7 or (current_weekday == 6 and hour >= 18):
                     week_type = 2 if week_type == 1 else 1
-                    print(f"🔁 Смена четности для понедельника: {'нечетная' if week_type == 1 else 'четная'}")
             
             # Получаем расписание
             text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
@@ -4672,10 +4656,6 @@ async def send_today_rasp():
                 await bot.send_message(chat_id, msg)
 
             except Exception as e:
-                print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
-
-        except Exception as e:
-            print(f"❌ Ошибка в send_today_rasp для чата {chat_id}: {e}")
 
 
 
@@ -5251,7 +5231,6 @@ async def send_today_rasp():
             await bot.send_message(chat_id, msg)
             
         except Exception as e:
-            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")
 
 
 @dp.message(Command("listdr"))
@@ -5372,11 +5351,9 @@ async def main():
                 await cur.execute("SELECT COUNT(*) FROM static_rasp")
                 count = (await cur.fetchone())[0]
                 if count == 0:
-                    print("🔄 Первоначальная инициализация статичного расписания...")
                     await initialize_static_rasp_from_current(pool, 1)
                     await initialize_static_rasp_from_current(pool, 2)
     except Exception as e:
-        print(f"❌ Ошибка инициализации статичного расписания: {e}")
     # Пересоздаем задания публикации при старте
     await reschedule_publish_jobs(pool)
     
@@ -5393,14 +5370,9 @@ async def main():
     )
     
     scheduler.start()
-    print("✅ Планировщик запущен")
     
     # Выводим информацию о заданиях для отладки
     jobs = scheduler.get_jobs()
-    print(f"🎯 Активные задания в планировщике: {len(jobs)}")
-    for job in jobs:
-        print(f"  - {job.id}: следующее выполнение в {job.next_run_time}")
-    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
