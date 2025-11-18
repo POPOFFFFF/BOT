@@ -4593,7 +4593,6 @@ async def send_today_rasp():
         try:
             now = datetime.datetime.now(TZ)
             today = now.date()
-            current_weekday = today.isoweekday()
             hour = now.hour
             
             # Определяем день для публикации
@@ -4609,7 +4608,7 @@ async def send_today_rasp():
                     day_name = "завтра"
             else:
                 target_date = today
-                day_to_post = current_weekday
+                day_to_post = today.isoweekday()
                 
                 if day_to_post == 7:  # Воскресенье
                     target_date += datetime.timedelta(days=1)
@@ -4618,16 +4617,20 @@ async def send_today_rasp():
                 else:
                     day_name = "сегодня"
             
-            # ПОЛУЧАЕМ АКТУАЛЬНУЮ ЧЕТНОСТЬ
-            week_type = await get_current_week_type(pool)
+            # Получаем базовую четность
+            base_week_type = await get_current_week_type(pool)
             
-            # ВАЖНО: ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ ИЛИ СУББОТА ПОСЛЕ 18:00 - МЕНЯЕМ ЧЕТНОСТЬ
-            if day_to_post == 1:
-                # Если сегодня воскресенье ИЛИ сегодня суббота после 18:00
-                if current_weekday == 7 or (current_weekday == 6 and hour >= 18):
-                    week_type = 2 if week_type == 1 else 1
+            # ЕСЛИ ПОКАЗЫВАЕМ ПОНЕДЕЛЬНИК И СЕЙЧАС ВОСКРЕСЕНЬЕ - МЕНЯЕМ ЧЕТНОСТЬ
+            if day_to_post == 1 and (today.isoweekday() == 7 or (hour >= 18 and (today + datetime.timedelta(days=1)).isoweekday() == 7)):
+                week_type = 2 if base_week_type == 1 else 1
+                week_name = "нечетная" if week_type == 1 else "четная"
+                day_note = ""
+            else:
+                week_type = base_week_type
+                week_name = "нечетная" if week_type == 1 else "четная"
+                day_note = ""
             
-            # Получаем расписание
+            # Получаем расписание для конкретного чата
             text = await get_rasp_formatted(day_to_post, week_type, chat_id, target_date)
             
             # Формируем сообщение
@@ -4636,31 +4639,23 @@ async def send_today_rasp():
                 4: "Четверг", 5: "Пятница", 6: "Суббота"
             }
             
-            week_name = "нечетная" if week_type == 1 else "четная"
-            
             if "(" in day_name and ")" in day_name:
-                msg = f"📅 Расписание на {day_name} | Неделя: {week_name}\n\n{text}"
+                msg = f"📅 Расписание на {day_name} | Неделя: {week_name}{day_note}\n\n{text}"
             else:
-                msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}\n\n{text}"
+                msg = f"📅 Расписание на {day_name} ({day_names[day_to_post]}) | Неделя: {week_name}{day_note}\n\n{text}"
             
-            try:
-                # Добавляем анекдот
-                async with pool.acquire() as conn:
-                    async with conn.cursor() as cur:
-                        await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
-                        row = await cur.fetchone()
-                        if row:
-                            msg += f"\n\n😂 Анекдот:\n{row[0]}"
-
-                # Добавляем поздравления с ДР (если есть)
-                birthday_footer = await format_birthday_footer(pool)
-                if birthday_footer:
-                    msg += birthday_footer
-
-                await bot.send_message(chat_id, msg)
-
-            except Exception as e:
-                print(f"Ошибка отправки расписания в чат {chat_id}: {e}")  # Добавить обработку ошибки
+            # Добавляем анекдот
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT text FROM anekdoty ORDER BY RAND() LIMIT 1")
+                    row = await cur.fetchone()
+                    if row:
+                        msg += f"\n\n😂 Анекдот:\n{row[0]}"
+            
+            await bot.send_message(chat_id, msg)
+            
+        except Exception as e:
+            print(f"Ошибка отправки расписания в чат {chat_id}: {e}")  # ЗАКРЫВАЕМ БЛОК TRY И ДОБАВЛЯЕМ EXCEPT
 
 
 
