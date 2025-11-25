@@ -1278,6 +1278,116 @@ async def cmd_add_birthday(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении: {e}")
 
+
+
+@dp.message(Command("экспорт", "export", "бэкап", "backup"))
+async def cmd_export_database(message: types.Message):
+    """Экспорт базы данных в виде SQL файлов"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для использования этой команды")
+        return
+
+    try:
+        # Создаем временный файл для дампа
+        timestamp = datetime.datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+        filename = f"backup_{timestamp}.sql"
+        
+        # Получаем данные из всех таблиц
+        tables = [
+            'rasp', 'birthdays', 'nicknames', 'static_rasp', 'rasp_modifications',
+            'publish_times', 'anekdoty', 'subjects', 'special_users', 'rasp_detailed',
+            'current_week_type', 'teacher_messages', 'group_fund_balance',
+            'group_fund_members', 'group_fund_purchases', 'homework'
+        ]
+        
+        sql_content = f"-- Backup created at {datetime.datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}\n"
+        sql_content += f"-- Database: {DB_NAME}\n\n"
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                for table in tables:
+                    # Проверяем существует ли таблица
+                    await cur.execute("SHOW TABLES LIKE %s", (table,))
+                    if not await cur.fetchone():
+                        sql_content += f"-- Table {table} does not exist\n\n"
+                        continue
+                    
+                    sql_content += f"-- Table: {table}\n"
+                    
+                    # Получаем структуру таблицы
+                    await cur.execute(f"SHOW CREATE TABLE {table}")
+                    create_table = await cur.fetchone()
+                    if create_table:
+                        sql_content += f"{create_table[1]};\n\n"
+                    
+                    # Получаем данные таблицы
+                    await cur.execute(f"SELECT * FROM {table}")
+                    rows = await cur.fetchall()
+                    
+                    if rows:
+                        # Получаем названия колонок
+                        await cur.execute(f"DESCRIBE {table}")
+                        columns = [col[0] for col in await cur.fetchall()]
+                        
+                        sql_content += f"-- Data for table {table} ({len(rows)} rows)\n"
+                        
+                        for row in rows:
+                            values = []
+                            for value in row:
+                                if value is None:
+                                    values.append("NULL")
+                                elif isinstance(value, (int, float)):
+                                    values.append(str(value))
+                                elif isinstance(value, datetime.datetime):
+                                    values.append(f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'")
+                                elif isinstance(value, datetime.date):
+                                    values.append(f"'{value.strftime('%Y-%m-%d')}'")
+                                else:
+                                    # Экранируем специальные символы
+                                    escaped_value = str(value).replace("'", "''").replace("\\", "\\\\")
+                                    values.append(f"'{escaped_value}'")
+                            
+                            insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(values)});"
+                            sql_content += insert_sql + "\n"
+                        
+                        sql_content += "\n"
+                    else:
+                        sql_content += f"-- No data in table {table}\n\n"
+        
+        # Создаем файл в памяти
+        sql_file = io.BytesIO(sql_content.encode('utf-8'))
+        sql_file.name = filename
+        
+        # Отправляем файл пользователю
+        await message.answer_document(
+            document=types.BufferedInputFile(
+                sql_file.getvalue(),
+                filename=filename
+            ),
+            caption=f"📦 Бэкап базы данных\n🕐 {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}\n📊 Таблиц: {len(tables)}"
+        )
+        
+        # Закрываем файл
+        sql_file.close()
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при создании бэкапа: {e}")
+        print(f"Backup error: {e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 async def check_birthdays():
     """Проверяет дни рождения и отправляет поздравления во все беседы"""
     try:
