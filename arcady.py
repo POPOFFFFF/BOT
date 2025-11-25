@@ -326,6 +326,7 @@ async def clear_rasp_modifications(pool, week_type: int):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("DELETE FROM rasp_modifications WHERE week_type=%s", (week_type,))
+            print(f"🧹 Очищено модификаций для недели {week_type}: {cur.rowcount} записей")
 
 async def sync_rasp_to_all_chats(source_chat_id: int):
     """Синхронизирует расписание из исходного чата во все остальные"""
@@ -979,13 +980,20 @@ async def get_current_week_type(pool, chat_id: int = None) -> int:
                     
                     # Если последнее обновление было ДО этого понедельника - меняем четность
                     if last_updated_date < this_monday:
+                        previous_week = week_type
                         week_type = 2 if week_type == 1 else 1
+                        
+                        # ОБНОВЛЯЕМ ЗАПИСЬ В БАЗЕ
                         await cur.execute("""
                             UPDATE current_week_type 
                             SET week_type=%s, updated_at=%s 
                             WHERE chat_id=%s
                         """, (week_type, today, COMMON_CHAT_ID))
+                        
+                        # ✅ ВОТ ВАЖНОЕ ИСПРАВЛЕНИЕ: СБРАСЫВАЕМ МОДИФИКАЦИИ ПРИ АВТОМАТИЧЕСКОЙ СМЕНЕ НЕДЕЛИ
+                        await clear_rasp_modifications(pool, previous_week)
                         print(f"✅ Автоматически переключена неделя на: {'нечетная' if week_type == 1 else 'четная'}")
+                        print(f"✅ Сброшены модификации для предыдущей недели {previous_week}")
                 
                 return week_type
             else:
