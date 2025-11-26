@@ -1512,13 +1512,69 @@ async def cancel_sql(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ Запрос отменен.")
     await callback.answer()
 
+@dp.callback_query(F.data == "admin_commands")
+async def admin_commands_handler(callback: types.CallbackQuery):
+    """Показывает все команды бота для админов"""
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
 
+    commands_text = """
+🤖 **КОМАНДЫ АДМИНИСТРАТОРА**
 
+📊 **Управление расписанием:**
+`/аркадий` - Главное меню
+`/никнейм <имя>` - Установить никнейм
+`/анекдот` - Случайный анекдот
 
+👥 **Управление пользователями:**
+`/акик` - Кикнуть пользователя (в ответ на сообщение)
+`/амут <время> <единица>` - Мут пользователя
+`/аразмут` - Снять мут
+`/аспам` - Удалить спам и кикнуть
 
+🎂 **Дни рождения:**
+`/adddr Имя ДД.ММ.ГГГГ` - Добавить день рождения
+`/listdr` - Список всех дней рождений
+`/deldr <id>` - Удалить день рождения
 
+💰 **Фонд группы:**
+`/sql <запрос>` - Выполнить SQL запрос
+`/экспорт` - Скачать бэкап базы данных
 
+⚙ **Системные команды:**
+`/jobs` - Показать активные задания планировщика
+`/delptime <id>` - Удалить время публикации
 
+📋 **Админ-панель (кнопки):**
+• Установить четность недели
+• Управление временем публикаций  
+• Добавить/удалить пары
+• Установить кабинеты
+• Управление предметами
+• Сохранить статичное расписание
+• Управление домашними заданиями
+• Управление спец-пользователями
+• Удаление сообщений преподавателей
+
+💡 **Примеры SQL запросов:**
+`/sql SELECT * FROM group_fund_balance`
+`/sql UPDATE group_fund_balance SET current_balance = 1000 WHERE id = 1`
+`/sql INSERT INTO table VALUES (...)`
+
+🛡️ **Модерация в беседах:**
+• Кик, мут, бан через кнопки
+• Очистка спама
+• Просмотр сообщений преподавателей
+"""
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅ Назад в админку", callback_data="menu_admin")],
+        [InlineKeyboardButton(text="🔄 Обновить список", callback_data="admin_commands")]
+    ])
+
+    await callback.message.edit_text(commands_text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
 
 async def check_birthdays():
     """Проверяет дни рождения и отправляет поздравления во все беседы"""
@@ -2185,27 +2241,31 @@ def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
         [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
-
+        
         [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
         [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
         [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
-
+        
         [InlineKeyboardButton(text="➕ Добавить пару", callback_data="admin_add_lesson")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
-
+        
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
-
+        
         [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],
         [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data="admin_delete_subject")],
-
+        
         [InlineKeyboardButton(text="💾 Сохранить статичное расписание", callback_data="admin_save_static_rasp")],
-        # Новые кнопки для домашних заданий
+        
         [InlineKeyboardButton(text="📝 Добавить домашнее задание", callback_data="admin_add_homework")],
         [InlineKeyboardButton(text="✏️ Редактировать домашнее задание", callback_data="admin_edit_homework")],
         [InlineKeyboardButton(text="🗑️ Удалить домашнее задание", callback_data="admin_delete_homework")],
-
+        
         [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],
         [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data="admin_delete_teacher_message")],
+        
+        # НОВАЯ КНОПКА - КОМАНДЫ
+        [InlineKeyboardButton(text="📋 Все команды", callback_data="admin_commands")],
+        
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
