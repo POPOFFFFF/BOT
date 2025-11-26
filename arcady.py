@@ -2325,9 +2325,10 @@ async def clear_modifications_week_handler(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("confirm_clear_all_"))
 async def confirm_clear_all_modifications(callback: types.CallbackQuery):
     """Подтверждение сброса всех модификаций для недели"""
-    week_type = int(callback.data.split("_")[4])
-    
     try:
+        # Правильно извлекаем week_type из callback_data
+        week_type = int(callback.data.split("_")[3])  # Было [4], должно быть [3]
+        
         # Сбрасываем все модификации для выбранной недели
         cleared_count = await clear_rasp_modifications(pool, week_type)
         
@@ -2422,11 +2423,11 @@ async def clear_modifications_choose_specific_day(callback: types.CallbackQuery,
 @dp.callback_query(F.data.startswith("confirm_clear_day_"))
 async def confirm_clear_day_modifications(callback: types.CallbackQuery):
     """Подтверждение сброса модификаций для конкретного дня"""
-    parts = callback.data.split("_")
-    week_type = int(parts[3])
-    day = int(parts[4])
-    
     try:
+        parts = callback.data.split("_")
+        week_type = int(parts[3])  # confirm_clear_day_1_1 → [3] = 1
+        day = int(parts[4])        # confirm_clear_day_1_1 → [4] = 1
+        
         # Сбрасываем модификации для конкретного дня и недели
         cleared_count = await clear_day_modifications(pool, week_type, day)
         
