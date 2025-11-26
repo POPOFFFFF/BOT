@@ -1377,8 +1377,140 @@ async def cmd_export_database(message: types.Message):
 
 
 
+@dp.message(Command("sql", "запрос"))
+async def cmd_execute_sql(message: types.Message):
+    """Выполнение произвольных SQL запросов"""
+    if message.from_user.id not in ALLOWED_USERS:
+        await message.answer("❌ У вас нет прав для использования этой команды")
+        return
 
+    # Получаем SQL запрос из сообщения
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "⚠ Использование:\n"
+            "/sql <SQL запрос>\n\n"
+            "Примеры:\n"
+            "/sql INSERT INTO group_fund_balance (id, current_balance, updated_at) VALUES (23, '567.53', '2025-11-26 17:09:39')\n"
+            "/sql UPDATE group_fund_balance SET current_balance = 1000 WHERE id = 1\n"
+            "/sql SELECT * FROM group_fund_balance\n\n"
+            "⚠ Внимание: Будьте осторожны с DELETE и DROP операциями!"
+        )
+        return
 
+    sql_query = parts[1].strip()
+    
+    # Проверяем на опасные операции (опционально)
+    dangerous_keywords = ['DROP TABLE', 'DELETE FROM', 'TRUNCATE', 'ALTER TABLE']
+    if any(keyword in sql_query.upper() for keyword in dangerous_keywords):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Выполнить anyway", callback_data=f"confirm_dangerous_{hash(sql_query)}")],
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_sql")]
+        ])
+        await message.answer(
+            f"⚠ Внимание! Запрос содержит потенциально опасную операцию:\n\n"
+            f"`{sql_query}`\n\n"
+            f"Вы уверены, что хотите выполнить этот запрос?",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+        return
+
+    await execute_sql_query(message, sql_query)
+
+async def execute_sql_query(message: types.Message, sql_query: str):
+    """Выполняет SQL запрос и возвращает результат"""
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Выполняем запрос
+                await cur.execute(sql_query)
+                
+                # Определяем тип запроса
+                query_type = sql_query.strip().upper().split()[0]
+                
+                if query_type in ('SELECT', 'SHOW', 'DESCRIBE'):
+                    # Для SELECT запросов возвращаем результаты
+                    rows = await cur.fetchall()
+                    
+                    if not rows:
+                        await message.answer("✅ Запрос выполнен. Результатов нет.")
+                        return
+                    
+                    # Получаем названия колонок
+                    column_names = [desc[0] for desc in cur.description]
+                    
+                    # Форматируем результат
+                    result_text = f"📊 Результат запроса ({len(rows)} строк):\n\n"
+                    
+                    # Ограничиваем вывод для больших результатов
+                    max_rows = 20
+                    if len(rows) > max_rows:
+                        result_text += f"⚠ Показано первых {max_rows} из {len(rows)} строк:\n\n"
+                        rows = rows[:max_rows]
+                    
+                    # Добавляем заголовки колонок
+                    result_text += " | ".join(column_names) + "\n"
+                    result_text += "─" * (len(" | ".join(column_names)) + 10) + "\n"
+                    
+                    # Добавляем данные
+                    for row in rows:
+                        row_str = " | ".join(str(value) if value is not None else "NULL" for value in row)
+                        result_text += row_str + "\n"
+                    
+                    # Если результат слишком длинный, отправляем файлом
+                    if len(result_text) > 4000:
+                        file_content = f"SQL Query: {sql_query}\n\n{result_text}"
+                        file_io = io.BytesIO(file_content.encode('utf-8'))
+                        file_io.name = f"sql_result_{datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.txt"
+                        
+                        await message.answer_document(
+                            document=types.BufferedInputFile(
+                                file_io.getvalue(),
+                                filename=file_io.name
+                            ),
+                            caption=f"📋 Результат SQL запроса\n🕐 {datetime.datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}"
+                        )
+                        file_io.close()
+                    else:
+                        await message.answer(f"```\n{result_text}\n```", parse_mode="Markdown")
+                        
+                else:
+                    # Для INSERT, UPDATE, DELETE возвращаем количество затронутых строк
+                    affected_rows = cur.rowcount
+                    await message.answer(f"✅ Запрос выполнен успешно!\n\nЗатронуто строк: {affected_rows}")
+                
+                # Коммитим изменения для не-SELECT запросов
+                if query_type not in ('SELECT', 'SHOW', 'DESCRIBE'):
+                    await conn.commit()
+                
+    except Exception as e:
+        error_msg = f"❌ Ошибка выполнения SQL запроса:\n\n`{e}`"
+        await message.answer(error_msg, parse_mode="Markdown")
+        print(f"SQL Error: {e}")
+
+# Обработчики для подтверждения опасных операций
+@dp.callback_query(F.data.startswith("confirm_dangerous_"))
+async def confirm_dangerous_sql(callback: types.CallbackQuery):
+    """Подтверждение выполнения опасного SQL запроса"""
+    try:
+        # Получаем оригинальный запрос из сообщения
+        original_message = callback.message.text
+        sql_query = original_message.split("`")[1]  # Извлекаем запрос из бэктиков
+        
+        await callback.message.edit_text("🔄 Выполняю запрос...")
+        await execute_sql_query(callback.message, sql_query)
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
+    
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_sql")
+async def cancel_sql(callback: types.CallbackQuery):
+    """Отмена SQL запроса"""
+    await callback.message.edit_text("❌ Запрос отменен.")
+    await callback.answer()
 
 
 
