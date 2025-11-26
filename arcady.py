@@ -1073,6 +1073,10 @@ ZVONKI_SATURDAY = [
     "5 пара: 1-2 урок 15:25-16:55",
     "6 пара: 1-2 урок 17:05-18:50"
 ]
+class ClearModificationsState(StatesGroup):
+    week_type = State()
+    day = State()
+    confirm_clear_all = State()
 class ViewMessagesState(StatesGroup):
     browsing = State()
 class SendMessageState(StatesGroup):
@@ -2249,6 +2253,9 @@ def admin_menu():
         [InlineKeyboardButton(text="➕ Добавить пару", callback_data="admin_add_lesson")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         
+        # НОВАЯ КНОПКА - СБРОС МОДИФИКАЦИЙ
+        [InlineKeyboardButton(text="🗑️ Сбросить модификации", callback_data="admin_clear_modifications")],
+        
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
         
         [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],
@@ -2263,12 +2270,217 @@ def admin_menu():
         [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],
         [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data="admin_delete_teacher_message")],
         
-        # НОВАЯ КНОПКА - КОМАНДЫ
         [InlineKeyboardButton(text="📋 Все команды", callback_data="admin_commands")],
         
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+# Обработчик кнопки сброса модификаций
+@dp.callback_query(F.data == "admin_clear_modifications")
+async def admin_clear_modifications_start(callback: types.CallbackQuery):
+    """Начало сброса модификаций"""
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data="clear_mod_week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data="clear_mod_week_2")],
+        [InlineKeyboardButton(text="📅 Выбрать день", callback_data="clear_mod_choose_day")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    await callback.message.edit_text(
+        "🗑️ Сброс модификаций расписания\n\n"
+        "Выберите опцию:\n"
+        "• Нечетная/четная неделя - сбросить ВСЕ модификации для выбранной недели\n"
+        "• Выбрать день - сбросить модификации для конкретного дня",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Обработчик выбора недели для полного сброса
+@dp.callback_query(F.data.startswith("clear_mod_week_"))
+async def clear_modifications_week_handler(callback: types.CallbackQuery):
+    """Сброс всех модификаций для выбранной недели"""
+    week_type = int(callback.data.split("_")[3])
+    
+    week_name = "нечетной" if week_type == 1 else "четной"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, сбросить всё", callback_data=f"confirm_clear_all_{week_type}")],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data="admin_clear_modifications")]
+    ])
+    
+    await callback.message.edit_text(
+        f"⚠️ Подтверждение сброса\n\n"
+        f"Вы собираетесь сбросить ВСЕ модификации расписания для {week_name} недели.\n\n"
+        f"Это действие нельзя отменить!",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Обработчик подтверждения полного сброса
+@dp.callback_query(F.data.startswith("confirm_clear_all_"))
+async def confirm_clear_all_modifications(callback: types.CallbackQuery):
+    """Подтверждение сброса всех модификаций для недели"""
+    week_type = int(callback.data.split("_")[4])
+    
+    try:
+        # Сбрасываем все модификации для выбранной недели
+        cleared_count = await clear_rasp_modifications(pool, week_type)
+        
+        week_name = "нечетной" if week_type == 1 else "четной"
+        
+        await callback.message.edit_text(
+            f"✅ Сброс завершен!\n\n"
+            f"Удалены все модификации для {week_name} недели.\n"
+            f"Очищено записей: {cleared_count}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при сбросе модификаций: {e}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    
+    await callback.answer()
+
+# Обработчик выбора дня для сброса
+@dp.callback_query(F.data == "clear_mod_choose_day")
+async def clear_modifications_choose_day_start(callback: types.CallbackQuery, state: FSMContext):
+    """Начало выбора дня для сброса модификаций"""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data="clear_day_week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data="clear_day_week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_clear_modifications")]
+    ])
+    
+    await callback.message.edit_text(
+        "🗑️ Сброс модификаций для дня\n\n"
+        "Сначала выберите четность недели:",
+        reply_markup=kb
+    )
+    await state.set_state(ClearModificationsState.week_type)
+    await callback.answer()
+
+# Обработчик выбора недели для сброса по дням
+@dp.callback_query(F.data.startswith("clear_day_week_"))
+async def clear_modifications_choose_week(callback: types.CallbackQuery, state: FSMContext):
+    """Выбор недели для сброса модификаций по дням"""
+    week_type = int(callback.data.split("_")[3])
+    await state.update_data(week_type=week_type)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=day, callback_data=f"clear_mod_day_{i+1}")] 
+        for i, day in enumerate(DAYS)
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_clear_modifications")]]
+    )
+    
+    week_name = "нечетной" if week_type == 1 else "четной"
+    
+    await callback.message.edit_text(
+        f"🗑️ Сброс модификаций для {week_name} недели\n\n"
+        "Выберите день недели:",
+        reply_markup=kb
+    )
+    await state.set_state(ClearModificationsState.day)
+    await callback.answer()
+
+# Обработчик выбора дня для сброса
+@dp.callback_query(F.data.startswith("clear_mod_day_"))
+async def clear_modifications_choose_specific_day(callback: types.CallbackQuery, state: FSMContext):
+    """Выбор конкретного дня для сброса модификаций"""
+    day = int(callback.data.split("_")[3])
+    
+    data = await state.get_data()
+    week_type = data["week_type"]
+    
+    day_name = DAYS[day-1]
+    week_name = "нечетной" if week_type == 1 else "четной"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, сбросить", callback_data=f"confirm_clear_day_{week_type}_{day}")],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data="admin_clear_modifications")]
+    ])
+    
+    await callback.message.edit_text(
+        f"⚠️ Подтверждение сброса\n\n"
+        f"Вы собираетесь сбросить модификации расписания:\n"
+        f"📅 День: {day_name}\n"
+        f"🔢 Неделя: {week_name}\n\n"
+        f"Это действие нельзя отменить!",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+# Обработчик подтверждения сброса для конкретного дня
+@dp.callback_query(F.data.startswith("confirm_clear_day_"))
+async def confirm_clear_day_modifications(callback: types.CallbackQuery):
+    """Подтверждение сброса модификаций для конкретного дня"""
+    parts = callback.data.split("_")
+    week_type = int(parts[3])
+    day = int(parts[4])
+    
+    try:
+        # Сбрасываем модификации для конкретного дня и недели
+        cleared_count = await clear_day_modifications(pool, week_type, day)
+        
+        day_name = DAYS[day-1]
+        week_name = "нечетной" if week_type == 1 else "четной"
+        
+        await callback.message.edit_text(
+            f"✅ Сброс завершен!\n\n"
+            f"Удалены модификации для:\n"
+            f"📅 День: {day_name}\n"
+            f"🔢 Неделя: {week_name}\n"
+            f"Очищено записей: {cleared_count}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при сбросе модификаций: {e}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    
+    await callback.answer()
+
+# Новая функция для очистки модификаций по дню и неделе
+async def clear_day_modifications(pool, week_type: int, day: int) -> int:
+    """Очищает модификации для конкретного дня и недели"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Очищаем для всех чатов
+            total_cleared = 0
+            for chat_id in ALLOWED_CHAT_IDS:
+                await cur.execute("""
+                    DELETE FROM rasp_modifications 
+                    WHERE chat_id=%s AND week_type=%s AND day=%s
+                """, (chat_id, week_type, day))
+                total_cleared += cur.rowcount
+            
+            return total_cleared
+
+# Обновляем существующую функцию clear_rasp_modifications для возврата количества
+async def clear_rasp_modifications(pool, week_type: int) -> int:
+    """Очищает все модификации для определенной недели и возвращает количество удаленных записей"""
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Очищаем для всех чатов
+            total_cleared = 0
+            for chat_id in ALLOWED_CHAT_IDS:
+                await cur.execute("DELETE FROM rasp_modifications WHERE chat_id=%s AND week_type=%s", (chat_id, week_type))
+                total_cleared += cur.rowcount
+            
+            print(f"🧹 Очищено модификаций для недели {week_type}: {total_cleared} записей")
+            return total_cleared
 
 # Меню фонда группы (для всех в беседе)
 @dp.callback_query(F.data == "menu_group_fund")
