@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup
 import time
 from collections import defaultdict
 from aiogram.exceptions import TelegramRetryAfter
+import string
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_IDS_STR = os.getenv("CHAT_ID", "")
@@ -42,6 +43,170 @@ scheduler = AsyncIOScheduler(timezone=TZ)
 ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
+
+# Генератор случайных callback data
+def generate_callback(length=16):
+    """Генерирует случайный callback из букв и цифр"""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
+
+# Словарь для маппинга callback data
+CALLBACK_MAP = {
+    # Основные меню
+    "menu_back": generate_callback(),
+    "menu_admin": generate_callback(),
+    "admin_commands": generate_callback(),
+    
+    # Расписание
+    "menu_rasp": generate_callback(),
+    "today_rasp": generate_callback(),
+    "tomorrow_rasp": generate_callback(),
+    "menu_zvonki": generate_callback(),
+    "menu_homework": generate_callback(),
+    "menu_birthdays": generate_callback(),
+    
+    # Звонки
+    "zvonki_weekday": generate_callback(),
+    "zvonki_saturday": generate_callback(),
+    
+    # Админка - четность
+    "admin_setchet": generate_callback(),
+    "admin_show_chet": generate_callback(),
+    "admin_sync_week": generate_callback(),
+    
+    # Админка - публикации
+    "admin_list_publish_times": generate_callback(),
+    "admin_set_publish_time": generate_callback(),
+    "admin_my_publish_time": generate_callback(),
+    
+    # Админка - управление расписанием
+    "admin_add_lesson": generate_callback(),
+    "admin_clear_pair": generate_callback(),
+    "admin_clear_modifications": generate_callback(),
+    "admin_set_cabinet": generate_callback(),
+    "admin_save_static_rasp": generate_callback(),
+    
+    # Админка - предметы
+    "admin_add_subject": generate_callback(),
+    "admin_delete_subject": generate_callback(),
+    
+    # Админка - домашние задания
+    "admin_add_homework": generate_callback(),
+    "admin_edit_homework": generate_callback(),
+    "admin_delete_homework": generate_callback(),
+    
+    # Админка - спец-пользователи
+    "admin_add_special_user": generate_callback(),
+    "admin_delete_teacher_message": generate_callback(),
+    
+    # Сообщения преподавателей
+    "send_message_chat": generate_callback(),
+    "view_teacher_messages": generate_callback(),
+    "menu_back_from_messages": generate_callback(),
+    "back_to_messages_list": generate_callback(),
+    
+    # Фонд группы
+    "menu_group_fund": generate_callback(),
+    "fund_purchases": generate_callback(),
+    "fund_donations": generate_callback(),
+    "menu_fund_management": generate_callback(),
+    "fund_manage_members": generate_callback(),
+    "fund_add_member": generate_callback(),
+    "fund_delete_member": generate_callback(),
+    "fund_manage_balance": generate_callback(),
+    "fund_manage_purchases": generate_callback(),
+    "fund_add_purchase": generate_callback(),
+    "fund_delete_purchase": generate_callback(),
+    
+    # Дни недели для расписания (генерируем динамически)
+}
+
+# Динамические callback для дней недели и других сущностей
+def init_dynamic_callbacks():
+    """Инициализирует динамические callback data"""
+    dynamic_callbacks = {}
+    
+    # Дни недели для расписания
+    for day_num in range(1, 7):
+        dynamic_callbacks[f"rasp_day_{day_num}"] = generate_callback()
+        for week_type in [1, 2]:
+            dynamic_callbacks[f"rasp_show_{day_num}_{week_type}"] = generate_callback()
+            dynamic_callbacks[f"clear_mod_day_{day_num}"] = generate_callback()
+            dynamic_callbacks[f"confirm_clear_day_{week_type}_{day_num}"] = generate_callback()
+    
+    # Недели
+    for week_type in [1, 2]:
+        dynamic_callbacks[f"week_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"cab_week_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"clr_week_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"set_week_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"clear_mod_week_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"confirm_clear_all_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"clear_day_week_{week_type}"] = generate_callback()
+        dynamic_callbacks[f"save_static_{week_type}"] = generate_callback()
+    
+    # Пары
+    for pair_num in range(1, 7):
+        dynamic_callbacks[f"pair_{pair_num}"] = generate_callback()
+        dynamic_callbacks[f"cab_pair_{pair_num}"] = generate_callback()
+        dynamic_callbacks[f"clr_pair_{pair_num}"] = generate_callback()
+    
+    # Дни для кабинетов и очистки
+    for day_num in range(1, 7):
+        dynamic_callbacks[f"day_{day_num}"] = generate_callback()
+        dynamic_callbacks[f"cab_day_{day_num}"] = generate_callback()
+        dynamic_callbacks[f"clr_day_{day_num}"] = generate_callback()
+    
+    # Предметы (будет генерироваться динамически при создании)
+    # dynamic_callbacks["choose_subject_xxx"] будет генерироваться на лету
+    
+    # Сообщения преподавателей
+    dynamic_callbacks["stop_forward_mode"] = generate_callback()
+    
+    # SQL операции
+    dynamic_callbacks["cancel_sql"] = generate_callback()
+    
+    # Управление модификациями
+    dynamic_callbacks["clear_mod_choose_day"] = generate_callback()
+    
+    # Управление участниками фонда
+    dynamic_callbacks["menu_admin_from_delete"] = generate_callback()
+    dynamic_callbacks["cancel_delete_msg"] = generate_callback()
+    dynamic_callbacks["cancel_delete_subject"] = generate_callback()
+    
+    CALLBACK_MAP.update(dynamic_callbacks)
+
+# Инициализируем динамические callback
+init_dynamic_callbacks()
+
+# Функции для работы с callback
+def get_callback(key):
+    """Получает callback data по ключу"""
+    return CALLBACK_MAP.get(key, key)
+
+def create_callback(key, *args):
+    """Создает callback с параметрами"""
+    base_callback = get_callback(key)
+    if args:
+        return f"{base_callback}_{'_'.join(str(arg) for arg in args)}"
+    return base_callback
+
+def parse_callback(callback_data):
+    """Парсит callback data и возвращает оригинальный ключ"""
+    # Ищем полное совпадение
+    if callback_data in CALLBACK_MAP.values():
+        for key, value in CALLBACK_MAP.items():
+            if value == callback_data:
+                return key
+    
+    # Ищем частичное совпадение (с параметрами)
+    for key, base_callback in CALLBACK_MAP.items():
+        if callback_data.startswith(base_callback + "_"):
+            # Возвращаем ключ с параметрами
+            params = callback_data[len(base_callback) + 1:]
+            return f"{key}_{params}" if params else key
+    
+    return callback_data
 
 user_last_action = defaultdict(float)
 FLOOD_DELAY = 1.0  # 1 секунда между действиями
@@ -1409,7 +1574,7 @@ async def cmd_execute_sql(message: types.Message):
     if any(keyword in sql_query.upper() for keyword in dangerous_keywords):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Выполнить anyway", callback_data=f"confirm_dangerous_{hash(sql_query)}")],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_sql")]
+            [InlineKeyboardButton(text="❌ Отменить", callback_data=get_callback("cancel_sql"))]
         ])
         await message.answer(
             f"⚠ Внимание! Запрос содержит потенциально опасную операцию:\n\n"
@@ -1510,13 +1675,13 @@ async def confirm_dangerous_sql(callback: types.CallbackQuery):
     
     await callback.answer()
 
-@dp.callback_query(F.data == "cancel_sql")
+@dp.callback_query(F.data == get_callback("cancel_sql"))
 async def cancel_sql(callback: types.CallbackQuery):
     """Отмена SQL запроса"""
     await callback.message.edit_text("❌ Запрос отменен.")
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_commands")
+@dp.callback_query(F.data == get_callback("admin_commands"))
 async def admin_commands_handler(callback: types.CallbackQuery):
     """Показывает все команды бота для админов"""
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -1531,7 +1696,7 @@ async def admin_commands_handler(callback: types.CallbackQuery):
 `/никнейм <имя>` - Установить никнейм
 `/анекдот` - Случайный анекдот
 
-👥 **Управление пользователями:**
+👥 **Управление пользователей:**
 `/акик` - Кикнуть пользователя (в ответ на сообщение)
 `/амут <время> <единица>` - Мут пользователя
 `/аразмут` - Снять мут
@@ -1573,8 +1738,8 @@ async def admin_commands_handler(callback: types.CallbackQuery):
 """
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад в админку", callback_data="menu_admin")],
-        [InlineKeyboardButton(text="🔄 Обновить список", callback_data="admin_commands")]
+        [InlineKeyboardButton(text="⬅ Назад в админку", callback_data=get_callback("menu_admin"))],
+        [InlineKeyboardButton(text="🔄 Обновить список", callback_data=get_callback("admin_commands"))]
     ])
 
     await callback.message.edit_text(commands_text, reply_markup=kb, parse_mode="Markdown")
@@ -1604,7 +1769,7 @@ async def check_birthdays():
             elif isinstance(birth_date, str):
                 birth_date_obj = datetime.datetime.strptime(birth_date, '%Y-%m-%d').date()
             else:
-                print(f"❌ Неизвестный формат даты: {type(birth_date)}")
+                print(f"❌ Неизвестный формат дату: {type(birth_date)}")
                 continue
             
             # Вычисляем возраст
@@ -1658,7 +1823,7 @@ async def delete_teacher_message(pool, message_id: int) -> bool:
             await conn.commit()
             return cur.rowcount > 0
 
-@dp.callback_query(F.data == "send_message_chat")
+@dp.callback_query(F.data == get_callback("send_message_chat"))
 async def send_message_chat_start(callback: types.CallbackQuery, state: FSMContext):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -1685,7 +1850,7 @@ async def send_message_chat_start(callback: types.CallbackQuery, state: FSMConte
     
     # Сообщаем о начале режима с кнопкой отмены
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏹️ Закончить пересылку", callback_data="stop_forward_mode")]
+        [InlineKeyboardButton(text="⏹️ Закончить пересылку", callback_data=get_callback("stop_forward_mode"))]
     ])
     
     await callback.message.edit_text(
@@ -1734,7 +1899,7 @@ async def save_teacher_message_to_all_chats(message_ids: dict, from_user_id: int
                 """, (chat_id, message_id, from_user_id, signature, message_text, message_type))
 
 # Обработчик кнопки остановки пересылки
-@dp.callback_query(F.data == "stop_forward_mode")
+@dp.callback_query(F.data == get_callback("stop_forward_mode"))
 async def stop_forward_mode_handler(callback: types.CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
     if current_state == SendMessageState.active.state:
@@ -1873,7 +2038,7 @@ async def process_forward_message(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при пересылке: {e}")
 
 
-@dp.callback_query(F.data == "view_teacher_messages")
+@dp.callback_query(F.data == get_callback("view_teacher_messages"))
 async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMContext):
     # Разрешаем просмотр в разрешенных чатах
     if callback.message.chat.id not in ALLOWED_CHAT_IDS:
@@ -1889,7 +2054,7 @@ async def view_teacher_messages_start(callback: types.CallbackQuery, state: FSMC
     await callback.answer()
 
 
-@dp.callback_query(F.data == "menu_back_from_messages")
+@dp.callback_query(F.data == get_callback("menu_back_from_messages"))
 async def menu_back_from_messages_handler(callback: types.CallbackQuery, state: FSMContext):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -1910,7 +2075,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     
     if not messages:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await callback.message.edit_text(
             "📝 Сообщения от преподавателей\n\n"
@@ -1941,7 +2106,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
     
-    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
+    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data=get_callback("menu_back")))
     
     if (page + 1) * limit < total_count:
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
@@ -1996,7 +2161,7 @@ async def view_specific_message(callback: types.CallbackQuery):
         # Создаем клавиатуру
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Перейти к сообщению", url=message_link)],
-            [InlineKeyboardButton(text="⬅ Назад к списку", callback_data="back_to_messages_list")]
+            [InlineKeyboardButton(text="⬅ Назад к списку", callback_data=get_callback("back_to_messages_list"))]
         ])
         
         # Формируем текст сообщения
@@ -2024,7 +2189,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     
     if not messages:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await callback.message.edit_text(
             "📝 Сообщения от преподавателей\n\n"
@@ -2055,7 +2220,7 @@ async def show_teacher_messages_page(callback: types.CallbackQuery, state: FSMCo
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"messages_page_{page-1}"))
     
-    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data="menu_back"))
+    nav_buttons.append(InlineKeyboardButton(text="🔙 В меню", callback_data=get_callback("menu_back")))
     
     if (page + 1) * limit < total_count:
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"messages_page_{page+1}"))
@@ -2110,7 +2275,7 @@ async def view_specific_message(callback: types.CallbackQuery):
         # Создаем клавиатуру
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Перейти к сообщению", url=message_link)],
-            [InlineKeyboardButton(text="⬅ Назад к списку", callback_data="back_to_messages_list")]
+            [InlineKeyboardButton(text="⬅ Назад к списку", callback_data=get_callback("back_to_messages_list"))]
         ])
         
         # Формируем текст сообщения
@@ -2129,7 +2294,7 @@ async def view_specific_message(callback: types.CallbackQuery):
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
     await callback.answer()
 
-@dp.callback_query(F.data == "back_to_messages_list")
+@dp.callback_query(F.data == get_callback("back_to_messages_list"))
 async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -2143,14 +2308,14 @@ async def back_to_messages_list(callback: types.CallbackQuery, state: FSMContext
     await callback.answer()
 
 
-@dp.callback_query(F.data == "admin_add_special_user")
+@dp.callback_query(F.data == get_callback("admin_add_special_user"))
 async def admin_add_special_user_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
 
     await callback.message.edit_text(
@@ -2223,61 +2388,61 @@ def main_menu(is_admin=False, is_special_user=False, is_group_chat=False, is_fun
     
     # Добавляем кнопку просмотра сообщений только в беседе
     if is_group_chat:
-        buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data="view_teacher_messages")]),
-        buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data="menu_homework")]),
-        buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data="menu_rasp")]),
-        buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_rasp")]),
-        buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data="tomorrow_rasp")]),
-        buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data="menu_zvonki")]),
-        buttons.append([InlineKeyboardButton(text="🎂 Дни рожденья", callback_data="menu_birthdays")]),
-        buttons.append([InlineKeyboardButton(text="💰 Фонд Группы", callback_data="menu_group_fund")])  # Новая кнопка
+        buttons.append([InlineKeyboardButton(text="👨‍🏫 Посмотреть сообщения преподов", callback_data=get_callback("view_teacher_messages"))]),
+        buttons.append([InlineKeyboardButton(text="📚 Домашнее задание", callback_data=get_callback("menu_homework"))]),
+        buttons.append([InlineKeyboardButton(text="📅 Расписание", callback_data=get_callback("menu_rasp"))]),
+        buttons.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data=get_callback("today_rasp"))]),
+        buttons.append([InlineKeyboardButton(text="📅 Расписание на завтра", callback_data=get_callback("tomorrow_rasp"))]),
+        buttons.append([InlineKeyboardButton(text="⏰ Звонки", callback_data=get_callback("menu_zvonki"))]),
+        buttons.append([InlineKeyboardButton(text="🎂 Дни рожденья", callback_data=get_callback("menu_birthdays"))]),
+        buttons.append([InlineKeyboardButton(text="💰 Фонд Группы", callback_data=get_callback("menu_group_fund"))])  # Новая кнопка
 
     if is_admin:
-        buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data="menu_admin")])
+        buttons.append([InlineKeyboardButton(text="⚙ Админка", callback_data=get_callback("menu_admin"))])
     if is_special_user:
-        buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data="send_message_chat")])
+        buttons.append([InlineKeyboardButton(text="✉ Отправить сообщение в беседу", callback_data=get_callback("send_message_chat"))])
     if is_fund_manager:
-        buttons.append([InlineKeyboardButton(text="💰 Управление Фондом", callback_data="menu_fund_management")])
+        buttons.append([InlineKeyboardButton(text="💰 Управление Фондом", callback_data=get_callback("menu_fund_management"))])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def admin_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Установить четность", callback_data="admin_setchet")],
-        [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data="admin_show_chet")],
+        [InlineKeyboardButton(text="🔄 Установить четность", callback_data=get_callback("admin_setchet"))],
+        [InlineKeyboardButton(text="📌 Узнать четность недели", callback_data=get_callback("admin_show_chet"))],
         
-        [InlineKeyboardButton(text="🕒 Время публикаций", callback_data="admin_list_publish_times")],
-        [InlineKeyboardButton(text="📝 Задать время публикации", callback_data="admin_set_publish_time")],
-        [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data="admin_my_publish_time")],
+        [InlineKeyboardButton(text="🕒 Время публикаций", callback_data=get_callback("admin_list_publish_times"))],
+        [InlineKeyboardButton(text="📝 Задать время публикации", callback_data=get_callback("admin_set_publish_time"))],
+        [InlineKeyboardButton(text="🕐 Узнать мое время", callback_data=get_callback("admin_my_publish_time"))],
         
-        [InlineKeyboardButton(text="➕ Добавить пару", callback_data="admin_add_lesson")],
-        [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
+        [InlineKeyboardButton(text="➕ Добавить пару", callback_data=get_callback("admin_add_lesson"))],
+        [InlineKeyboardButton(text="🧹 Очистить пару", callback_data=get_callback("admin_clear_pair"))],
         
         # НОВАЯ КНОПКА - СБРОС МОДИФИКАЦИЙ
-        [InlineKeyboardButton(text="🗑️ Сбросить модификации", callback_data="admin_clear_modifications")],
+        [InlineKeyboardButton(text="🗑️ Сбросить модификации", callback_data=get_callback("admin_clear_modifications"))],
         
-        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
+        [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data=get_callback("admin_set_cabinet"))],
         
-        [InlineKeyboardButton(text="📚 Добавить предмет", callback_data="admin_add_subject")],
-        [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data="admin_delete_subject")],
+        [InlineKeyboardButton(text="📚 Добавить предмет", callback_data=get_callback("admin_add_subject"))],
+        [InlineKeyboardButton(text="🗑️ Удалить предмет", callback_data=get_callback("admin_delete_subject"))],
         
-        [InlineKeyboardButton(text="💾 Сохранить статичное расписание", callback_data="admin_save_static_rasp")],
+        [InlineKeyboardButton(text="💾 Сохранить статичное расписание", callback_data=get_callback("admin_save_static_rasp"))],
         
-        [InlineKeyboardButton(text="📝 Добавить домашнее задание", callback_data="admin_add_homework")],
-        [InlineKeyboardButton(text="✏️ Редактировать домашнее задание", callback_data="admin_edit_homework")],
-        [InlineKeyboardButton(text="🗑️ Удалить домашнее задание", callback_data="admin_delete_homework")],
+        [InlineKeyboardButton(text="📝 Добавить домашнее задание", callback_data=get_callback("admin_add_homework"))],
+        [InlineKeyboardButton(text="✏️ Редактировать домашнее задание", callback_data=get_callback("admin_edit_homework"))],
+        [InlineKeyboardButton(text="🗑️ Удалить домашнее задание", callback_data=get_callback("admin_delete_homework"))],
         
-        [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data="admin_add_special_user")],
-        [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data="admin_delete_teacher_message")],
+        [InlineKeyboardButton(text="👤 Добавить спец-пользователя", callback_data=get_callback("admin_add_special_user"))],
+        [InlineKeyboardButton(text="🗑️ Удалить сообщение преподавателя", callback_data=get_callback("admin_delete_teacher_message"))],
         
-        [InlineKeyboardButton(text="📋 Все команды", callback_data="admin_commands")],
+        [InlineKeyboardButton(text="📋 Все команды", callback_data=get_callback("admin_commands"))],
         
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
     ])
     return kb
 
 # Обработчик кнопки сброса модификаций
-@dp.callback_query(F.data == "admin_clear_modifications")
+@dp.callback_query(F.data == get_callback("admin_clear_modifications"))
 async def admin_clear_modifications_start(callback: types.CallbackQuery):
     """Начало сброса модификаций"""
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -2285,10 +2450,10 @@ async def admin_clear_modifications_start(callback: types.CallbackQuery):
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data="clear_mod_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data="clear_mod_week_2")],
-        [InlineKeyboardButton(text="📅 Выбрать день", callback_data="clear_mod_choose_day")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data=get_callback("clear_mod_week_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data=get_callback("clear_mod_week_2"))],
+        [InlineKeyboardButton(text="📅 Выбрать день", callback_data=get_callback("clear_mod_choose_day"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await callback.message.edit_text(
@@ -2301,16 +2466,17 @@ async def admin_clear_modifications_start(callback: types.CallbackQuery):
     await callback.answer()
 
 # Обработчик выбора недели для полного сброса
-@dp.callback_query(F.data.startswith("clear_mod_week_"))
+@dp.callback_query(F.data == get_callback("clear_mod_week_1") | F.data == get_callback("clear_mod_week_2"))
 async def clear_modifications_week_handler(callback: types.CallbackQuery):
     """Сброс всех модификаций для выбранной недели"""
-    week_type = int(callback.data.split("_")[3])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[3])
     
     week_name = "нечетной" if week_type == 1 else "четной"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, сбросить всё", callback_data=f"confirm_clear_all_{week_type}")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="admin_clear_modifications")]
+        [InlineKeyboardButton(text="✅ Да, сбросить всё", callback_data=create_callback("confirm_clear_all", week_type))],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data=get_callback("admin_clear_modifications"))]
     ])
     
     await callback.message.edit_text(
@@ -2322,12 +2488,12 @@ async def clear_modifications_week_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Обработчик подтверждения полного сброса
-@dp.callback_query(F.data.startswith("confirm_clear_all_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["confirm_clear_all_"]))
 async def confirm_clear_all_modifications(callback: types.CallbackQuery):
     """Подтверждение сброса всех модификаций для недели"""
     try:
-        # Правильно извлекаем week_type из callback_data
-        week_type = int(callback.data.split("_")[3])  # Было [4], должно быть [3]
+        callback_data = parse_callback(callback.data)
+        week_type = int(callback_data.split("_")[3])
         
         # Сбрасываем все модификации для выбранной недели
         cleared_count = await clear_rasp_modifications(pool, week_type)
@@ -2352,13 +2518,13 @@ async def confirm_clear_all_modifications(callback: types.CallbackQuery):
     await callback.answer()
 
 # Обработчик выбора дня для сброса
-@dp.callback_query(F.data == "clear_mod_choose_day")
+@dp.callback_query(F.data == get_callback("clear_mod_choose_day"))
 async def clear_modifications_choose_day_start(callback: types.CallbackQuery, state: FSMContext):
     """Начало выбора дня для сброса модификаций"""
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data="clear_day_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data="clear_day_week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_clear_modifications")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data=get_callback("clear_day_week_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data=get_callback("clear_day_week_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("admin_clear_modifications"))]
     ])
     
     await callback.message.edit_text(
@@ -2370,16 +2536,17 @@ async def clear_modifications_choose_day_start(callback: types.CallbackQuery, st
     await callback.answer()
 
 # Обработчик выбора недели для сброса по дням
-@dp.callback_query(F.data.startswith("clear_day_week_"))
+@dp.callback_query(F.data == get_callback("clear_day_week_1") | F.data == get_callback("clear_day_week_2"))
 async def clear_modifications_choose_week(callback: types.CallbackQuery, state: FSMContext):
     """Выбор недели для сброса модификаций по дням"""
-    week_type = int(callback.data.split("_")[3])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[3])
     await state.update_data(week_type=week_type)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=day, callback_data=f"clear_mod_day_{i+1}")] 
+        [InlineKeyboardButton(text=day, callback_data=create_callback("clear_mod_day", i+1))] 
         for i, day in enumerate(DAYS)
-    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_clear_modifications")]]
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("admin_clear_modifications"))]]
     )
     
     week_name = "нечетной" if week_type == 1 else "четной"
@@ -2393,10 +2560,11 @@ async def clear_modifications_choose_week(callback: types.CallbackQuery, state: 
     await callback.answer()
 
 # Обработчик выбора дня для сброса
-@dp.callback_query(F.data.startswith("clear_mod_day_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["clear_mod_day_"]))
 async def clear_modifications_choose_specific_day(callback: types.CallbackQuery, state: FSMContext):
     """Выбор конкретного дня для сброса модификаций"""
-    day = int(callback.data.split("_")[3])
+    callback_data = parse_callback(callback.data)
+    day = int(callback_data.split("_")[3])
     
     data = await state.get_data()
     week_type = data["week_type"]
@@ -2405,8 +2573,8 @@ async def clear_modifications_choose_specific_day(callback: types.CallbackQuery,
     week_name = "нечетной" if week_type == 1 else "четной"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, сбросить", callback_data=f"confirm_clear_day_{week_type}_{day}")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="admin_clear_modifications")]
+        [InlineKeyboardButton(text="✅ Да, сбросить", callback_data=create_callback("confirm_clear_day", week_type, day))],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data=get_callback("admin_clear_modifications"))]
     ])
     
     await callback.message.edit_text(
@@ -2420,13 +2588,14 @@ async def clear_modifications_choose_specific_day(callback: types.CallbackQuery,
     await callback.answer()
 
 # Обработчик подтверждения сброса для конкретного дня
-@dp.callback_query(F.data.startswith("confirm_clear_day_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["confirm_clear_day_"]))
 async def confirm_clear_day_modifications(callback: types.CallbackQuery):
     """Подтверждение сброса модификаций для конкретного дня"""
     try:
-        parts = callback.data.split("_")
-        week_type = int(parts[3])  # confirm_clear_day_1_1 → [3] = 1
-        day = int(parts[4])        # confirm_clear_day_1_1 → [4] = 1
+        callback_data = parse_callback(callback.data)
+        parts = callback_data.split("_")
+        week_type = int(parts[3])
+        day = int(parts[4])
         
         # Сбрасываем модификации для конкретного дня и недели
         cleared_count = await clear_day_modifications(pool, week_type, day)
@@ -2484,7 +2653,7 @@ async def clear_rasp_modifications(pool, week_type: int) -> int:
             return total_cleared
 
 # Меню фонда группы (для всех в беседе)
-@dp.callback_query(F.data == "menu_group_fund")
+@dp.callback_query(F.data == get_callback("menu_group_fund"))
 async def menu_group_fund_handler(callback: types.CallbackQuery):
     if not is_allowed_chat(callback.message.chat.id):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
@@ -2493,9 +2662,9 @@ async def menu_group_fund_handler(callback: types.CallbackQuery):
     balance = await get_fund_balance(pool)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛍️ Покупки", callback_data="fund_purchases")],
-        [InlineKeyboardButton(text="👥 Список Пожертвований", callback_data="fund_donations")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        [InlineKeyboardButton(text="🛍️ Покупки", callback_data=get_callback("fund_purchases"))],
+        [InlineKeyboardButton(text="👥 Список Пожертвований", callback_data=get_callback("fund_donations"))],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
     ])
     
     await callback.message.edit_text(
@@ -2507,7 +2676,7 @@ async def menu_group_fund_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Список покупок
-@dp.callback_query(F.data == "fund_purchases")
+@dp.callback_query(F.data == get_callback("fund_purchases"))
 async def fund_purchases_handler(callback: types.CallbackQuery):
     purchases = await get_all_purchases(pool)
     
@@ -2522,13 +2691,13 @@ async def fund_purchases_handler(callback: types.CallbackQuery):
                 text += f"• {item_name} - {price:.2f} руб.\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_group_fund")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_group_fund"))]
     ])
     
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
-@dp.callback_query(F.data == "fund_donations")
+@dp.callback_query(F.data == get_callback("fund_donations"))
 async def fund_donations_handler(callback: types.CallbackQuery):
     members = await get_all_fund_members(pool)
     
@@ -2545,24 +2714,24 @@ async def fund_donations_handler(callback: types.CallbackQuery):
         text += f"\n💵 Общая сумма пожертвований: {total_balance:.2f} руб."
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_group_fund")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_group_fund"))]
     ])
     
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 # Меню управления фондом (только для спец-пользователя)
-@dp.callback_query(F.data == "menu_fund_management")
+@dp.callback_query(F.data == get_callback("menu_fund_management"))
 async def menu_fund_management_handler(callback: types.CallbackQuery):
     if callback.from_user.id != FUND_MANAGER_USER_ID:
         await callback.answer("⛔ У вас нет прав для управления фондом", show_alert=True)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Добавить/убрать человека", callback_data="fund_manage_members")],
-        [InlineKeyboardButton(text="💰 Изменить баланс человека", callback_data="fund_manage_balance")],
-        [InlineKeyboardButton(text="🛍️ Добавить/удалить покупку", callback_data="fund_manage_purchases")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        [InlineKeyboardButton(text="👥 Добавить/убрать человека", callback_data=get_callback("fund_manage_members"))],
+        [InlineKeyboardButton(text="💰 Изменить баланс человека", callback_data=get_callback("fund_manage_balance"))],
+        [InlineKeyboardButton(text="🛍️ Добавить/удалить покупку", callback_data=get_callback("fund_manage_purchases"))],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
     ])
     
     await callback.message.edit_text(
@@ -2573,12 +2742,12 @@ async def menu_fund_management_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Управление участниками
-@dp.callback_query(F.data == "fund_manage_members")
+@dp.callback_query(F.data == get_callback("fund_manage_members"))
 async def fund_manage_members_handler(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить человека", callback_data="fund_add_member")],
-        [InlineKeyboardButton(text="➖ Удалить человека", callback_data="fund_delete_member")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        [InlineKeyboardButton(text="➕ Добавить человека", callback_data=get_callback("fund_add_member"))],
+        [InlineKeyboardButton(text="➖ Удалить человека", callback_data=get_callback("fund_delete_member"))],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
     ])
     
     await callback.message.edit_text(
@@ -2588,10 +2757,10 @@ async def fund_manage_members_handler(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@dp.callback_query(F.data == "fund_add_member")
+@dp.callback_query(F.data == get_callback("fund_add_member"))
 async def fund_add_member_start(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_members")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("fund_manage_members"))]
     ])
     
     # Редактируем существующее сообщение
@@ -2622,7 +2791,7 @@ async def fund_add_member_process(message: types.Message, state: FSMContext):
         
         # Создаем клавиатуру для возврата
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
         ])
         
         # Отправляем новое сообщение с результатом
@@ -2638,7 +2807,7 @@ async def fund_add_member_process(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Удаление участника с пагинацией
-@dp.callback_query(F.data == "fund_delete_member")
+@dp.callback_query(F.data == get_callback("fund_delete_member"))
 async def fund_delete_member_start(callback: types.CallbackQuery, state: FSMContext):
     members = await get_all_fund_members(pool)
     
@@ -2674,7 +2843,7 @@ async def show_members_page(callback: types.CallbackQuery, members: list, page: 
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"members_page_{page-1}_{action}"))
     
-    nav_buttons.append(InlineKeyboardButton(text="🔙 Отмена", callback_data="fund_manage_members"))
+    nav_buttons.append(InlineKeyboardButton(text="🔙 Отмена", callback_data=get_callback("fund_manage_members")))
     
     if end_idx < len(members):
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"members_page_{page+1}_{action}"))
@@ -2720,7 +2889,7 @@ async def confirm_delete_member_handler(callback: types.CallbackQuery):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"final_delete_member_{member_id}")],
-        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="fund_delete_member")]
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data=get_callback("fund_delete_member"))]
     ])
     
     await callback.message.edit_text(
@@ -2741,7 +2910,7 @@ async def final_delete_member_handler(callback: types.CallbackQuery):
         
         # Редактируем текущее сообщение вместо отправки нового
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
         ])
         
         await callback.message.edit_text(
@@ -2755,7 +2924,7 @@ async def final_delete_member_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Управление балансом участников
-@dp.callback_query(F.data == "fund_manage_balance")
+@dp.callback_query(F.data == get_callback("fund_manage_balance"))
 async def fund_manage_balance_start(callback: types.CallbackQuery, state: FSMContext):
     members = await get_all_fund_members(pool)
     
@@ -2794,7 +2963,7 @@ async def select_member_balance_handler(callback: types.CallbackQuery, state: FS
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_balance")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("fund_manage_balance"))]
     ])
     
     await callback.message.edit_text(
@@ -2838,7 +3007,7 @@ async def process_balance_change(message: types.Message, state: FSMContext):
         
         # Создаем клавиатуру для возврата
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
         ])
         
         # Отправляем сообщение с результатом
@@ -2862,12 +3031,12 @@ async def process_balance_change(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Управление покупками
-@dp.callback_query(F.data == "fund_manage_purchases")
+@dp.callback_query(F.data == get_callback("fund_manage_purchases"))
 async def fund_manage_purchases_handler(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить покупку", callback_data="fund_add_purchase")],
-        [InlineKeyboardButton(text="➖ Удалить покупку", callback_data="fund_delete_purchase")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+        [InlineKeyboardButton(text="➕ Добавить покупку", callback_data=get_callback("fund_add_purchase"))],
+        [InlineKeyboardButton(text="➖ Удалить покупку", callback_data=get_callback("fund_delete_purchase"))],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
     ])
     
     await callback.message.edit_text(
@@ -2878,10 +3047,10 @@ async def fund_manage_purchases_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Добавление покупки
-@dp.callback_query(F.data == "fund_add_purchase")
+@dp.callback_query(F.data == get_callback("fund_add_purchase"))
 async def fund_add_purchase_start(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_purchases")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("fund_manage_purchases"))]
     ])
     
     await callback.message.edit_text(
@@ -2903,7 +3072,7 @@ async def fund_add_purchase_name(message: types.Message, state: FSMContext):
     await state.update_data(item_name=item_name)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_purchases")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("fund_manage_purchases"))]
     ])
     
     await message.answer(
@@ -2922,7 +3091,7 @@ async def fund_add_purchase_url(message: types.Message, state: FSMContext):
     await state.update_data(item_url=item_url)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="fund_manage_purchases")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("fund_manage_purchases"))]
     ])
     
     await message.answer(
@@ -2951,7 +3120,7 @@ async def fund_add_purchase_price(message: types.Message, state: FSMContext):
         
         # Возвращаем в меню управления одним сообщением
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
         ])
         
         try:
@@ -2984,7 +3153,7 @@ async def fund_add_purchase_price(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Удаление покупки с пагинацией
-@dp.callback_query(F.data == "fund_delete_purchase")
+@dp.callback_query(F.data == get_callback("fund_delete_purchase"))
 async def fund_delete_purchase_start(callback: types.CallbackQuery):
     purchases = await get_all_purchases(pool)
     
@@ -3018,7 +3187,7 @@ async def show_purchases_page(callback: types.CallbackQuery, purchases: list, pa
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅ Назад", callback_data=f"purchases_page_{page-1}"))
     
-    nav_buttons.append(InlineKeyboardButton(text="🔙 Отмена", callback_data="fund_manage_purchases"))
+    nav_buttons.append(InlineKeyboardButton(text="🔙 Отмена", callback_data=get_callback("fund_manage_purchases")))
     
     if end_idx < len(purchases):
         nav_buttons.append(InlineKeyboardButton(text="Дальше ➡", callback_data=f"purchases_page_{page+1}"))
@@ -3063,7 +3232,7 @@ async def confirm_delete_purchase_handler(callback: types.CallbackQuery):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"final_delete_purchase_{purchase_id}")],
-        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="fund_delete_purchase")]
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data=get_callback("fund_delete_purchase"))]
     ])
     
     await callback.message.edit_text(
@@ -3093,7 +3262,7 @@ async def final_delete_purchase_handler(callback: types.CallbackQuery):
         
         # Возвращаем в меню управления
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_fund_management")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_fund_management"))]
         ])
         await callback.message.answer("💰 Управление Фондом Группы:", reply_markup=kb)
         
@@ -3103,7 +3272,7 @@ async def final_delete_purchase_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 # Обработчики для домашних заданий в беседах
-@dp.callback_query(F.data == "menu_homework")
+@dp.callback_query(F.data == get_callback("menu_homework"))
 async def menu_homework_handler(callback: types.CallbackQuery):
     """Показывает список домашних заданий"""
     if not is_allowed_chat(callback.message.chat.id):
@@ -3114,7 +3283,7 @@ async def menu_homework_handler(callback: types.CallbackQuery):
     
     if not homework_list:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await callback.message.edit_text(
             "📚 Домашнее задание\n\n"
@@ -3152,7 +3321,7 @@ async def menu_homework_handler(callback: types.CallbackQuery):
         
         # Отправляем первое сообщение с кнопкой
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await callback.message.edit_text(parts[0], reply_markup=kb)
         
@@ -3161,13 +3330,13 @@ async def menu_homework_handler(callback: types.CallbackQuery):
             await callback.message.answer(part)
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await callback.message.edit_text(homework_text, reply_markup=kb)
     
     await callback.answer()
 
-@dp.callback_query(F.data == "menu_birthdays")
+@dp.callback_query(F.data == get_callback("menu_birthdays"))
 async def menu_birthdays_handler(callback: types.CallbackQuery):
     """Показывает список всех дней рождений"""
     if not is_allowed_chat(callback.message.chat.id):
@@ -3177,7 +3346,7 @@ async def menu_birthdays_handler(callback: types.CallbackQuery):
     birthdays = await get_all_birthdays(pool)
     if not birthdays:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await callback.message.edit_text(
             "🎂 Список дней рождений пуст.",
@@ -3194,7 +3363,7 @@ async def menu_birthdays_handler(callback: types.CallbackQuery):
         text += f"👤 {name}: {date_str}\n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
     ])
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
@@ -3202,14 +3371,14 @@ async def menu_birthdays_handler(callback: types.CallbackQuery):
 
 
 # Админские обработчики для домашних заданий
-@dp.callback_query(F.data == "admin_add_homework")
+@dp.callback_query(F.data == get_callback("admin_add_homework"))
 async def admin_add_homework_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
 
     await callback.message.edit_text(
@@ -3252,7 +3421,7 @@ async def process_homework_due_date(message: types.Message, state: FSMContext):
         for subject_id, name in subjects:
             keyboard.append([InlineKeyboardButton(text=name, callback_data=f"hw_subject_{subject_id}")])
         
-        keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+        keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
         
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
         
@@ -3279,7 +3448,7 @@ async def process_homework_subject(callback: types.CallbackQuery, state: FSMCont
     await state.update_data(subject_id=subject_id, subject_name=subject_name)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await callback.message.edit_text(
@@ -3325,7 +3494,7 @@ async def process_homework_task_text(message: types.Message, state: FSMContext):
     
     await state.clear()
 
-@dp.callback_query(F.data == "admin_edit_homework")
+@dp.callback_query(F.data == get_callback("admin_edit_homework"))
 async def admin_edit_homework_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
@@ -3352,7 +3521,7 @@ async def admin_edit_homework_start(callback: types.CallbackQuery, state: FSMCon
         
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"edit_hw_{hw_id}")])
     
-    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
@@ -3385,7 +3554,7 @@ async def process_edit_homework_select(callback: types.CallbackQuery, state: FSM
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     due_date_str = due_date.strftime("%d.%m.%Y") if isinstance(due_date, datetime.date) else due_date
@@ -3428,7 +3597,7 @@ async def process_edit_homework_due_date(message: types.Message, state: FSMConte
     for subject_id, name in subjects:
         keyboard.append([InlineKeyboardButton(text=name, callback_data=f"edit_hw_subject_{subject_id}")])
     
-    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
@@ -3442,7 +3611,7 @@ async def process_edit_homework_due_date(message: types.Message, state: FSMConte
 
 @dp.callback_query(F.data.startswith("edit_hw_subject_"))
 async def process_edit_homework_subject(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data == "menu_admin":
+    if callback.data == get_callback("menu_admin"):
         await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         await callback.answer()
@@ -3460,7 +3629,7 @@ async def process_edit_homework_subject(callback: types.CallbackQuery, state: FS
     data = await state.get_data()
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     new_date_info = data.get('new_due_date', 'текущая')
@@ -3483,7 +3652,7 @@ async def process_edit_homework_subject_skip(message: types.Message, state: FSMC
         data = await state.get_data()
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
         ])
         
         new_date_info = data.get('new_due_date', 'текущая')
@@ -3507,7 +3676,7 @@ async def process_edit_homework_subject_skip(message: types.Message, state: FSMC
         for subject_id, name in subjects:
             keyboard.append([InlineKeyboardButton(text=name, callback_data=f"edit_hw_subject_{subject_id}")])
         
-        keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+        keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
         
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
         
@@ -3571,7 +3740,7 @@ async def process_edit_homework_task_text(message: types.Message, state: FSMCont
     
     await state.clear()
 
-@dp.callback_query(F.data == "admin_delete_homework")
+@dp.callback_query(F.data == get_callback("admin_delete_homework"))
 async def admin_delete_homework_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
@@ -3598,7 +3767,7 @@ async def admin_delete_homework_start(callback: types.CallbackQuery, state: FSMC
         
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_hw_{hw_id}")])
     
-    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
@@ -3626,7 +3795,7 @@ async def process_delete_homework_select(callback: types.CallbackQuery, state: F
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_hw_{hw_id}")],
-        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data=get_callback("menu_admin"))]
     ])
     
     await callback.message.edit_text(
@@ -3676,7 +3845,7 @@ async def process_confirm_delete_homework(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data == "admin_add_lesson")
+@dp.callback_query(F.data == get_callback("admin_add_lesson"))
 async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
@@ -3703,7 +3872,7 @@ async def admin_add_lesson_start(callback: types.CallbackQuery, state: FSMContex
             callback_data=f"choose_subject_id_{subject_id}"
         )])
     
-    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     
@@ -3736,9 +3905,9 @@ async def choose_subject_by_id(callback: types.CallbackQuery, state: FSMContext)
     
     # ВСЕГДА продолжаем выбор недели, независимо от типа предмета
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=get_callback("week_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data=get_callback("week_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     if is_rk:
@@ -3782,9 +3951,9 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(subject=exact_subject_name)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=get_callback("week_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data=get_callback("week_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await callback.message.edit_text(
@@ -3794,34 +3963,36 @@ async def choose_subject(callback: types.CallbackQuery, state: FSMContext):
     )
     await state.set_state(AddLessonState.week_type)
     await callback.answer()
-@dp.callback_query(F.data.startswith("week_"))
+@dp.callback_query(F.data == get_callback("week_1") | F.data == get_callback("week_2"))
 async def choose_week(callback: types.CallbackQuery, state: FSMContext):
-    week_type = int(callback.data[-1])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[1])
     await state.update_data(week_type=week_type)
     
     buttons = []
     for i, day in enumerate(DAYS):
-        buttons.append([InlineKeyboardButton(text=day, callback_data=f"day_{i+1}")])
+        buttons.append([InlineKeyboardButton(text=day, callback_data=create_callback("day", i+1))])
     
     # Добавляем кнопку отмены
-    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     await callback.message.edit_text("Выберите день недели:", reply_markup=kb)
     await state.set_state(AddLessonState.day)
 
-@dp.callback_query(F.data.startswith("day_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["day_"]))
 async def choose_day(callback: types.CallbackQuery, state: FSMContext):
-    day = int(callback.data[len("day_"):])
+    callback_data = parse_callback(callback.data)
+    day = int(callback_data.split("_")[1])
     await state.update_data(day=day)
     
     buttons = []
     for i in range(1, 7):
-        buttons.append([InlineKeyboardButton(text=str(i), callback_data=f"pair_{i}")])
+        buttons.append([InlineKeyboardButton(text=str(i), callback_data=create_callback("pair", i))])
     
     # Добавляем кнопку отмены
-    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     
@@ -3829,14 +4000,14 @@ async def choose_day(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AddLessonState.pair_number)
 
 
-@dp.callback_query(F.data == "admin_add_subject")
+@dp.callback_query(F.data == get_callback("admin_add_subject"))
 async def admin_add_subject_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
 
     await callback.message.edit_text(
@@ -3867,7 +4038,7 @@ async def process_subject_name(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏫 С фиксированным кабинетом", callback_data="subject_type_fixed")],
         [InlineKeyboardButton(text="🔢 С запросом кабинета (rK)", callback_data="subject_type_rk")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await message.answer(
@@ -3944,7 +4115,7 @@ async def process_subject_cabinet(message: types.Message, state: FSMContext):
     await message.answer("⚙ Админ-панель:", reply_markup=admin_menu())
     await state.clear()
 
-@dp.callback_query(F.data == "admin_delete_subject")
+@dp.callback_query(F.data == get_callback("admin_delete_subject"))
 async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
@@ -3969,7 +4140,7 @@ async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMCo
         keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_subject_{subject_id}")])
     
     # Добавляем кнопку отмены
-    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
@@ -3985,7 +4156,7 @@ async def admin_delete_subject_start(callback: types.CallbackQuery, state: FSMCo
 
 @dp.callback_query(F.data.startswith("delete_subject_"))
 async def process_delete_subject(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data == "menu_admin":
+    if callback.data == get_callback("menu_admin"):
         await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         await callback.answer()
@@ -4020,7 +4191,7 @@ async def process_delete_subject(callback: types.CallbackQuery, state: FSMContex
                 # Предмет используется - предупреждаем
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="✅ Да, удалить ВСЕ связанные данные", callback_data=f"confirm_delete_subject_{subject_id}")],
-                    [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="cancel_delete_subject")]
+                    [InlineKeyboardButton(text="❌ Нет, отменить", callback_data=get_callback("cancel_delete_subject"))]
                 ])
                 
                 usage_text = []
@@ -4083,7 +4254,7 @@ async def confirm_delete_subject(callback: types.CallbackQuery):
 
 
     
-@dp.callback_query(F.data == "menu_back")
+@dp.callback_query(F.data == get_callback("menu_back"))
 async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
     # Проверка флуда
     if check_flood(callback.from_user.id):
@@ -4145,7 +4316,7 @@ async def menu_back_handler(callback: types.CallbackQuery, state: FSMContext):
 
 
 
-@dp.callback_query(F.data == "cancel_delete_subject")
+@dp.callback_query(F.data == get_callback("cancel_delete_subject"))
 async def cancel_delete_subject(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("❌ Удаление отменено.")
     await menu_back_handler(callback, state)
@@ -4162,7 +4333,7 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
         if subject_type == "fixed":
             # Предмет с фиксированным кабинетом
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+                [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
             ])
             
             await callback.message.edit_text(
@@ -4196,9 +4367,10 @@ async def process_subject_type_choice(callback: types.CallbackQuery, state: FSMC
         await state.clear()
         await callback.answer()
 
-@dp.callback_query(F.data.startswith("pair_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["pair_"]))
 async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
-    pair_number = int(callback.data[len("pair_"):])
+    callback_data = parse_callback(callback.data)
+    pair_number = int(callback_data.split("_")[1])
     await state.update_data(pair_number=pair_number)
     
     data = await state.get_data()
@@ -4212,7 +4384,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         if is_rk:
             # Для rK предметов запрашиваем кабинет
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+                [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
             ])
             
             await callback.message.edit_text(
@@ -4331,50 +4503,52 @@ async def choose_lesson(callback: types.CallbackQuery, state: FSMContext):
     if lesson.endswith("rK"):
         await greet_and_send(callback.from_user, "Сначала выберите четность недели:", callback=callback,
                              markup=InlineKeyboardMarkup(inline_keyboard=[
-                                 [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="cab_week_1")],
-                                 [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")]
+                                 [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=get_callback("cab_week_1"))],
+                                 [InlineKeyboardButton(text="2️⃣ Четная", callback_data=get_callback("cab_week_2"))]
                              ]))
         await state.set_state(SetCabinetState.week_type)
     else:
         await greet_and_send(callback.from_user, f"Урок '{lesson}' добавлен с кабинетом по умолчанию.", callback=callback)
         await state.clear()
 
-@dp.callback_query(F.data == "admin_set_cabinet")
+@dp.callback_query(F.data == get_callback("admin_set_cabinet"))
 async def admin_set_cabinet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="cab_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="cab_week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=get_callback("cab_week_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data=get_callback("cab_week_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     await greet_and_send(callback.from_user, "Выберите четность недели:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.week_type)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("cab_week_"))
+@dp.callback_query(F.data == get_callback("cab_week_1") | F.data == get_callback("cab_week_2"))
 async def set_cab_week(callback: types.CallbackQuery, state: FSMContext):
-    week_type = int(callback.data[-1])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[2])
     await state.update_data(week_type=week_type)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=day, callback_data=f"cab_day_{i+1}")] 
+        [InlineKeyboardButton(text=day, callback_data=create_callback("cab_day", i+1))] 
         for i, day in enumerate(DAYS)
-    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]]  # Добавляем кнопку отмены
     )
     await greet_and_send(callback.from_user, "Выберите день недели:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.day)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("cab_day_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["cab_day_"]))
 async def set_cab_day(callback: types.CallbackQuery, state: FSMContext):
-    day = int(callback.data[len("cab_day_"):])
+    callback_data = parse_callback(callback.data)
+    day = int(callback_data.split("_")[2])
     await state.update_data(day=day)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=str(i), callback_data=f"cab_pair_{i}")] for i in range(1, 7)
-    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+        [InlineKeyboardButton(text=str(i), callback_data=create_callback("cab_pair", i))] for i in range(1, 7)
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]]  # Добавляем кнопку отмены
     )
     await greet_and_send(callback.from_user, "Выберите номер пары:", callback=callback, markup=kb)
     await state.set_state(SetCabinetState.pair_number)
@@ -4435,13 +4609,14 @@ async def set_cabinet_final(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
-@dp.callback_query(F.data.startswith("cab_pair_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["cab_pair_"]))
 async def set_cab_pair_number(callback: types.CallbackQuery, state: FSMContext):
-    pair_number = int(callback.data[len("cab_pair_"):])
+    callback_data = parse_callback(callback.data)
+    pair_number = int(callback_data.split("_")[2])
     await state.update_data(pair_number=pair_number)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     data = await state.get_data()
@@ -4458,71 +4633,68 @@ async def set_cab_pair_number(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SetCabinetState.cabinet)
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_clear_pair")
+@dp.callback_query(F.data == get_callback("admin_clear_pair"))
 async def admin_clear_pair_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data="clr_week_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data="clr_week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=get_callback("clr_week_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data=get_callback("clr_week_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     await greet_and_send(callback.from_user, "Выберите четность недели:", callback=callback, markup=kb)
     await state.set_state(ClearPairState.week_type)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("clr_week_"))
+@dp.callback_query(F.data == get_callback("clr_week_1") | F.data == get_callback("clr_week_2"))
 async def clear_pair_week(callback: types.CallbackQuery, state: FSMContext):
-    week_type = int(callback.data[-1])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[2])
     await state.update_data(week_type=week_type)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=day, callback_data=f"clr_day_{i+1}")]
+        [InlineKeyboardButton(text=day, callback_data=create_callback("clr_day", i+1))]
         for i, day in enumerate(DAYS)
-    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]]  # Добавляем кнопку отмены
     )
     await greet_and_send(callback.from_user, "Выберите день недели:", callback=callback, markup=kb)
     await state.set_state(ClearPairState.day)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("clr_day_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["clr_day_"]))
 async def clear_pair_day(callback: types.CallbackQuery, state: FSMContext):
-    day = int(callback.data[len("clr_day_"):])
+    callback_data = parse_callback(callback.data)
+    day = int(callback_data.split("_")[2])
     await state.update_data(day=day)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=str(i), callback_data=f"clr_pair_{i}")] for i in range(1, 7)
-    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]]  # Добавляем кнопку отмены
+        [InlineKeyboardButton(text=str(i), callback_data=create_callback("clr_pair", i))] for i in range(1, 7)
+    ] + [[InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]]  # Добавляем кнопку отмены
     )
     await greet_and_send(callback.from_user, "Выберите номер пары:", callback=callback, markup=kb)
     await state.set_state(ClearPairState.pair_number)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("clr_pair_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["clr_pair_"]))
 async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
-    pair_number = int(callback.data[len("clr_pair_"):])
+    callback_data = parse_callback(callback.data)
+    pair_number = int(callback_data.split("_")[2])
     data = await state.get_data()
 
-    try:
+    try:  # Убрать лишний отступ перед этим try
         # Очищаем пару для ВСЕХ чатов через модификации
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 for chat_id in ALLOWED_CHAT_IDS:
-                    # Удаляем существующую модификацию
-                    await cur.execute("""
-                        DELETE FROM rasp_modifications 
-                        WHERE chat_id=%s AND day=%s AND week_type=%s AND pair_number=%s
-                    """, (chat_id, data["day"], data["week_type"], pair_number))
-                    
-                    # Добавляем модификацию с subject_id = NULL для очистки
+                    # Сохраняем модификацию с subject_id = NULL для очистки
                     await cur.execute("""
                         INSERT INTO rasp_modifications (chat_id, day, week_type, pair_number, subject_id, cabinet)
                         VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (chat_id, data["day"], data["week_type"], pair_number, None, "Очищено"))
+                        ON DUPLICATE KEY UPDATE subject_id=%s, cabinet=%s
+                    """, (chat_id, data["day"], data["week_type"], pair_number, None, "Очищено", None, "Очищено"))
 
-        
         await callback.message.edit_text(
             f"✅ Пара {pair_number} ({DAYS[data['day']-1]}, неделя {data['week_type']}) очищена во всех чатах.",
             reply_markup=admin_menu()
@@ -4539,7 +4711,7 @@ async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
 
 
 
-@dp.callback_query(F.data == "admin_delete_teacher_message")
+@dp.callback_query(F.data == get_callback("admin_delete_teacher_message"))
 async def admin_delete_teacher_message_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
@@ -4578,7 +4750,7 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
         )])
     
     # Добавляем кнопку отмены
-    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")])
+    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))])
     
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
@@ -4589,7 +4761,7 @@ async def admin_delete_teacher_message_start(callback: types.CallbackQuery, stat
     )
     await callback.answer()
 
-@dp.callback_query(F.data == "menu_admin_from_delete")
+@dp.callback_query(F.data == get_callback("menu_admin_from_delete"))
 async def menu_admin_from_delete_handler(callback: types.CallbackQuery, state: FSMContext):
     """Возврат в админ-меню из процесса удаления сообщения"""
     await state.clear()
@@ -4599,7 +4771,7 @@ async def menu_admin_from_delete_handler(callback: types.CallbackQuery, state: F
 # Обработчик выбора сообщения для удаления
 @dp.callback_query(F.data.startswith("delete_teacher_msg_"))
 async def process_delete_teacher_message(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data == "menu_admin":
+    if callback.data == get_callback("menu_admin"):
         await callback.message.edit_text("⚙ Админ-панель:", reply_markup=admin_menu())
         await state.clear()
         await callback.answer()
@@ -4633,7 +4805,7 @@ async def process_delete_teacher_message(callback: types.CallbackQuery, state: F
         # В функции process_delete_teacher_message замените клавиатуру на эту:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_msg_{message_db_id}")],
-            [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin_from_delete")]
+            [InlineKeyboardButton(text="❌ Нет, отменить", callback_data=get_callback("menu_admin_from_delete"))]
         ])
                 
         message_info = f"🗑️ Подтвердите удаление сообщения:\n\n"
@@ -4682,14 +4854,14 @@ async def confirm_delete_teacher_message(callback: types.CallbackQuery):
     await callback.answer()
 
 # Обработчик отмены удаления
-@dp.callback_query(F.data == "cancel_delete_msg")
+@dp.callback_query(F.data == get_callback("cancel_delete_msg"))
 async def cancel_delete_teacher_message(callback: types.CallbackQuery):
     # Вместо прямого возврата в админ-меню, используем menu_back для корректного отображения
     await menu_back_handler(callback, None)
     await callback.answer()
 
 
-@dp.callback_query(F.data == "admin_my_publish_time")
+@dp.callback_query(F.data == get_callback("admin_my_publish_time"))
 async def admin_my_publish_time(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
@@ -4710,7 +4882,7 @@ async def admin_my_publish_time(callback: types.CallbackQuery):
         text = msg
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_admin"))]
     ])
     
     await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
@@ -4795,9 +4967,10 @@ async def safe_send_message(chat_id: int, text: str, reply_markup=None, delay: f
     except Exception as e:
         return False
 
-@dp.callback_query(F.data.startswith("clr_pair_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["clr_pair_"]))
 async def clear_pair_number(callback: types.CallbackQuery, state: FSMContext):
-    pair_number = int(callback.data[len("clr_pair_"):])
+    callback_data = parse_callback(callback.data)
+    pair_number = int(callback_data.split("_")[2])
     data = await state.get_data()
 
     try:  # Убрать лишний отступ перед этим try
@@ -4934,7 +5107,7 @@ async def get_rasp_formatted(day, week_type, chat_id: int = None, target_date: d
 
 
 
-@dp.callback_query(F.data == "today_rasp")
+@dp.callback_query(F.data == get_callback("today_rasp"))
 async def today_rasp_handler(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -4999,7 +5172,7 @@ async def today_rasp_handler(callback: types.CallbackQuery):
     
     # Отправляем сообщение с кнопкой "Назад"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
     ])
     
     await callback.message.edit_text(message, reply_markup=kb)
@@ -5040,7 +5213,7 @@ async def initialize_static_rasp_from_current(pool, week_type: int):
     except Exception as e:
         return False
 
-@dp.callback_query(F.data == "tomorrow_rasp")
+@dp.callback_query(F.data == get_callback("tomorrow_rasp"))
 async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -5105,7 +5278,7 @@ async def tomorrow_rasp_handler(callback: types.CallbackQuery):
     
     # Отправляем сообщение с кнопкой "Назад"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
     ])
     
     await callback.message.edit_text(message, reply_markup=kb)
@@ -5238,7 +5411,7 @@ async def trigger_handler(message: types.Message):
         )
     )
 
-@dp.callback_query(F.data.startswith("menu_"))
+@dp.callback_query(F.data.startswith(get_callback("menu_")))
 async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
     # Разрешаем в ЛС и разрешенных чатах
     is_private = callback.message.chat.type == "private"
@@ -5248,21 +5421,23 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
         
-    action = callback.data
+    callback_data = parse_callback(callback.data)
+    action = callback_data
+    
     if action == "menu_rasp":
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=day, callback_data=f"rasp_day_{i+1}")]
+                [InlineKeyboardButton(text=day, callback_data=create_callback("rasp_day", i+1))]
                 for i, day in enumerate(DAYS)
-            ] + [[InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]]
+            ] + [[InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]]
         )
         await greet_and_send(callback.from_user, "📅 Выберите день:", callback=callback, markup=kb)
         await callback.answer()
     elif action == "menu_zvonki":
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📅 Будние дни", callback_data="zvonki_weekday")],
-            [InlineKeyboardButton(text="📅 Суббота", callback_data="zvonki_saturday")],
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
+            [InlineKeyboardButton(text="📅 Будние дни", callback_data=get_callback("zvonki_weekday"))],
+            [InlineKeyboardButton(text="📅 Суббота", callback_data=get_callback("zvonki_saturday"))],
+            [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_back"))]
         ])
         await greet_and_send(callback.from_user, "⏰ Выберите вариант:", callback=callback, markup=kb)
         await callback.answer()
@@ -5276,7 +5451,7 @@ async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
         await menu_back_handler(callback, state)
 
 
-@dp.callback_query(F.data.startswith("rasp_day_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["rasp_day_"]))
 async def on_rasp_day(callback: types.CallbackQuery):
     if check_flood(callback.from_user.id):
         try:
@@ -5295,9 +5470,9 @@ async def on_rasp_day(callback: types.CallbackQuery):
             pass
         return
 
-    parts = callback.data.split("_")
+    callback_data = parse_callback(callback.data)
     try:
-        day = int(parts[-1])
+        day = int(callback_data.split("_")[2])
     except Exception:
         try:
             await callback.answer("Ошибка выбора дня", show_alert=True)
@@ -5306,9 +5481,9 @@ async def on_rasp_day(callback: types.CallbackQuery):
         return
         
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=f"rasp_show_{day}_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная", callback_data=f"rasp_show_{day}_2")],
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_rasp")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная", callback_data=create_callback("rasp_show", day, 1))],
+        [InlineKeyboardButton(text="2️⃣ Четная", callback_data=create_callback("rasp_show", day, 2))],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_rasp"))]
     ])
     
     # Используем безопасную функцию
@@ -5353,7 +5528,7 @@ async def cmd_anekdot(message: types.Message):
                 await message.answer(f"😂 Анекдот:\n\n{row[0]}")
             else:
                 await message.answer("❌ В базе пока нет анекдотов.")
-@dp.callback_query(F.data.startswith("rasp_show_"))
+@dp.callback_query(F.data.startswith(CALLBACK_MAP["rasp_show_"]))
 async def on_rasp_show(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -5362,7 +5537,8 @@ async def on_rasp_show(callback: types.CallbackQuery):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
 
-    parts = callback.data.split("_")
+    callback_data = parse_callback(callback.data)
+    parts = callback_data.split("_")
     day = int(parts[2])
     week_type = int(parts[3])
     
@@ -5379,7 +5555,7 @@ async def on_rasp_show(callback: types.CallbackQuery):
     text = await get_rasp_formatted(day, week_type, chat_id, target_date)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data=f"rasp_day_{day}")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=create_callback("rasp_day", day))]
     ])
     
     day_names = {
@@ -5403,7 +5579,7 @@ async def on_rasp_show(callback: types.CallbackQuery):
     await callback.message.edit_text(message, reply_markup=kb)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("zvonki_"))
+@dp.callback_query(F.data == get_callback("zvonki_weekday") | F.data == get_callback("zvonki_saturday"))
 async def zvonki_handler(callback: types.CallbackQuery):
     is_private = callback.message.chat.type == "private"
     is_allowed_chat = callback.message.chat.id in ALLOWED_CHAT_IDS
@@ -5411,13 +5587,13 @@ async def zvonki_handler(callback: types.CallbackQuery):
     if not (is_private or is_allowed_chat):
         await callback.answer("⛔ Бот не работает в этом чате", show_alert=True)
         return
-    action = callback.data
+    callback_data = parse_callback(callback.data)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_zvonki")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_zvonki"))]
     ])
 
-    if action == "zvonki_weekday":
+    if callback_data == "zvonki_weekday":
         schedule = get_zvonki(is_saturday=False)
         await greet_and_send(
             callback.from_user,
@@ -5426,7 +5602,7 @@ async def zvonki_handler(callback: types.CallbackQuery):
             markup=kb,
             include_joke=True 
         )
-    elif action == "zvonki_saturday":
+    elif callback_data == "zvonki_saturday":
         schedule = get_zvonki(is_saturday=True)
         await greet_and_send(
             callback.from_user,
@@ -5437,7 +5613,7 @@ async def zvonki_handler(callback: types.CallbackQuery):
         )
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_show_chet")
+@dp.callback_query(F.data == get_callback("admin_show_chet"))
 async def admin_show_chet(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
@@ -5450,13 +5626,13 @@ async def admin_show_chet(callback: types.CallbackQuery):
     status_text = f"📊 Текущая четность недели (общая для всех чатов):\n\n{current_str}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_admin"))]
     ])
     
     await callback.message.edit_text(status_text, reply_markup=kb)
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_sync_week")
+@dp.callback_query(F.data == get_callback("admin_sync_week"))
 async def admin_sync_week_handler(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
@@ -5498,7 +5674,7 @@ async def admin_sync_week_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data == "admin_list_publish_times")
+@dp.callback_query(F.data == get_callback("admin_list_publish_times"))
 async def admin_list_publish_times(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
@@ -5513,20 +5689,20 @@ async def admin_list_publish_times(callback: types.CallbackQuery):
         text += "\n\nЧтобы удалить время, используйте команду /delptime <id>"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="⬅ Назад", callback_data=get_callback("menu_admin"))]
     ])
     
     await greet_and_send(callback.from_user, text, callback=callback, markup=kb)
     await callback.answer()
 # В состояние добавления времени публикации
-@dp.callback_query(F.data == "admin_set_publish_time")
+@dp.callback_query(F.data == get_callback("admin_set_publish_time"))
 async def admin_set_publish_time(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Доступно только админам в ЛС", show_alert=True)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await greet_and_send(
@@ -5578,16 +5754,16 @@ async def set_publish_time_handler(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
-@dp.callback_query(F.data == "admin_setchet")
+@dp.callback_query(F.data == get_callback("admin_setchet"))
 async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔴 Нечетная неделя", callback_data="set_week_1")],
-        [InlineKeyboardButton(text="🔵 Четная неделя", callback_data="set_week_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="🔴 Нечетная неделя", callback_data=get_callback("set_week_1"))],
+        [InlineKeyboardButton(text="🔵 Четная неделя", callback_data=get_callback("set_week_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await greet_and_send(
@@ -5598,13 +5774,14 @@ async def admin_setchet_start(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("set_week_"))
+@dp.callback_query(F.data == get_callback("set_week_1") | F.data == get_callback("set_week_2"))
 async def set_week_type_handler(callback: types.CallbackQuery):
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
         await callback.answer("⛔ Только в ЛС админам", show_alert=True)
         return
     
-    week_type = int(callback.data.split("_")[2])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[2])
     
     try:
         # Получаем текущую неделю перед изменением
@@ -5635,7 +5812,7 @@ async def set_week_type_handler(callback: types.CallbackQuery):
     
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_save_static_rasp")
+@dp.callback_query(F.data == get_callback("admin_save_static_rasp"))
 async def admin_save_static_rasp_start(callback: types.CallbackQuery, state: FSMContext):
     """Сохранение текущего расписания как статичного"""
     if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
@@ -5643,9 +5820,9 @@ async def admin_save_static_rasp_start(callback: types.CallbackQuery, state: FSM
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data="save_static_1")],
-        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data="save_static_2")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data=get_callback("save_static_1"))],
+        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data=get_callback("save_static_2"))],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=get_callback("menu_admin"))]
     ])
     
     await callback.message.edit_text(
@@ -5655,9 +5832,10 @@ async def admin_save_static_rasp_start(callback: types.CallbackQuery, state: FSM
     )
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("save_static_"))
+@dp.callback_query(F.data == get_callback("save_static_1") | F.data == get_callback("save_static_2"))
 async def process_save_static_rasp(callback: types.CallbackQuery):
-    week_type = int(callback.data.split("_")[2])
+    callback_data = parse_callback(callback.data)
+    week_type = int(callback_data.split("_")[2])
     
     try:
         # Используем новую функцию инициализации
