@@ -5,10 +5,12 @@ WORKDIR /app
 
 # Копируем зависимости и устанавливаем
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip
 
+RUN pip install --no-cache-dir -r requirements.txt
 # Копируем код
 COPY . .
 
 # Запуск бота
 CMD ["python", "arcady.py"]
+
