@@ -4237,13 +4237,17 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
             
             print(f"🔍 DEBUG: Сохраняем обычный предмет - кабинет: {cabinet}")
             
-            # Сохраняем как модификацию для всех чатов
+            # 1. Сохраняем как модификацию для всех чатов
             success_count = 0
             for chat_id in ALLOWED_CHAT_IDS:
                 success = await save_rasp_modification(pool, chat_id, data["day"], data["week_type"], pair_number, subject_id, cabinet)
                 if success:
                     success_count += 1
                 print(f"🔍 DEBUG: Модификация для чата {chat_id} - {'успешно' if success else 'ошибка'}")
+            
+            # 2. ВАЖНО: ТАКЖЕ СОХРАНЯЕМ В СТАТИЧНОЕ РАСПИСАНИЕ!
+            await save_static_rasp(pool, data["day"], data["week_type"], pair_number, subject_id, cabinet)
+            print(f"✅ Пара добавлена в статичное расписание: день={data['day']}, неделя={data['week_type']}, пара={pair_number}")
             
             display_name = clean_subject_name
             
@@ -4252,7 +4256,8 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
                 f"📅 День: {DAYS[data['day']-1]}\n"
                 f"🔢 Пара: {pair_number}\n"
                 f"🏫 Кабинет: {cabinet}\n"
-                f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}\n\n"
+                f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}\n"
+                f"💾 Также сохранено в статичное расписание\n\n"
                 f"⚙ Админ-панель:",
                 reply_markup=admin_menu()
             )
@@ -4262,7 +4267,7 @@ async def choose_pair(callback: types.CallbackQuery, state: FSMContext):
         print(f"❌ Ошибка в choose_pair: {e}")
         await callback.message.edit_text(f"❌ Ошибка при добавлении урока: {e}")
         await state.clear()
-
+    
 async def reset_rasp_for_new_week():
     """Сбрасывает модификации расписания при смене недели"""
     try:
@@ -4278,7 +4283,7 @@ async def reset_rasp_for_new_week():
 
 @dp.message(AddLessonState.cabinet)
 async def set_cabinet(message: types.Message, state: FSMContext):
-    """Обработчик ввода кабинета для rK предметов - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """Обработчик ввода кабинета для rK предметов"""
     data = await state.get_data()
     cabinet = message.text.strip()
     
@@ -4299,7 +4304,7 @@ async def set_cabinet(message: types.Message, state: FSMContext):
         
         print(f"🔍 DEBUG: Сохраняем rK предмет - день:{day}, неделя:{week_type}, пара:{pair_number}, предмет:{subject_name}, кабинет:{cabinet}")
         
-        # Сохраняем модификацию для ВСЕХ чатов
+        # 1. Сохраняем модификацию для ВСЕХ чатов
         success_count = 0
         for chat_id in ALLOWED_CHAT_IDS:
             success = await save_rasp_modification(pool, chat_id, day, week_type, pair_number, subject_id, cabinet)
@@ -4307,12 +4312,17 @@ async def set_cabinet(message: types.Message, state: FSMContext):
                 success_count += 1
             print(f"🔍 DEBUG: Модификация для чата {chat_id} - {'успешно' if success else 'ошибка'}")
         
+        # 2. ВАЖНО: ТАКЖЕ СОХРАНЯЕМ В СТАТИЧНОЕ РАСПИСАНИЕ!
+        await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet)
+        print(f"✅ rK пара добавлена в статичное расписание: день={day}, неделя={week_type}, пара={pair_number}")
+        
         await message.answer(
             f"✅ Урок '{subject_name}' добавлен как изменение расписания!\n"
             f"📅 День: {DAYS[day-1]}\n"
             f"🔢 Пара: {pair_number}\n"
             f"🏫 Кабинет: {cabinet} (вручную)\n"
-            f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}\n\n"
+            f"💬 Обновлено чатов: {success_count}/{len(ALLOWED_CHAT_IDS)}\n"
+            f"💾 Также сохранено в статичное расписание\n\n"
             f"⚙ Админ-панель:",
             reply_markup=admin_menu()
         )
@@ -5007,19 +5017,20 @@ async def today_rasp_handler(callback: types.CallbackQuery):
 
 
 async def initialize_static_rasp_from_current(pool, week_type: int):
-    """Инициализирует статичное расписание из текущих данных БЕЗ ДУБЛИРОВАНИЯ"""
+    """Инициализирует статичное расписание из текущих данных С УЧЕТОМ МОДИФИКАЦИЙ"""
     try:
         # Очищаем старое статичное расписание для этой недели
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM static_rasp WHERE week_type=%s", (week_type,))
         
-        # Берем расписание только из ПЕРВОГО чата чтобы избежать дублирования
         if ALLOWED_CHAT_IDS:
             main_chat_id = ALLOWED_CHAT_IDS[0]
             
             for day in range(1, 7):  # Пн-Сб
-                # Получаем текущее расписание из rasp_detailed только из основного чата
+                print(f"🔍 Обработка дня {day} (неделя {week_type})...")
+                
+                # Получаем статичное расписание для этого дня
                 async with pool.acquire() as conn:
                     async with conn.cursor() as cur:
                         await cur.execute("""
@@ -5028,12 +5039,54 @@ async def initialize_static_rasp_from_current(pool, week_type: int):
                             WHERE chat_id=%s AND day=%s AND week_type=%s
                             ORDER BY pair_number
                         """, (main_chat_id, day, week_type))
-                        current_rasp = await cur.fetchall()
+                        static_rasp = await cur.fetchall()
                 
-                # Сохраняем в статичное расписание
-                for pair_number, subject_id, cabinet in current_rasp:
-                    if subject_id:  # Если есть предмет (не свободно)
-                        await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
+                # Получаем модификации для этого дня
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("""
+                            SELECT pair_number, subject_id, cabinet
+                            FROM rasp_modifications 
+                            WHERE chat_id=%s AND day=%s AND week_type=%s
+                            ORDER BY pair_number
+                        """, (main_chat_id, day, week_type))
+                        modifications = await cur.fetchall()
+                
+                print(f"  Статических пар: {len(static_rasp)}")
+                print(f"  Модификаций: {len(modifications)}")
+                
+                # Создаем словарь модификаций для быстрого поиска
+                mod_dict = {pair_num: (subj_id, cabinet) for pair_num, subj_id, cabinet in modifications}
+                
+                # Для всех пар (1-6)
+                for pair_num in range(1, 7):
+                    # ЕСТЬ МОДИФИКАЦИЯ ДЛЯ ЭТОЙ ПАРЫ?
+                    if pair_num in mod_dict:
+                        subject_id, cabinet = mod_dict[pair_num]
+                        print(f"  Пара {pair_num}: используем модификацию (subject_id={subject_id})")
+                    else:
+                        # Ищем статичную пару
+                        found = False
+                        for static_pair_num, static_subject_id, static_cabinet in static_rasp:
+                            if static_pair_num == pair_num:
+                                subject_id = static_subject_id
+                                cabinet = static_cabinet
+                                found = True
+                                print(f"  Пара {pair_num}: используем статику (subject_id={subject_id})")
+                                break
+                        
+                        if not found:
+                            # Пара не существует - пропускаем
+                            print(f"  Пара {pair_num}: не существует, пропускаем")
+                            continue
+                    
+                    # Сохраняем в статичное расписание
+                    if subject_id:  # Если есть предмет (не None)
+                        await save_static_rasp(pool, day, week_type, pair_num, subject_id, cabinet or "Не указан")
+                        print(f"  ✅ Сохранена пара {pair_num}: день={day}, subject_id={subject_id}")
+                    else:
+                        # subject_id = None - значит пара очищена
+                        print(f"  Пара {pair_num}: очищена (subject_id=None), не сохраняем")
             
             print(f"✅ Статичное расписание для недели {week_type} инициализировано")
             return True
@@ -5043,6 +5096,8 @@ async def initialize_static_rasp_from_current(pool, week_type: int):
         
     except Exception as e:
         print(f"❌ Ошибка при инициализации статичного расписания: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 @dp.callback_query(F.data == "tomorrow_rasp")
