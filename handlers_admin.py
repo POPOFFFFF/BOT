@@ -6,6 +6,7 @@ import asyncio
 import datetime
 import re
 from typing import List, Tuple
+from bot_init import dp, bot, pool  # Импортируем dp и bot
 
 from config import *
 from database import *

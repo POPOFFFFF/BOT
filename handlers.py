@@ -6,6 +6,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from aiogram.exceptions import TelegramRetryAfter
+from bot_init import dp, bot, pool  # Импортируем dp и bot
 
 import asyncio
 import datetime

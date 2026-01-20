@@ -11,7 +11,7 @@ from config import *
 from database import *
 from states import *
 from keyboards import *
-
+from bot_init import dp, bot, pool  # Импортируем dp и bot
 # ========== УСТАНОВКА КАБИНЕТОВ ==========
 
 @dp.callback_query(F.data == "admin_set_cabinet")
