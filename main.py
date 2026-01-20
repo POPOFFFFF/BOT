@@ -6,17 +6,16 @@ from apscheduler.triggers.cron import CronTrigger
 from config import *
 from database import *
 from bot_init import dp, bot, pool, scheduler  # Импортируем из bot_init
+from scheduler_functions import send_today_rasp, check_birthdays  # Импортируем из нового файла
 
-# Импортируем все обработчики
+# Импортируем все обработчики (чтобы они зарегистрировались)
 import handlers
 import handlers_admin
 import handlers_admin2
 import handlers_homework
 import handlers_fund
 
-# Импортируем функции из handlers (если они используются в планировщике)
-from handlers import send_today_rasp
-from database import check_birthdays, get_current_week_type, clear_rasp_modifications
+from database import get_current_week_type, clear_rasp_modifications
 
 # ========== ФУНКЦИИ ПЛАНИРОВЩИКА ==========
 
