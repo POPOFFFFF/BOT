@@ -5009,35 +5009,40 @@ async def today_rasp_handler(callback: types.CallbackQuery):
 async def initialize_static_rasp_from_current(pool, week_type: int):
     """Инициализирует статичное расписание из текущих данных БЕЗ ДУБЛИРОВАНИЯ"""
     try:
-        
         # Очищаем старое статичное расписание для этой недели
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM static_rasp WHERE week_type=%s", (week_type,))
         
         # Берем расписание только из ПЕРВОГО чата чтобы избежать дублирования
-        main_chat_id = ALLOWED_CHAT_IDS[0]
-        
-        for day in range(1, 7):  # Пн-Сб
-            # Получаем текущее расписание из rasp_detailed только из основного чата
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("""
-                        SELECT pair_number, subject_id, cabinet 
-                        FROM rasp_detailed 
-                        WHERE chat_id=%s AND day=%s AND week_type=%s
-                        ORDER BY pair_number
-                    """, (main_chat_id, day, week_type))
-                    current_rasp = await cur.fetchall()
+        if ALLOWED_CHAT_IDS:
+            main_chat_id = ALLOWED_CHAT_IDS[0]
             
-            # Сохраняем в статичное расписание
-            for pair_number, subject_id, cabinet in current_rasp:
-                if subject_id:  # Если есть предмет (не свободно)
-                    await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
-        
-        return True
+            for day in range(1, 7):  # Пн-Сб
+                # Получаем текущее расписание из rasp_detailed только из основного чата
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("""
+                            SELECT pair_number, subject_id, cabinet 
+                            FROM rasp_detailed 
+                            WHERE chat_id=%s AND day=%s AND week_type=%s
+                            ORDER BY pair_number
+                        """, (main_chat_id, day, week_type))
+                        current_rasp = await cur.fetchall()
+                
+                # Сохраняем в статичное расписание
+                for pair_number, subject_id, cabinet in current_rasp:
+                    if subject_id:  # Если есть предмет (не свободно)
+                        await save_static_rasp(pool, day, week_type, pair_number, subject_id, cabinet or "Не указан")
+            
+            print(f"✅ Статичное расписание для недели {week_type} инициализировано")
+            return True
+        else:
+            print("❌ Нет разрешенных чатов для инициализации статичного расписания")
+            return False
         
     except Exception as e:
+        print(f"❌ Ошибка при инициализации статичного расписания: {e}")
         return False
 
 @dp.callback_query(F.data == "tomorrow_rasp")
