@@ -2253,7 +2253,9 @@ def admin_menu():
         [InlineKeyboardButton(text="➕ Добавить пару", callback_data="admin_add_lesson")],
         [InlineKeyboardButton(text="🧹 Очистить пару", callback_data="admin_clear_pair")],
         
-        # НОВАЯ КНОПКА - СБРОС МОДИФИКАЦИЙ
+        # НОВАЯ КНОПКА - СБРОС ВСЕГО РАСПИСАНИЯ НА НЕДЕЛЮ
+        [InlineKeyboardButton(text="💥 Сбросить всё на неделю", callback_data="admin_reset_week")],
+        
         [InlineKeyboardButton(text="🗑️ Сбросить модификации", callback_data="admin_clear_modifications")],
         
         [InlineKeyboardButton(text="🏫 Установить кабинет", callback_data="admin_set_cabinet")],
@@ -2275,6 +2277,136 @@ def admin_menu():
         [InlineKeyboardButton(text="⬅ Назад", callback_data="menu_back")]
     ])
     return kb
+
+@dp.callback_query(F.data == "admin_reset_week")
+async def admin_reset_week_start(callback: types.CallbackQuery, state: FSMContext):
+    """Начало сброса всего расписания на неделю"""
+    if callback.message.chat.type != "private" or callback.from_user.id not in ALLOWED_USERS:
+        await callback.answer("⛔ Только в ЛС админам", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1️⃣ Нечетная неделя", callback_data="reset_week_1")],
+        [InlineKeyboardButton(text="2️⃣ Четная неделя", callback_data="reset_week_2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admin")]
+    ])
+    
+    await callback.message.edit_text(
+        "💥 Сброс ВСЕГО расписания на неделю\n\n"
+        "⚠️ ВНИМАНИЕ! Это удалит:\n"
+        "• Все модификации расписания\n"
+        "• Все пары в статичном расписании\n"
+        "• Все пары в детализированном расписании\n\n"
+        "Выберите неделю для сброса:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+async def reset_week_schedule(pool, week_type: int) -> dict:
+    """
+    Сбрасывает ВСЕ расписание на указанной неделе
+    Возвращает словарь с количеством удаленных записей
+    """
+    deleted_counts = {
+        'modifications': 0,
+        'static_rasp': 0,
+        'rasp_detailed': 0
+    }
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # 1. Удаляем модификации для ВСЕХ чатов
+                for chat_id in ALLOWED_CHAT_IDS:
+                    await cur.execute("DELETE FROM rasp_modifications WHERE chat_id=%s AND week_type=%s", 
+                                    (chat_id, week_type))
+                    deleted_counts['modifications'] += cur.rowcount
+                
+                # 2. Удаляем статичное расписание для этой недели
+                await cur.execute("DELETE FROM static_rasp WHERE week_type=%s", (week_type,))
+                deleted_counts['static_rasp'] = cur.rowcount
+                
+                # 3. Удаляем детализированное расписание для ВСЕХ чатов
+                for chat_id in ALLOWED_CHAT_IDS:
+                    await cur.execute("DELETE FROM rasp_detailed WHERE chat_id=%s AND week_type=%s", 
+                                    (chat_id, week_type))
+                    deleted_counts['rasp_detailed'] += cur.rowcount
+                
+                await conn.commit()
+        
+        week_name = "нечетной" if week_type == 1 else "четной"
+        print(f"✅ Сброшено всё расписание для {week_name} недели: "
+              f"{deleted_counts['modifications']} модификаций, "
+              f"{deleted_counts['static_rasp']} статичных пар, "
+              f"{deleted_counts['rasp_detailed']} детализированных пар")
+        
+        return deleted_counts
+        
+    except Exception as e:
+        print(f"❌ Ошибка при сбросе расписания на неделю {week_type}: {e}")
+        return deleted_counts
+
+@dp.callback_query(F.data.startswith("reset_week_"))
+async def reset_week_confirm(callback: types.CallbackQuery):
+    """Подтверждение сброса всей недели"""
+    week_type = int(callback.data.split("_")[2])
+    week_name = "нечетной" if week_type == 1 else "четной"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💥 Да, сбросить ВСЁ", callback_data=f"confirm_reset_week_{week_type}")],
+        [InlineKeyboardButton(text="❌ Нет, отменить", callback_data="menu_admin")]
+    ])
+    
+    await callback.message.edit_text(
+        f"⚠️ ОПАСНОЕ ДЕЙСТВИЕ!\n\n"
+        f"Вы собираетесь сбросить ВСЁ расписание на {week_name} неделю:\n\n"
+        f"• Все модификации расписания\n"
+        f"• Все пары в статичном расписании\n"
+        f"• Все пары в детализированном расписании\n\n"
+        f"ЭТО НЕЛЬЗЯ ОТМЕНИТЬ!\n\n"
+        f"Вы уверены?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_reset_week_"))
+async def confirm_reset_week(callback: types.CallbackQuery):
+    """Выполнение сброса всей недели"""
+    week_type = int(callback.data.split("_")[3])
+    week_name = "нечетную" if week_type == 1 else "четную"
+    
+    try:
+        # Показываем статус выполнения
+        await callback.message.edit_text(f"🔄 Сбрасываю всё расписание на {week_name} неделю...")
+        
+        # Сбрасываем всю неделю
+        deleted_counts = await reset_week_schedule(pool, week_type)
+        
+        result_text = (
+            f"✅ Сброс {week_name} недели завершен!\n\n"
+            f"Удалено:\n"
+            f"• Модификации: {deleted_counts['modifications']} шт.\n"
+            f"• Статичные пары: {deleted_counts['static_rasp']} шт.\n"
+            f"• Детализированные пары: {deleted_counts['rasp_detailed']} шт.\n\n"
+            f"Расписание на {week_name} неделю теперь полностью пустое."
+        )
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙ Админ-панель", callback_data="menu_admin")]
+        ])
+        
+        await callback.message.edit_text(result_text, reply_markup=kb)
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка при сбросе недели: {e}\n\n"
+            f"⚙ Админ-панель:",
+            reply_markup=admin_menu()
+        )
+    
+    await callback.answer()
+
+
 
 # Обработчик кнопки сброса модификаций
 @dp.callback_query(F.data == "admin_clear_modifications")
